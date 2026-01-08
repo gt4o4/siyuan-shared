@@ -30,6 +30,7 @@ import androidx.core.app.ShareCompat;
 import androidx.core.content.FileProvider;
 
 import com.blankj.utilcode.util.BarUtils;
+import com.blankj.utilcode.util.KeyboardUtils;
 import com.blankj.utilcode.util.StringUtils;
 import com.zackratos.ultimatebarx.ultimatebarx.java.UltimateBarX;
 
@@ -43,7 +44,7 @@ import mobile.Mobile;
  *
  * @author <a href="https://88250.b3log.org">Liang Ding</a>
  * @author <a href="https://github.com/Soltus">绛亽</a>
- * @version 1.1.4.0, Aug 9, 2024
+ * @version 1.3.0.2, Dec 9, 2025
  * @since 1.0.0
  */
 public final class JSAndroid {
@@ -54,9 +55,28 @@ public final class JSAndroid {
     }
 
     @JavascriptInterface
+    public void exit() {
+        this.activity.exit();
+    }
+
+    @JavascriptInterface
+    public void hideKeyboard() {
+        activity.runOnUiThread(() -> {
+            KeyboardUtils.hideSoftInput(activity);
+            Utils.lastFrontendForceHideKeyboard = System.currentTimeMillis();
+            //Utils.logInfo("keyboard", "Hide keyboard");
+        });
+    }
+
+    @JavascriptInterface
     public String getBlockURL() {
         final String blockURL = activity.getIntent().getStringExtra("blockURL");
         return blockURL;
+    }
+
+    @JavascriptInterface
+    public void setWebViewDebuggingEnabled(final boolean debuggable) {
+        activity.setWebViewDebuggable(debuggable);
     }
 
     @JavascriptInterface
@@ -72,7 +92,7 @@ public final class JSAndroid {
             final Uri uri = item.getUri();
             final String url = uri.toString();
             if (url.startsWith("http://127.0.0.1:6806/assets/")) {
-                final int idx = url.indexOf("/assets/");
+                final int idx = url.indexOf("assets/");
                 final String asset = url.substring(idx);
                 String name = asset.substring(asset.lastIndexOf("/") + 1);
                 final int suffixIdx = name.lastIndexOf(".");
@@ -85,7 +105,12 @@ public final class JSAndroid {
                 return "![" + name + "](" + asset + ")";
             }
         }
-        return item.getText().toString();
+
+        final CharSequence text = item.getText();
+        if (null == text) {
+            return "";
+        }
+        return text.toString();
     }
 
     @JavascriptInterface
@@ -97,7 +122,11 @@ public final class JSAndroid {
         }
 
         final ClipData.Item item = clipData.getItemAt(0);
-        return item.getHtmlText();
+        String ret = item.getHtmlText();
+        if (null == ret) {
+            ret = "";
+        }
+        return ret;
     }
 
     @JavascriptInterface
@@ -130,67 +159,76 @@ public final class JSAndroid {
     }
 
     @JavascriptInterface
+    public void exportByDefault(String url) {
+        Utils.openByDefaultBrowser(url, activity);
+    }
+
+    @JavascriptInterface
+    public void print(final String title, final String html) {
+        final String filename = title + ".pdf";
+        try {
+            Utils.print(html, filename, activity);
+        } catch (final Exception e) {
+            Utils.logError("JSAndroid", "export PDF failed", e);
+        }
+    }
+
+    @JavascriptInterface
+    public int getScreenWidthPx() {
+        return activity.getResources().getDisplayMetrics().widthPixels;
+    }
+
+    @JavascriptInterface
     public void openExternal(String url) {
-        if (StringUtils.isEmpty(url)) {
+        if (!url.startsWith("assets/")) {
+            Utils.openByDefaultBrowser(url, activity);
             return;
         }
 
-        if (url.startsWith("#")) {
-            return;
-        }
-
-        if (url.startsWith("assets/")) {
-            // Support opening assets through other apps on the Android https://github.com/siyuan-note/siyuan/issues/10657
+        // Support opening assets through other apps on the Android https://github.com/siyuan-note/siyuan/issues/10657
+        try {
             final String workspacePath = Mobile.getCurrentWorkspacePath();
             final String assetAbsPath = Mobile.getAssetAbsPath(url);
             File asset;
-            try {
-                if (assetAbsPath.contains(workspacePath)) {
-                    asset = new File(workspacePath, assetAbsPath.substring(workspacePath.length() + 1));
-                } else {
-                    final String decodedUrl = URLDecoder.decode(url, "UTF-8");
-                    asset = new File(workspacePath, "data/" + decodedUrl);
-                }
-                // 添加判断文件是否存在
-                if (!asset.exists()) {
-                    Log.e("File Not Found", "File does not exist: " + asset.getAbsolutePath());
-                    url = "http://127.0.0.1:6806/" + url;
-                } else {
-                    Log.d("if (url.startsWith(\"assets/\"))", asset.getAbsolutePath());
-                    final Uri uri = FileProvider.getUriForFile(activity.getApplicationContext(), BuildConfig.APPLICATION_ID, asset);
-                    final String type = Mobile.getMimeTypeByExt(asset.getAbsolutePath());
-                    Intent intent = new ShareCompat.IntentBuilder(activity.getApplicationContext())
-                            .setStream(uri)
-                            .setType(type)
-                            .getIntent()
-                            .setAction(Intent.ACTION_VIEW)
-                            .setDataAndType(uri, type)
-                            .addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
-                    activity.startActivity(intent);
-                    return;
-                }
-            } catch (Exception e) {
-                Utils.LogError("JSAndroid", "openExternal failed", e);
+            if (assetAbsPath.contains(workspacePath)) {
+                asset = new File(workspacePath, assetAbsPath.substring(workspacePath.length() + 1));
+            } else {
+                final String decodedUrl = URLDecoder.decode(url, "UTF-8");
+                asset = new File(workspacePath, "data/" + decodedUrl);
             }
-        }
 
-        if (url.startsWith("/")) {
-            url = "http://127.0.0.1:6806" + url;
-        }
+            if (!asset.exists()) {
+                Log.e("js", "File does not exist: " + asset.getAbsolutePath());
+                url = "http://127.0.0.1:6806/" + url;
+                Utils.openByDefaultBrowser(url, activity);
+                return;
+            }
 
-        final Uri uri = Uri.parse(url);
-        final Intent browserIntent = new Intent(Intent.ACTION_VIEW, uri);
-        activity.startActivity(browserIntent); // https://developer.android.google.cn/training/app-links/verify-android-applinks?hl=zh-cn
-        // 从 Android 12 开始，经过验证的链接现在会自动在相应的应用中打开，以获得更简化、更快速的用户体验。谷歌还更改了未经Android应用链接验证或用户手动批准的链接的默认处理方式。谷歌表示，Android 12将始终在默认浏览器中打开此类未经验证的链接，而不是向您显示应用程序选择对话框。
+            Log.d("js", asset.getAbsolutePath());
+            final Uri uri = FileProvider.getUriForFile(activity.getApplicationContext(), BuildConfig.APPLICATION_ID, asset);
+            final String type = Mobile.getMimeTypeByExt(asset.getAbsolutePath());
+            Intent intent = new ShareCompat.IntentBuilder(activity.getApplicationContext())
+                    .setStream(uri)
+                    .setType(type)
+                    .getIntent()
+                    .setAction(Intent.ACTION_VIEW)
+                    .setDataAndType(uri, type)
+                    .addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+            activity.startActivity(intent);
+        } catch (Exception e) {
+            Utils.logError("JSAndroid", "openExternal failed", e);
+        }
     }
 
     @JavascriptInterface
     public void changeStatusBarColor(final String color, final int appearanceMode) {
+        if (Utils.isTablet(MainActivity.userAgent)) {
+            return;
+        }
+
         activity.runOnUiThread(() -> {
             UltimateBarX.statusBarOnly(activity).transparent().light(appearanceMode == 0).color(parseColor(color)).apply();
-
-            BarUtils.setNavBarLightMode(activity, appearanceMode == 0);
-            BarUtils.setNavBarColor(activity, parseColor(color));
+            BarUtils.setNavBarVisibility(activity, false);
         });
     }
 
@@ -218,7 +256,7 @@ public final class JSAndroid {
             }
             return Color.parseColor(str);
         } catch (final Exception e) {
-            Utils.LogError("js", "parse color failed", e);
+            Utils.logError("js", "parse color [" + str + "] failed", e);
             return Color.parseColor("#212224");
         }
     }
