@@ -259,7 +259,19 @@ export const editor = {
       <option value="0" ${window.siyuan.config.editor.floatWindowMode === 0 ? "selected" : ""}>${window.siyuan.languages.floatWindowMode0}</option>
       <option value="1" ${window.siyuan.config.editor.floatWindowMode === 1 ? "selected" : ""}>${window.siyuan.languages.floatWindowMode1.replace("${hotkey}", updateHotkeyTip("⌘"))}</option>
       <option value="2" ${window.siyuan.config.editor.floatWindowMode === 2 ? "selected" : ""}>${window.siyuan.languages.floatWindowMode2}</option>
-    </select>    
+    </select>
+</div>
+<div class="fn__flex b3-label config__item${window.siyuan.config.editor.floatWindowMode !== 0 ? " fn__none" : ""}" id="floatWindowDelayWrap">
+    <div class="fn__flex-1">
+        ${window.siyuan.languages.floatWindowDelay}
+        <div class="b3-label__text">${window.siyuan.languages.floatWindowDelayTip}</div>
+    </div>
+    <span class="fn__space"></span>
+    <div class="fn__size200 fn__flex-center fn__flex">
+        <input class="b3-text-field fn__flex-1" id="floatWindowDelay" type="number" min="0" max="2000" value="${window.siyuan.config.editor.floatWindowDelay}"/>
+        <span class="fn__space"></span>
+        <span class="ft__on-surface fn__flex-center">ms</span>
+    </div>
 </div>
 <div class="fn__flex b3-label config__item">
     <div class="fn__flex-1">
@@ -305,6 +317,14 @@ export const editor = {
         <textarea class="b3-text-field fn__block" id="katexMacros" spellcheck="false">${window.siyuan.config.editor.katexMacros}</textarea>
     </div>
 </div>
+<label class="fn__flex b3-label">
+    <div class="fn__flex-1">
+        ${window.siyuan.languages.allowSVGScript}
+        <div class="b3-label__text">${window.siyuan.languages.allowSVGScriptTip}</div>
+    </div>
+    <span class="fn__space"></span>
+    <input class="b3-switch fn__flex-center" id="allowSVGScript" type="checkbox"${window.siyuan.config.editor.allowSVGScript ? " checked" : ""}/>
+</label>
 <label class="fn__flex b3-label">
     <div class="fn__flex-1">
         ${window.siyuan.languages.allowHTMLBLockScript}
@@ -458,6 +478,20 @@ export const editor = {
                 (editor.element.querySelector("#dynamicLoadBlocks") as HTMLInputElement).value = "48";
             }
 
+            const floatWindowDelayElement = editor.element.querySelector("#floatWindowDelay") as HTMLInputElement;
+            const floatWindowMode = parseInt((editor.element.querySelector("#floatWindowMode") as HTMLSelectElement).value);
+            editor.element.querySelector("#floatWindowDelayWrap").classList.toggle("fn__none", floatWindowMode !== 0);
+
+            let floatWindowDelay = parseInt(floatWindowDelayElement.value);
+            if (isNaN(floatWindowDelay)) {
+                floatWindowDelay = 620;
+            } else if (floatWindowDelay < 0) {
+                floatWindowDelay = 0;
+            } else if (floatWindowDelay > 2000) {
+                floatWindowDelay = 2000;
+            }
+            floatWindowDelayElement.value = floatWindowDelay.toString();
+
             fetchPost("/api/setting/setEditor", {
                 fullWidth: (editor.element.querySelector("#fullWidth") as HTMLInputElement).checked,
                 markdown: {
@@ -470,6 +504,7 @@ export const editor = {
                     inlineStrikethrough: (editor.element.querySelector("#editorMarkdownInlineStrikethrough") as HTMLInputElement).checked,
                     inlineMark: (editor.element.querySelector("#editorMarkdownInlineMark") as HTMLInputElement).checked
                 },
+                allowSVGScript: (editor.element.querySelector("#allowSVGScript") as HTMLInputElement).checked,
                 allowHTMLBLockScript: (editor.element.querySelector("#allowHTMLBLockScript") as HTMLInputElement).checked,
                 justify: (editor.element.querySelector("#justify") as HTMLInputElement).checked,
                 rtl: (editor.element.querySelector("#rtl") as HTMLInputElement).checked,
@@ -489,7 +524,8 @@ export const editor = {
                 spellcheckLanguages: window.siyuan.config.editor.spellcheckLanguages,
                 /// #endif
                 onlySearchForDoc: (editor.element.querySelector("#onlySearchForDoc") as HTMLInputElement).checked,
-                floatWindowMode: parseInt((editor.element.querySelector("#floatWindowMode") as HTMLSelectElement).value),
+                floatWindowMode,
+                floatWindowDelay,
                 plantUMLServePath: (editor.element.querySelector("#plantUMLServePath") as HTMLInputElement).value,
                 katexMacros: (editor.element.querySelector("#katexMacros") as HTMLTextAreaElement).value,
                 codeLineWrap: (editor.element.querySelector("#codeLineWrap") as HTMLInputElement).checked,

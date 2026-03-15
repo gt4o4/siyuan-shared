@@ -27,8 +27,10 @@ export const unicode2Emoji = (unicode: string, className = "", needSpan = false,
     let emoji = "";
     if (unicode.startsWith("api/icon/getDynamicIcon")) {
         emoji = `<img class="${className}" ${lazy ? "data-" : ""}src="${unicode}"/>`;
+        emoji = Lute.Sanitize(emoji);
     } else if (unicode.indexOf(".") > -1) {
         emoji = `<img class="${className}" ${lazy ? "data-" : ""}src="/emojis/${unicode}"/>`;
+        emoji = Lute.Sanitize(emoji);
     } else {
         try {
             unicode.split("-").forEach(item => {
@@ -85,7 +87,7 @@ export const lazyLoadEmojiImg = (element: Element) => {
     });
 };
 
-export const filterEmoji = (key = "", max?: number) => {
+export const filterEmoji = (key = "", max?: number, hideCustom = false) => {
     let html = "";
     const recentEmojis: IEmojiItem[] = [];
     if (key) {
@@ -95,6 +97,9 @@ export const filterEmoji = (key = "", max?: number) => {
     let keyHTML = "";
     const customStore: IEmojiItem[] = [];
     window.siyuan.emojis.forEach((category, index) => {
+        if (hideCustom && category.id === "custom") {
+            return;
+        }
         if (!key) {
             html += `<div class="emojis__title" data-type="${index + 1}">${getEmojiTitle(index)}</div><div style="min-height:${index === 0 ? "30px" : "300px"}" class="emojis__content"${index > 1 ? ' data-index="' + index + '"' : ""}>`;
         }
@@ -234,7 +239,11 @@ export const openEmojiPanel = (
     type: "doc" | "notebook" | "av",
     position: IPosition,
     callback?: (emoji: string) => void,
-    dynamicImgElement?: HTMLElement) => {
+    dynamicImgElement?: HTMLElement,
+    hide?: {
+        dynamic: boolean,
+        custom: boolean
+    }) => {
     if (type !== "av") {
         window.siyuan.menus.menu.remove();
     } else {
@@ -273,7 +282,7 @@ export const openEmojiPanel = (
     <div class="emojis__tabheader">
         <div data-type="tab-emoji" class="ariaLabel block__icon block__icon--show" aria-label="${window.siyuan.languages.emoji}"><svg><use xlink:href="#iconEmoji"></use></svg></div>
         <div class="fn__space"></div>
-        <div data-type="tab-dynamic" class="ariaLabel block__icon block__icon--show" aria-label="${window.siyuan.languages.dynamicIcon}"><svg><use xlink:href="#iconCalendar"></use></svg></div>
+        <div data-type="tab-dynamic" class="ariaLabel block__icon block__icon--show${hide?.dynamic ? " fn__none" : ""}" aria-label="${window.siyuan.languages.dynamicIcon}"><svg><use xlink:href="#iconCalendar"></use></svg></div>
         <div class="fn__flex-1"></div>
         <span class="block__icon block__icon--show fn__flex-center ariaLabel" data-action="remove" aria-label="${window.siyuan.languages.remove}"><svg><use xlink:href="#iconTrashcan"></use></svg></span>
     </div>
@@ -290,7 +299,7 @@ export const openEmojiPanel = (
                 <span class="block__icon block__icon--show fn__flex-center ariaLabel" data-action="random" aria-label="${window.siyuan.languages.random}"><svg><use xlink:href="#iconRefresh"></use></svg></span>
                 <span class="fn__space"></span>
             </div>
-            <div class="emojis__panel">${filterEmoji()}</div>
+            <div class="emojis__panel">${filterEmoji("", null, hide?.custom)}</div>
             <div class="fn__flex">
                 ${[
             ["2b50", window.siyuan.languages.recentEmoji],
@@ -303,9 +312,12 @@ export const openEmojiPanel = (
             ["1f52e", getEmojiTitle(6)],
             ["267e-fe0f", getEmojiTitle(7)],
             ["1f6a9", getEmojiTitle(8)],
-        ].map(([unicode, title], index) =>
-            `<div data-type="${index}" class="emojis__type ariaLabel" aria-label="${title}">${unicode2Emoji(unicode)}</div>`
-        ).join("")}
+        ].map(([unicode, title], index) => {
+            if (hide?.custom && index === 1) {
+                return "";
+            }
+            return `<div data-type="${index}" class="emojis__type ariaLabel" aria-label="${title}">${unicode2Emoji(unicode)}</div>`;
+        }).join("")}
             </div>
         </div>
         <div class="fn__none" data-type="tab-dynamic">
@@ -390,7 +402,7 @@ export const openEmojiPanel = (
     const emojiSearchInputElement = dialog.element.querySelector('[data-type="tab-emoji"] .b3-text-field') as HTMLInputElement;
     const emojisContentElement = dialog.element.querySelector(".emojis__panel");
     emojiSearchInputElement.addEventListener("compositionend", () => {
-        emojisContentElement.innerHTML = filterEmoji(emojiSearchInputElement.value);
+        emojisContentElement.innerHTML = filterEmoji(emojiSearchInputElement.value, null, hide?.custom);
         if (emojiSearchInputElement.value) {
             emojisContentElement.nextElementSibling.classList.add("fn__none");
         } else {
@@ -407,7 +419,7 @@ export const openEmojiPanel = (
         if (event.isComposing) {
             return;
         }
-        emojisContentElement.innerHTML = filterEmoji(emojiSearchInputElement.value);
+        emojisContentElement.innerHTML = filterEmoji(emojiSearchInputElement.value, null, hide?.custom);
         if (emojiSearchInputElement.value) {
             emojisContentElement.nextElementSibling.classList.add("fn__none");
         } else {
@@ -439,7 +451,6 @@ export const openEmojiPanel = (
                     icon: unicode
                 }, () => {
                     dialog.destroy();
-                    addEmoji(unicode);
                     updateFileTreeEmoji(unicode, id, "iconFilesRoot");
                 });
             } else if (type === "doc") {
@@ -448,7 +459,6 @@ export const openEmojiPanel = (
                     attrs: {"icon": unicode}
                 }, () => {
                     dialog.destroy();
-                    addEmoji(unicode);
                     updateFileTreeEmoji(unicode, id);
                     updateOutlineEmoji(unicode, id);
                 });
@@ -456,6 +466,7 @@ export const openEmojiPanel = (
             if (callback) {
                 callback(unicode);
             }
+            addEmoji(unicode);
             event.preventDefault();
             event.stopPropagation();
             return;
@@ -561,7 +572,6 @@ export const openEmojiPanel = (
                         notebook: id,
                         icon: ""
                     }, () => {
-                        dialog.destroy();
                         updateFileTreeEmoji("", id, "iconFilesRoot");
                     });
                 } else if (type === "doc") {
@@ -569,7 +579,6 @@ export const openEmojiPanel = (
                         id: id,
                         attrs: {"icon": ""}
                     }, () => {
-                        dialog.destroy();
                         updateFileTreeEmoji("", id);
                         updateOutlineEmoji("", id);
                     });
@@ -577,6 +586,7 @@ export const openEmojiPanel = (
                 if (callback) {
                     callback("");
                 }
+                dialog.destroy();
                 break;
             } else if (target.classList.contains("emojis__item") || target.getAttribute("data-action") === "random" || target.classList.contains("emoji__dynamic-item")) {
                 let unicode = "";
@@ -595,7 +605,6 @@ export const openEmojiPanel = (
                         notebook: id,
                         icon: unicode
                     }, () => {
-                        addEmoji(unicode);
                         updateFileTreeEmoji(unicode, id, "iconFilesRoot");
                     });
                 } else if (type === "doc") {
@@ -603,15 +612,14 @@ export const openEmojiPanel = (
                         id,
                         attrs: {"icon": unicode}
                     }, () => {
-                        addEmoji(unicode);
                         updateFileTreeEmoji(unicode, id);
                         updateOutlineEmoji(unicode, id);
-
                     });
                 }
                 if (callback) {
                     callback(unicode);
                 }
+                addEmoji(unicode);
                 break;
             } else if (target.getAttribute("data-type")?.startsWith("tab-")) {
                 dialogElement.querySelectorAll('.emojis__tabheader [data-type|="tab"]').forEach((item: HTMLElement) => {

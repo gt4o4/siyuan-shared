@@ -188,7 +188,8 @@ const processAV = (range: Range, html: string, protyle: IProtyle, blockElement: 
                             break;
                         }
                         const cellValue = textJSON[i][j];
-                        const operations = await updateCellsValue(protyle, blockElement as HTMLElement, cellValue, [cellElement], columns, html, true);
+                        const operations = await updateCellsValue(protyle, blockElement as HTMLElement, cellValue, [cellElement], columns,
+                            cellElement.getAttribute("data-dtype") === "mAsset" ? (tempElement.content.children[i * (j + 1) + j]?.outerHTML || "") : html, true);
                         if (operations.doOperations.length > 0) {
                             doOperations.push(...operations.doOperations);
                             undoOperations.push(...operations.undoOperations);
@@ -293,9 +294,12 @@ export const insertHTML = (html: string, protyle: IProtyle, isBlock = false,
     }
 
     if (blockElement.classList.contains("av")) {
-        range.deleteContents();
-        processAV(range, html, protyle, blockElement as HTMLElement);
-        return;
+        const avTitleElement = hasClosestByClassName(range.startContainer, "av__title");
+        if (!avTitleElement || (avTitleElement && !isBlock)) {
+            range.deleteContents();
+            processAV(range, html, protyle, blockElement as HTMLElement);
+            return;
+        }
     }
     if (blockElement.classList.contains("table") && blockElement.querySelector(".table__select").clientWidth > 0 &&
         processTable(range, html, protyle, blockElement)) {
@@ -349,7 +353,8 @@ export const insertHTML = (html: string, protyle: IProtyle, isBlock = false,
             // 选中 ref**bbb** 后 alt+[
             range.deleteContents();
             // https://github.com/siyuan-note/siyuan/issues/14035
-            if (range.startContainer.nodeType !== 3 && range.startContainer.textContent === "") {
+            if (range.startContainer.nodeType !== 3 && (range.startContainer as Element).tagName === "SPAN" &&
+                range.startContainer.textContent === "") {
                 // ref 选中处理 https://ld246.com/article/1629214377537
                 (range.startContainer as HTMLElement).remove();
             }

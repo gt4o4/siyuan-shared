@@ -27,7 +27,6 @@ import {newDailyNote} from "../../util/mount";
 import {hideElements} from "../../protyle/ui/hideElements";
 import {fetchPost} from "../../util/fetch";
 import {goBack, goForward} from "../../util/backForward";
-import {onGet} from "../../protyle/util/onGet";
 import {getDisplayName, getNotebookName} from "../../util/pathName";
 import {openFileById} from "../../editor/util";
 import {getAllDocks, getAllModels, getAllTabs} from "../../layout/getAll";
@@ -501,17 +500,7 @@ const editKeydown = (app: App, event: KeyboardEvent) => {
     }
     if (matchHotKey(window.siyuan.config.keymap.editor.general.wysiwyg.custom, event) && !protyle.options.backlinkData) {
         setEditMode(protyle, "wysiwyg");
-        protyle.scroll.lastScrollTop = 0;
-        fetchPost("/api/filetree/getDoc", {
-            id: protyle.block.id,
-            size: protyle.block.id === protyle.block.rootID ? window.siyuan.config.editor.dynamicLoadBlocks : Constants.SIZE_GET_MAX,
-        }, getResponse => {
-            onGet({
-                data: getResponse,
-                protyle,
-                action: protyle.block.id === protyle.block.rootID ? [Constants.CB_GET_FOCUS, Constants.CB_GET_HTML, Constants.CB_GET_UNUNDO] : [Constants.CB_GET_ALL, Constants.CB_GET_FOCUS, Constants.CB_GET_UNUNDO, Constants.CB_GET_HTML]
-            });
-        });
+        reloadProtyle(protyle, true);
         saveLayout();
         event.preventDefault();
         return true;
@@ -669,12 +658,26 @@ const fileTreeKeydown = (app: App, event: KeyboardEvent) => {
 
     if (matchHotKey(window.siyuan.config.keymap.editor.general.rename.custom, event)) {
         window.siyuan.menus.menu.remove();
-        rename({
-            notebookId,
-            path: pathString,
-            name: isFile ? getDisplayName(liElements[0].getAttribute("data-name"), false, true) : getNotebookName(notebookId),
-            type: isFile ? "file" : "notebook",
-        });
+        if (isFile) {
+            fetchPost("/api/block/getDocInfo", {
+                id: liElements[0].getAttribute("data-node-id")
+            }, (response) => {
+                rename({
+                    notebookId,
+                    path: pathString,
+                    name: response.data.ial.title,
+                    empty: response.data.ial[Constants.CUSTOM_SY_TITLE_EMPTY] === "true",
+                    type: "file",
+                });
+            });
+        } else {
+            rename({
+                notebookId,
+                path: pathString,
+                name: getNotebookName(notebookId),
+                type: "notebook",
+            });
+        }
         event.preventDefault();
         return true;
     }

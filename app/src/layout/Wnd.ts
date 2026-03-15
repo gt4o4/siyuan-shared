@@ -52,6 +52,7 @@ import {setPadding} from "../protyle/ui/initUI";
 import {setPosition} from "../util/setPosition";
 import {clearOBG} from "./dock/util";
 import {recordBeforeResizeTop} from "../protyle/util/resize";
+import {setStorageVal} from "../protyle/util/compatibility";
 
 export class Wnd {
     private app: App;
@@ -779,24 +780,28 @@ export class Wnd {
         model.send("closews", {});
     }
 
-    private removeTabAction = (id: string, closeAll = false, animate = true, isSaveLayout = true) => {
+    private removeTabAction = (id: string, isBatchClose = false, animate = true, isSaveLayout = true) => {
         clearCounter();
         this.children.find((item, index) => {
             if (item.id === id) {
-                if (window.siyuan.closedTabs.length > Constants.SIZE_UNDO) {
-                    window.siyuan.closedTabs.pop();
+                if (window.siyuan.storage[Constants.LOCAL_CLOSED_TABS].length > Constants.SIZE_UNDO) {
+                    window.siyuan.storage[Constants.LOCAL_CLOSED_TABS].pop();
                 }
-                const tabJSON = {};
-                layoutToJSON(item, tabJSON);
-                window.siyuan.closedTabs.push(tabJSON);
-
+                if (item.headElement) {
+                    const tabJSON = {};
+                    layoutToJSON(item, tabJSON);
+                    window.siyuan.storage[Constants.LOCAL_CLOSED_TABS].push(tabJSON);
+                    setStorageVal(Constants.LOCAL_CLOSED_TABS, window.siyuan.storage[Constants.LOCAL_CLOSED_TABS]);
+                }
                 if (item.model instanceof Custom && item.model.beforeDestroy) {
                     item.model.beforeDestroy();
                 }
                 if (item.model instanceof Editor) {
                     saveScroll(item.model.editor.protyle);
-                    // 更新文档关闭时间
-                    fetchPost("/api/storage/updateRecentDocCloseTime", {rootID: item.model.editor.protyle.block.rootID});
+                    // 更新文档关闭时间（批量关闭页签时由 closeTabByType 批量处理，这里不单独调用）
+                    if (!isBatchClose) {
+                        fetchPost("/api/storage/updateRecentDocCloseTime", {rootID: item.model.editor.protyle.block.rootID});
+                    }
                 }
                 if (this.children.length === 1) {
                     this.destroyModel(this.children[0].model);
@@ -842,7 +847,7 @@ export class Wnd {
                                 }
                             }
                         });
-                        if (latestHeadElement && !closeAll) {
+                        if (latestHeadElement && !isBatchClose) {
                             this.switchTab(latestHeadElement, true, true, false, false);
                             this.showHeading();
                         }
@@ -876,7 +881,7 @@ export class Wnd {
                 const wnd = new Wnd(this.app);
                 window.siyuan.layout.centerLayout.addWnd(wnd);
                 wnd.addTab(newCenterEmptyTab(this.app), false, false);
-                setTitle(window.siyuan.languages.siyuanNote);
+                setTitle("", true);
             }
         }
         if (isSaveLayout) {
@@ -890,7 +895,7 @@ export class Wnd {
         /// #endif
     };
 
-    public removeTab(id: string, closeAll = false, animate = true, isSaveLayout = true) {
+    public removeTab(id: string, isBatchClose = false, animate = true, isSaveLayout = true) {
         for (let index = 0; index < this.children.length; index++) {
             const item = this.children[index];
             if (item.id === id) {
@@ -899,9 +904,9 @@ export class Wnd {
                         showMessage(window.siyuan.languages.uploading);
                         return;
                     }
-                    this.removeTabAction(id, closeAll, animate, isSaveLayout);
+                    this.removeTabAction(id, isBatchClose, animate, isSaveLayout);
                 } else {
-                    this.removeTabAction(id, closeAll, animate, isSaveLayout);
+                    this.removeTabAction(id, isBatchClose, animate, isSaveLayout);
                 }
                 return;
             }

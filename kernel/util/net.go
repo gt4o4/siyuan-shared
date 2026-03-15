@@ -17,6 +17,7 @@
 package util
 
 import (
+	"fmt"
 	"net"
 	"net/http"
 	"net/url"
@@ -32,6 +33,64 @@ import (
 	"github.com/siyuan-note/httpclient"
 	"github.com/siyuan-note/logging"
 )
+
+// GetPrivateIPv4s 获取本地所有的私有 IPv4 地址（排除虚拟网卡）
+func GetPrivateIPv4s() (ret []string) {
+	ret = []string{}
+
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return
+	}
+
+	// 常见的虚拟网卡名称关键字黑名单
+	virtualKeywords := []string{"docker", "veth", "br-", "vmnet", "vbox", "utun", "tun", "tap", "bridge", "cloud", "hyper-"}
+
+	for _, itf := range interfaces {
+		// 1. 基础状态过滤：必须是启动状态且不能是回环网卡
+		if itf.Flags&net.FlagUp == 0 || itf.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+
+		// 2. 硬件地址过滤：物理网卡通常必须有 MAC 地址
+		if len(itf.HardwareAddr) == 0 {
+			continue
+		}
+
+		// 3. 名称过滤：排除已知虚拟网卡前缀
+		name := strings.ToLower(itf.Name)
+		isVirtual := false
+		for _, kw := range virtualKeywords {
+			if strings.Contains(name, kw) {
+				isVirtual = true
+				break
+			}
+		}
+		if isVirtual {
+			continue
+		}
+
+		// 4. 提取并校验 IP
+		addrs, err := itf.Addrs()
+		if err != nil {
+			continue
+		}
+
+		for _, addr := range addrs {
+			ipNet, ok := addr.(*net.IPNet)
+			if !ok {
+				continue
+			}
+
+			ip := ipNet.IP
+			// 仅保留 IPv4 且必须是私有局域网地址 (10.x, 172.16.x, 192.168.x)
+			if ip.To4() != nil && ip.IsPrivate() {
+				ret = append(ret, ip.String())
+			}
+		}
+	}
+	return
+}
 
 func IsLocalHostname(hostname string) bool {
 	if "localhost" == hostname || strings.HasSuffix(hostname, ".localhost") {
@@ -153,6 +212,58 @@ func JsonArg(c *gin.Context, result *gulu.Result) (arg map[string]interface{}, o
 
 	ok = true
 	return
+}
+
+// ParseJsonArg 使用泛型从 JSON 参数中提取指定键的值。
+//   - 如果 required 为 true 但参数缺失，则会在 ret.Msg 中写入 “[key] is required”
+//   - 如果参数存在但类型不匹配，则会在 ret.Msg 中写入 “[key] should be [T]”
+//   - 返回值 ok 为 false 时，表示提取失败或类型不匹配
+func ParseJsonArg[T any](key string, required bool, arg map[string]interface{}, ret *gulu.Result) (value T, ok bool) {
+	raw, exists := arg[key]
+	if !exists || raw == nil {
+		if required {
+			ret.Code = -1
+			ret.Msg = fmt.Sprintf("[%s] is required", key)
+		} else {
+			ok = true
+		}
+		return
+	}
+
+	value, ok = raw.(T)
+	if !ok {
+		var zero T
+		ret.Code = -1
+		ret.Msg = fmt.Sprintf("[%s] should be [%T]", key, zero)
+	}
+	return
+}
+
+// JsonArgParseFunc 为单次提取函数，用于 ParseJsonArgs 批量提取。
+type JsonArgParseFunc func(arg map[string]interface{}, ret *gulu.Result) bool
+
+// BindJsonArg 创建一个提取函数：从 arg 取 key 并写入 dest，供 ParseJsonArgs 使用。
+func BindJsonArg[T any](key string, required bool, dest *T) JsonArgParseFunc {
+	return func(arg map[string]interface{}, ret *gulu.Result) bool {
+		v, ok := ParseJsonArg[T](key, required, arg, ret)
+		if !ok {
+			return false
+		}
+		*dest = v
+		return true
+	}
+}
+
+// ParseJsonArgs 按顺序执行多个提取函数。
+//   - 任一失败返回 false 并在 ret 中写入错误信息
+//   - 全部成功返回 true
+func ParseJsonArgs(arg map[string]interface{}, ret *gulu.Result, extractors ...JsonArgParseFunc) bool {
+	for _, ext := range extractors {
+		if !ext(arg, ret) {
+			return false
+		}
+	}
+	return true
 }
 
 func InvalidIDPattern(idArg string, result *gulu.Result) bool {

@@ -1015,16 +1015,37 @@ func GetBlockKramdown(id, mode string) (ret string) {
 		return
 	}
 
+	luteEngine := NewLute()
+	return getBlockKramdown0(tree, id, mode, luteEngine)
+}
+
+func GetBlockKramdowns(ids []string, mode string) (ret map[string]string) {
+	ret = make(map[string]string, len(ids))
+	if 0 == len(ids) {
+		return
+	}
+
+	luteEngine := NewLute()
+	for _, id := range ids {
+		// 节点会被移走，tree 不能共享，需重新加载
+		tree, err := LoadTreeByBlockID(id)
+		if err != nil {
+			continue
+		}
+		ret[id] = getBlockKramdown0(tree, id, mode, luteEngine)
+	}
+	return
+}
+
+func getBlockKramdown0(tree *parse.Tree, id, mode string, luteEngine *lute.Lute) (ret string) {
 	addBlockIALNodes(tree, false)
 	node := treenode.GetNodeInTree(tree, id)
 	root := &ast.Node{Type: ast.NodeDocument}
 	root.AppendChild(node.Next) // IAL
 	root.PrependChild(node)
-	luteEngine := NewLute()
 	if "md" == mode {
 		// `/api/block/getBlockKramdown` link/image URLs are no longer encoded with spaces https://github.com/siyuan-note/siyuan/issues/15611
 		luteEngine.SetPreventEncodeLinkSpace(true)
-
 		ret = treenode.ExportNodeStdMd(root, luteEngine)
 	} else {
 		tree.Root = root

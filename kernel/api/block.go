@@ -377,6 +377,10 @@ func getDocInfo(c *gin.Context) {
 		ret.Msg = fmt.Sprintf(model.Conf.Language(15), id)
 		return
 	}
+	if model.IsReadOnlyRoleContext(c) {
+		publishAccess := model.GetPublishAccess()
+		info = model.FilterBlockInfoByPublishAccess(c, publishAccess, info)
+	}
 	ret.Data = info
 }
 
@@ -401,6 +405,12 @@ func getDocsInfo(c *gin.Context) {
 		ret.Msg = fmt.Sprintf(model.Conf.Language(15), ids)
 		return
 	}
+	if model.IsReadOnlyRoleContext(c) {
+		publishAccess := model.GetPublishAccess()
+		for i, docinfo := range info {
+			info[i] = model.FilterBlockInfoByPublishAccess(c, publishAccess, docinfo)
+		}
+	}
 	ret.Data = info
 }
 
@@ -409,6 +419,10 @@ func getRecentUpdatedBlocks(c *gin.Context) {
 	defer c.JSON(http.StatusOK, ret)
 
 	blocks := model.RecentUpdatedBlocks()
+	if model.IsReadOnlyRoleContext(c) {
+		publishAccess := model.GetPublishAccess()
+		blocks = model.FilterBlocksByPublishAccess(c, publishAccess, blocks)
+	}
 	ret.Data = blocks
 }
 
@@ -524,6 +538,11 @@ func getRefIDs(c *gin.Context) {
 
 	id := arg["id"].(string)
 	refDefs, originalRefBlockIDs := model.GetBlockRefs(id)
+	if model.IsReadOnlyRoleContext(c) {
+		publishAccess := model.GetPublishAccess()
+		publishIgnore := model.GetInvisiblePublishAccess(publishAccess)
+		refDefs, originalRefBlockIDs = model.FilterRefDefsByPublishIgnore(publishIgnore, refDefs)
+	}
 	ret.Data = map[string]any{
 		"refDefs":             refDefs,
 		"originalRefBlockIDs": originalRefBlockIDs,
@@ -664,6 +683,10 @@ func getBlockInfo(c *gin.Context) {
 	} else if errors.Is(err, treenode.ErrSpecTooNew) {
 		ret.Code = -1
 		ret.Msg = model.Conf.Language(275)
+		return
+	} else if errors.Is(err, model.ErrBoxUnindexed) {
+		ret.Code = -1
+		ret.Msg = "" // 加载的时候已经推送过提示了，这里不需要再提示
 		return
 	}
 
@@ -811,6 +834,42 @@ func getBlockKramdown(c *gin.Context) {
 		"id":       id,
 		"kramdown": kramdown,
 	}
+}
+
+func getBlockKramdowns(c *gin.Context) {
+	ret := gulu.Ret.NewResult()
+	defer c.JSON(http.StatusOK, ret)
+
+	arg, ok := util.JsonArg(c, ret)
+	if !ok {
+		return
+	}
+
+	idsArg := arg["ids"].([]interface{})
+	var ids []string
+	for _, id := range idsArg {
+		idStr := id.(string)
+		// 验证 ID 格式，跳过无效的 ID
+		if !util.InvalidIDPattern(idStr, nil) {
+			ids = append(ids, idStr)
+		}
+	}
+
+	// md：Markdown 标记符模式，使用标记符导出
+	// textmark：文本标记模式，使用 span 标签导出
+	// https://github.com/siyuan-note/siyuan/issues/13183
+	mode := "md"
+	if modeArg := arg["mode"]; nil != modeArg {
+		mode = modeArg.(string)
+		if "md" != mode && "textmark" != mode {
+			ret.Code = -1
+			ret.Msg = "Invalid mode"
+			return
+		}
+	}
+
+	kramdowns := model.GetBlockKramdowns(ids, mode)
+	ret.Data = kramdowns
 }
 
 func getChildBlocks(c *gin.Context) {

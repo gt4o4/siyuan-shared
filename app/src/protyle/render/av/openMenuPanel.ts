@@ -21,12 +21,10 @@ import {updateAttrViewCellAnimation} from "./action";
 import {addAssetLink, bindAssetEvent, editAssetItem, getAssetHTML, updateAssetCell} from "./asset";
 import {Constants} from "../../../constants";
 import {hideElements} from "../../ui/hideElements";
-import {isLocalPath, pathPosix} from "../../../util/pathName";
+import {pathPosix} from "../../../util/pathName";
 import {openEmojiPanel, unicode2Emoji} from "../../../emoji";
-import {getSearch, isMobile} from "../../../util/functions";
-/// #if !MOBILE
-import {openAsset} from "../../../editor/util";
-/// #endif
+import {isMobile} from "../../../util/functions";
+import {openLink} from "../../../editor/openLink";
 import {previewAttrViewImages} from "../../preview/image";
 import {assetMenu} from "../../../menus/protyle";
 import {
@@ -49,9 +47,13 @@ import {Dialog} from "../../../dialog";
 import {bindLayoutEvent, getLayoutHTML, updateLayout} from "./layout";
 import {setGalleryCover, setGalleryRatio, setGallerySize} from "./gallery/util";
 import {
-    bindGroupsEvent, bindGroupsNumber,
+    bindGroupsEvent,
+    bindGroupsNumber,
     getGroupsHTML,
-    getGroupsMethodHTML, getGroupsNumberHTML, getLanguageByIndex, getPageSize,
+    getGroupsMethodHTML,
+    getGroupsNumberHTML,
+    getLanguageByIndex,
+    getPageSize,
     goGroupsDate,
     goGroupsSort,
     setGroupMethod
@@ -79,7 +81,7 @@ export const openMenuPanel = (options: {
     const avPageSize = getPageSize(options.blockElement);
     fetchPost("/api/av/renderAttributeView", {
         id: avID,
-        query: (options.blockElement.querySelector('[data-type="av-search"]') as HTMLInputElement)?.value.trim() || "",
+        query: options.blockElement.querySelector('[data-type="av-search"]')?.textContent.trim() || "",
         pageSize: avPageSize.unGroupPageSize,
         groupPaging: avPageSize.groupPageSize,
         viewID: options.blockElement.getAttribute(Constants.CUSTOM_SY_AV_VIEW)
@@ -1355,28 +1357,12 @@ export const openMenuPanel = (options: {
                     break;
                 } else if (type === "openAssetItem") {
                     const assetLink = target.parentElement.dataset.content;
-                    const suffix = pathPosix().extname(assetLink);
-                    /// #if !MOBILE
-                    if (isLocalPath(assetLink) && (
-                        [".pdf"].concat(Constants.SIYUAN_ASSETS_AUDIO).concat(Constants.SIYUAN_ASSETS_VIDEO).includes(suffix) && (
-                            suffix !== ".pdf" || (suffix === ".pdf" && !assetLink.startsWith("file://"))
-                        )
-                    )) {
-                        openAsset(options.protyle.app, assetLink.trim(), parseInt(getSearch("page", assetLink)), "right");
-                    } else if (Constants.SIYUAN_ASSETS_IMAGE.includes(suffix)) {
+                    if (target.parentElement.dataset.type === "image") {
                         previewAttrViewImages(assetLink, avID, options.blockElement.getAttribute(Constants.CUSTOM_SY_AV_VIEW),
-                            (options.blockElement.querySelector('[data-type="av-search"]') as HTMLInputElement)?.value.trim() || "");
+                            options.blockElement.querySelector('[data-type="av-search"]')?.textContent.trim() || "");
                     } else {
-                        window.open(assetLink);
+                        openLink(options.protyle, assetLink, event, event.ctrlKey || event.metaKey);
                     }
-                    /// #else
-                    if (Constants.SIYUAN_ASSETS_IMAGE.includes(suffix)) {
-                        previewAttrViewImages(assetLink, avID, options.blockElement.getAttribute(Constants.CUSTOM_SY_AV_VIEW),
-                            (options.blockElement.querySelector('[data-type="av-search"]') as HTMLInputElement)?.value.trim() || "");
-                    } else {
-                        window.open(assetLink);
-                    }
-                    /// #endif
                     event.preventDefault();
                     event.stopPropagation();
                     break;

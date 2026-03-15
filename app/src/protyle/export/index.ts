@@ -11,7 +11,7 @@ import {getThemeMode, setInlineStyle} from "../../util/assets";
 import {fetchPost, fetchSyncPost} from "../../util/fetch";
 import {Dialog} from "../../dialog";
 import {replaceLocalPath} from "../../editor/rename";
-import {getScreenWidth, isInAndroid, isInHarmony, isInIOS, setStorageVal} from "../util/compatibility";
+import {getScreenWidth, isInMobileApp, setStorageVal} from "../util/compatibility";
 import {getFrontend} from "../../util/functions";
 
 const getPluginStyle = async () => {
@@ -51,7 +51,7 @@ export const saveExport = (option: IExportOptions) => {
             }, zipResponse => {
                 hideMessage(msgId);
                 if (zipResponse.code === -1) {
-                    showMessage(window.siyuan.languages._kernel[14] + ": " + zipResponse.msg, 0, "error");
+                    showMessage(window.siyuan.languages._kernel[14].replace("%s", zipResponse.msg), 0, "error");
                     return;
                 }
                 window.open(zipResponse.data.zip);
@@ -174,7 +174,7 @@ const renderPDF = async (id: string) => {
         #action {
           width: 232px;
           background: var(--b3-theme-surface);
-          padding: 16px 0;
+          padding: 12px 0;
           position: fixed;
           right: 0;
           top: 0;
@@ -219,12 +219,16 @@ const renderPDF = async (id: string) => {
           border-bottom: 1px solid var(--b3-theme-surface-lighter);
           display: block;
           color: var(--b3-theme-on-surface);
-          padding-bottom: 16px;
-          margin: 0 16px 16px 16px;
+          padding-bottom: 12px;
+          margin: 0 12px 12px 12px;
         }
         
         .b3-label:last-child {
             border-bottom: none;
+        }
+        
+        #preview .render-node[data-subtype="plantuml"] object {
+            max-width: 100%;
         }
         ${await setInlineStyle(false, servePath)}
         ${await getPluginStyle()}
@@ -345,7 +349,7 @@ const renderPDF = async (id: string) => {
             <input id="paged" class="b3-switch" type="checkbox" ${localData.paged ? "checked" : ""}>
         </label>
     </div>
-    <div class="fn__flex" style="padding: 0 16px">
+    <div class="fn__flex" style="padding: 0 12px">
       <div class="fn__flex-1"></div>
       <button class="b3-button b3-button--cancel">${window.siyuan.languages.cancel}</button>
       <div class="fn__space"></div>
@@ -505,6 +509,7 @@ ${getIconScript(servePath)}
           config: {
             appearance: { mode: 0, codeBlockThemeDark: "${window.siyuan.config.appearance.codeBlockThemeDark}", codeBlockThemeLight: "${window.siyuan.config.appearance.codeBlockThemeLight}" },
             editor: { 
+              allowSVGScriptTip: ${window.siyuan.config.editor.allowSVGScript},
               allowHTMLBLockScript: ${window.siyuan.config.editor.allowHTMLBLockScript},
               fontSize: ${window.siyuan.config.editor.fontSize},
               codeLineWrap: true,
@@ -530,9 +535,7 @@ ${getIconScript(servePath)}
                         return;
                     }
                 } else if (target.classList.contains("protyle-action__copy")) {
-                    let text = target.parentElement.nextElementSibling.textContent.trimEnd();
-                    text = text.replace(/\u00A0/g, " "); // Replace non-breaking spaces with normal spaces when copying https://github.com/siyuan-note/siyuan/issues/9382
-                    navigator.clipboard.writeText(text);
+                    navigator.clipboard.writeText(target.parentElement.nextElementSibling.textContent.trimEnd().replace(/\u00A0/g, " ").replace(/\u200D\`\`\`/g, "\`\`\`"));
                     event.preventDefault();
                     event.stopPropagation();
                     break;
@@ -648,7 +651,7 @@ ${getIconScript(servePath)}
                     };
                     return pageSizes[actionElement.querySelector("#pageSize").value];
                 };
-                const previewHeight = previewElement.scrollHeight / 96 - (parseFloat(document.querySelector("#marginsTop").value) || 0) - (parseFloat(document.querySelector("#marginsBottom").value) || 0);
+                const previewHeight = Math.max(previewElement.scrollHeight / 96 - (parseFloat(document.querySelector("#marginsTop").value) || 0) - (parseFloat(document.querySelector("#marginsBottom").value) || 0), getPageSizeDimensions().height);
                 ipcRenderer.send("${Constants.SIYUAN_EXPORT_PDF}", buildExportConfig(actionElement.querySelector("#landscape").checked ? {
                     height: getPageSizeDimensions().height,
                     width: previewHeight,
@@ -732,8 +735,8 @@ const getExportPath = (option: IExportOptions, removeAssets?: boolean, mergeSubd
             }, exportResponse => {
                 if (option.type === "word") {
                     if (exportResponse.code === 1) {
-                        showMessage(exportResponse.msg, undefined, "error");
                         hideMessage(msgId);
+                        showMessage(exportResponse.msg, 0, "error");
                         return;
                     }
                     afterExport(exportResponse.data.path, msgId);
@@ -759,7 +762,7 @@ export const onExport = async (data: IWebSocketData, filePath: string, servePath
         themeStyle = `<link rel="stylesheet" type="text/css" id="themeStyle" href="${servePath}appearance/themes/${themeName}/theme.css?${Constants.SIYUAN_VERSION}"/>`;
     }
     const screenWidth = getScreenWidth();
-    const isInMobile = isInAndroid() || isInHarmony() || isInIOS();
+    const isInMobile = isInMobileApp();
     const mobileHtml = isInMobile ? {
         js: `document.body.style.minWidth = "${screenWidth}px";`,
         css: `@page { size: A4; margin: 10mm 0 10mm 0; background-color: var(--b3-theme-background); }
@@ -823,9 +826,7 @@ ${getIconScript(servePath)}
     Protyle.plantumlRender(previewElement, "stage/protyle");
     document.querySelectorAll(".protyle-action__copy").forEach((item) => {
       item.addEventListener("click", (event) => {
-            let text = item.parentElement.nextElementSibling.textContent.trimEnd();
-            text = text.replace(/\u00A0/g, " "); // Replace non-breaking spaces with normal spaces when copying
-            navigator.clipboard.writeText(text);
+            navigator.clipboard.writeText(item.parentElement.nextElementSibling.textContent.trimEnd().replace(/\u00A0/g, " ").replace(/\u200D\`\`\`/g, "\`\`\`"));
             event.preventDefault();
             event.stopPropagation();
       })

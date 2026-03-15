@@ -38,7 +38,7 @@ export const onGet = (options: {
         // 其他报错
         if (!options.action.includes(Constants.CB_GET_APPEND)) {    // 向下加载时块可能还没有创建 https://github.com/siyuan-note/siyuan/issues/10851
             if (options.protyle.model) {
-                options.protyle.model.parent.parent.removeTab(options.protyle.model.parent.id, false);
+                options.protyle.model.parent.parent.removeTab(options.protyle.model.parent.id);
             } else {
                 options.protyle.element.innerHTML = `<div class="ft__smaller ft__secondary b3-form__space--small" contenteditable="false">${window.siyuan.languages.refExpired}</div>`;
             }
@@ -482,7 +482,7 @@ const focusElementById = (protyle: IProtyle, action: string[], scrollAttr?: IScr
             if (scrollAttr && scrollAttr.focusId) {
                 range = focusByOffset(focusElement, scrollAttr.focusStart, scrollAttr.focusEnd) as Range;
             } else {
-                focusBlock(focusElement, undefined, action.includes(Constants.CB_GET_OUTLINE) ? false : true);
+                range = focusBlock(focusElement, undefined, !action.includes(Constants.CB_GET_OUTLINE)) as Range;
             }
             /// #if !MOBILE
             if (!action.includes(Constants.CB_GET_UNUNDO)) {

@@ -16,7 +16,7 @@ import {confirmDialog} from "./confirmDialog";
 import {escapeHtml} from "../util/escape";
 import {getWorkspaceName} from "../util/noRelyPCFunction";
 import {needSubscribe} from "../util/needSubscribe";
-import {redirectToCheckAuth, setNoteBook} from "../util/pathName";
+import {setNoteBook} from "../util/pathName";
 import {reloadProtyle} from "../protyle/util/reload";
 import {Tab} from "../layout/Tab";
 import {setEmpty} from "../mobile/util/setEmpty";
@@ -32,7 +32,7 @@ const updateTitle = (rootID: string, tab: Tab, protyle?: IProtyle) => {
     }, (response) => {
         tab.updateTitle(response.data.name);
         if (protyle && protyle.title) {
-            protyle.title.setTitle(response.data.name);
+            protyle.title.setTitle(response.data.name, response.data.ial[Constants.CUSTOM_SY_TITLE_EMPTY] === "true");
         }
     });
 };
@@ -66,7 +66,7 @@ export const reloadSync = (
                 id: window.siyuan.mobile.editor.protyle.block.rootID
             }, (response) => {
                 setTitle(response.data.name);
-                window.siyuan.mobile.editor.protyle.title.setTitle(response.data.name);
+                window.siyuan.mobile.editor.protyle.title.setTitle(response.data.name, response.data.ial[Constants.CUSTOM_SY_TITLE_EMPTY] === "true");
             });
         }
     }
@@ -233,20 +233,27 @@ export const setDefRefCount = (data: {
     }
 };
 
-export const lockScreen = (app: App) => {
-    if (window.siyuan.config.readonly) {
+export const lockScreen = async (app: App) => {
+    if (window.siyuan.config.readonly || window.siyuan.isPublish) {
         return;
     }
     app.plugins.forEach(item => {
         item.eventBus.emit("lock-screen");
     });
-    /// #if BROWSER
-    fetchPost("/api/system/logoutAuth", {}, () => {
-        redirectToCheckAuth();
+    /// #if !MOBILE
+    exportLayout({
+        errorExit: false,
+        cb() {
+            fetchPost("/api/system/logoutAuth");
+        }
     });
     /// #else
-    ipcRenderer.send(Constants.SIYUAN_SEND_WINDOWS, {cmd: "lockscreen"});
+    if (window.siyuan.mobile.editor) {
+        await saveScroll(window.siyuan.mobile.editor.protyle);
+        fetchPost("/api/system/logoutAuth");
+    }
     /// #endif
+
 };
 
 export const kernelError = () => {
@@ -305,7 +312,6 @@ export const exitSiYuan = async (setCurrentWorkspace = true) => {
                             window.webkit.messageHandlers.exit.postMessage("");
                             return;
                         }
-
                         if (isInHarmony()) {
                             window.JSHarmony.exit();
                             return;
@@ -321,7 +327,7 @@ export const exitSiYuan = async (setCurrentWorkspace = true) => {
                 ipcRenderer.send(Constants.SIYUAN_SHOW_WINDOW);
             }
 
-            confirmDialog(window.siyuan.languages.tip, response.msg, () => {
+            confirmDialog(window.siyuan.languages.updateVersion, response.msg, () => {
                 fetchPost("/api/system/exit", {
                     force: true,
                     setCurrentWorkspace,
@@ -509,10 +515,10 @@ export const bootSync = () => {
     });
 };
 
-export const setTitle = (title: string) => {
+export const setTitle = (title: string, showVersionTitle = false) => {
     const dragElement = document.getElementById("drag");
     const workspaceName = getWorkspaceName();
-    if (title === window.siyuan.languages.siyuanNote) {
+    if (showVersionTitle) {
         const versionTitle = `${workspaceName} - ${window.siyuan.languages.siyuanNote} v${Constants.SIYUAN_VERSION}`;
         document.title = versionTitle;
         if (dragElement) {
@@ -520,7 +526,7 @@ export const setTitle = (title: string) => {
             dragElement.setAttribute("title", versionTitle);
         }
     } else {
-        title = title || window.siyuan.languages.untitled;
+        title = title.trim() || window.siyuan.languages["_kernel"][16];
         document.title = `${title} - ${workspaceName} - ${window.siyuan.languages.siyuanNote} v${Constants.SIYUAN_VERSION}`;
         if (!dragElement) {
             return;
@@ -531,14 +537,14 @@ export const setTitle = (title: string) => {
 };
 
 export const downloadProgress = (data: { id: string, percent: number }) => {
-    const bazzarSideElement = document.querySelector("#configBazaarReadme .item__side");
-    if (!bazzarSideElement) {
+    const bazaarSideElement = document.querySelector("#configBazaarReadme .item__side");
+    if (!bazaarSideElement) {
         return;
     }
-    if (data.id !== JSON.parse(bazzarSideElement.getAttribute("data-obj")).repoURL) {
+    if (data.id !== JSON.parse(bazaarSideElement.getAttribute("data-obj")).repoURL) {
         return;
     }
-    const btnElement = bazzarSideElement.querySelector('[data-type="install"]') as HTMLElement;
+    const btnElement = bazaarSideElement.querySelector('[data-type="install"]') as HTMLElement;
     if (btnElement) {
         if (data.percent >= 1) {
             btnElement.parentElement.classList.add("fn__none");

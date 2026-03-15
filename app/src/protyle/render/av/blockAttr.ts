@@ -16,7 +16,7 @@ import {webUtils} from "electron";
 /// #endif
 import {isBrowser} from "../../../util/functions";
 import {Constants} from "../../../constants";
-import {getCompressURL} from "../../../util/image";
+import {getCompressURL, removeCompressURL} from "../../../util/image";
 
 const genAVRollupHTML = (value: IAVCellValue) => {
     let html = "";
@@ -275,9 +275,12 @@ class="fn__flex-1 fn__flex${["url", "text", "number", "email", "phone", "block"]
                     const cellElement = element.querySelector(".custom-attr__avvalue--active") as HTMLElement;
                     if (cellElement) {
                         if (event.dataTransfer.types[0] === "Files" && !isBrowser()) {
-                            const files: string[] = [];
+                            const files: ILocalFiles[] = [];
                             for (let i = 0; i < event.dataTransfer.files.length; i++) {
-                                files.push(webUtils.getPathForFile(event.dataTransfer.files[i]));
+                                files.push({
+                                    path: webUtils.getPathForFile(event.dataTransfer.files[i]),
+                                    size: event.dataTransfer.files[i].size
+                                });
                             }
                             dragUpload(files, protyle, cellElement);
                         }
@@ -499,7 +502,7 @@ const openEdit = (protyle: IProtyle, element: HTMLElement, event: MouseEvent) =>
                 });
             } else {
                 if (target.tagName === "IMG") {
-                    previewImages([target.getAttribute("src")]);
+                    previewImages([removeCompressURL(target.getAttribute("src"))]);
                 } else {
                     openLink(protyle, target.dataset.url, event, event.ctrlKey || event.metaKey);
                 }

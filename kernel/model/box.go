@@ -684,6 +684,72 @@ func normalizeTree(tree *parse.Tree) (yfmRootID, yfmTitle, yfmUpdated string) {
 	return
 }
 
+func ClearTempFiles() {
+	var count int
+	var size int64
+
+	msgId := util.PushMsg(Conf.Language(276), 30*1000)
+	defer func() {
+		msg := fmt.Sprintf(Conf.Language(277), count, humanize.BytesCustomCeil(uint64(size), 2))
+		util.PushUpdateMsg(msgId, msg, 7000)
+	}()
+
+	bazaarTmp := filepath.Join(util.TempDir, "bazaar")
+	clearTempDir(bazaarTmp, &count, &size)
+
+	exportTmp := filepath.Join(util.TempDir, "export")
+	clearTempDir(exportTmp, &count, &size)
+
+	importTmp := filepath.Join(util.TempDir, "import")
+	clearTempDir(importTmp, &count, &size)
+
+	convertTmp := filepath.Join(util.TempDir, "convert")
+	clearTempDir(convertTmp, &count, &size)
+
+	osTmp := filepath.Join(util.TempDir, "os")
+	clearTempDir(osTmp, &count, &size)
+
+	base64Tmp := filepath.Join(util.TempDir, "base64")
+	clearTempDir(base64Tmp, &count, &size)
+
+	installTmp := filepath.Join(util.TempDir, "install")
+	clearTempDir(installTmp, &count, &size)
+
+	thumbnailsTmp := filepath.Join(util.TempDir, "thumbnails")
+	clearTempDir(thumbnailsTmp, &count, &size)
+}
+
+func clearTempDir(dir string, count *int, size *int64) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+
+	for _, entry := range entries {
+		entryPath := filepath.Join(dir, entry.Name())
+		info, err := os.Stat(entryPath)
+		if err != nil {
+			continue
+		}
+
+		if info.IsDir() {
+			clearTempDir(entryPath, count, size)
+		} else {
+			if err := os.Remove(entryPath); err != nil {
+				continue
+			}
+
+			*count++
+			*size += info.Size()
+		}
+	}
+
+	if util.IsEmptyDir(dir) {
+		os.Remove(dir)
+	}
+	return
+}
+
 func VacuumDataIndex() {
 	util.PushEndlessProgress(Conf.language(270))
 	defer util.PushClearProgress()
@@ -731,6 +797,12 @@ func VacuumDataIndex() {
 }
 
 func FullReindex() {
+	util.PushEndlessProgress(Conf.language(35))
+
+	cache.ClearTreeCache()
+	cache.ClearDocsIAL()
+	cache.ClearBlocksIAL()
+
 	task.AppendTask(task.DatabaseIndexFull, fullReindex)
 	task.AppendTask(task.DatabaseIndexRef, IndexRefs)
 	go func() {
@@ -738,8 +810,6 @@ func FullReindex() {
 		ResetVirtualBlockRefCache()
 	}()
 	task.AppendTaskWithTimeout(task.DatabaseIndexEmbedBlock, 30*time.Second, autoIndexEmbedBlock)
-	cache.ClearDocsIAL()
-	cache.ClearBlocksIAL()
 	task.AppendTask(task.ReloadUI, util.ReloadUI)
 }
 
@@ -750,15 +820,9 @@ func fullReindex() {
 		pushSQLInsertBlocksFTSMsg, pushSQLDeleteBlocksMsg = false, false
 	}()
 
-	util.PushEndlessProgress(Conf.language(35))
-	defer util.PushClearProgress()
-
 	FlushTxQueue()
 
-	if err := sql.InitDatabase(true); err != nil {
-		os.Exit(logging.ExitCodeReadOnlyDatabase)
-		return
-	}
+	sql.InitDatabase(true)
 
 	sql.IndexIgnoreCached = false
 	openedBoxes := Conf.GetOpenedBoxes()

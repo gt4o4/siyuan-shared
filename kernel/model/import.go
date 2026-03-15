@@ -581,10 +581,10 @@ func ImportSY(zipPath, boxID, toPath string) (err error) {
 		if err != nil {
 			return err
 		}
-		if d == nil {
+		if d == nil || unzipRootPath == path {
 			return nil
 		}
-		if strings.Contains(path, "assets") && d.IsDir() {
+		if d.Name() == "assets" && d.IsDir() {
 			assetsDirs = append(assetsDirs, path)
 		}
 		return nil
@@ -625,10 +625,10 @@ func ImportSY(zipPath, boxID, toPath string) (err error) {
 		if err != nil {
 			return err
 		}
-		if d == nil {
+		if d == nil || unzipRootPath == path {
 			return nil
 		}
-		if strings.Contains(path, "emojis") && d.IsDir() {
+		if d.Name() == "emojis" && d.IsDir() {
 			emojiDirs = append(emojiDirs, path)
 		}
 		return nil
@@ -995,7 +995,7 @@ func ImportFromLocalPath(boxID, localPath string, toPath string) (err error) {
 				}
 
 				if strings.HasSuffix(absolutePath, ".md") || strings.HasSuffix(absolutePath, ".markdown") {
-					if !strings.Contains(absolutePath, "assets") {
+					if !strings.Contains(filepath.ToSlash(absolutePath), "/assets/") {
 						// 链接 .md 文件的情况下只有路径中包含 assets 才算作资源文件，其他情况算作文档链接，后续在 convertMdHyperlinks2WikiLinks 中处理
 						// Supports converting relative path hyperlinks into document block references after importing Markdown https://github.com/siyuan-note/siyuan/issues/13817
 						return ast.WalkContinue
@@ -1282,6 +1282,11 @@ func processBase64Img(n *ast.Node, dest string, assetDirPath string) {
 	case "image/png":
 		img, decodeErr = png.Decode(dataReader)
 		ext = ".png"
+		if nil != decodeErr {
+			dataReader.Seek(0, 0)
+			img, decodeErr = jpeg.Decode(dataReader)
+			ext = ".jpg"
+		}
 	case "image/jpeg":
 		img, decodeErr = jpeg.Decode(dataReader)
 		ext = ".jpg"

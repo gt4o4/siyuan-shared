@@ -82,6 +82,9 @@ export const getContenteditableElement = (element: Element): Element => {
     if (!element) {
         return element;
     }
+    if (element.classList.contains("protyle-title__input")) {
+        return  element;
+    }
     let blockElement = element;
     if (!blockElement.getAttribute("data-node-id")) {
         blockElement = element.querySelector("[data-node-id]");
@@ -110,8 +113,12 @@ export const getContenteditableElement = (element: Element): Element => {
     return undefined;
 };
 
+export const isContainerBlock = (element: Element) => {
+    return element.classList.contains("list") || element.classList.contains("li") || element.classList.contains("sb") || element.classList.contains("bq") || element.classList.contains("callout");
+};
+
 export const isNotEditBlock = (element: Element) => {
-    if (element.classList.contains("sb")) {
+    if (isContainerBlock(element)) {
         let hasEditable = false;
         Array.from(element.querySelectorAll("[data-node-id]")).find(item => {
             if (!isNotEditBlock(item)) {
