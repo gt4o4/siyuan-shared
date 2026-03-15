@@ -22,7 +22,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
-import android.content.res.AssetManager;
+import android.content.res.Configuration;
 import android.net.Uri;
 import android.os.LocaleList;
 import android.print.PrintDocumentAdapter;
@@ -37,19 +37,17 @@ import android.webkit.WebViewClient;
 import android.widget.Toast;
 
 import androidx.annotation.StringRes;
+import androidx.browser.customtabs.CustomTabsIntent;
 
 import com.blankj.utilcode.util.KeyboardUtils;
 import com.blankj.utilcode.util.StringUtils;
 import com.blankj.utilcode.util.TimeUtils;
+import com.blankj.utilcode.util.ToastUtils;
 
 import org.apache.commons.io.FileUtils;
 
-import java.io.BufferedInputStream;
 import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.FileOutputStream;
 import java.io.FileWriter;
-import java.io.InputStream;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
@@ -59,8 +57,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
 
 import mobile.Mobile;
 
@@ -69,7 +65,7 @@ import mobile.Mobile;
  *
  * @author <a href="https://88250.b3log.org">Liang Ding</a>
  * @author <a href="https://github.com/wwxiaoqi">Jane Haring</a>
- * @version 1.5.0.0, Oct 19, 2025
+ * @version 1.5.0.6, Feb 21, 2026
  * @since 1.0.0
  */
 public final class Utils {
@@ -135,14 +131,9 @@ public final class Utils {
         currentToast.show();
     }
 
-    public static boolean isTablet(String userAgent) {
-        if (StringUtils.isEmpty(userAgent)) {
-            return false;
-        }
-
-        userAgent = userAgent.toLowerCase();
-        return userAgent.contains("tablet") || userAgent.contains("pad") ||
-                (userAgent.contains("android") && !userAgent.contains("mobile"));
+    public static boolean isTablet(final Context context) {
+        Configuration configuration = context.getResources().getConfiguration();
+        return configuration.smallestScreenWidthDp >= 600;
     }
 
     public static boolean isCnChannel(final PackageManager pm) {
@@ -164,104 +155,55 @@ public final class Utils {
         return applicationInfo.metaData.getString("CHANNEL");
     }
 
-    private static long lastShowKeyboard = 0;
-    public static long lastFrontendForceHideKeyboard = 0;
+    public static void setWebViewFocusable(final WebView webView, final boolean focusable) {
+        // 禁止 WebView 获取焦点以防止自动弹出软键盘，软键盘弹出由前端控制
+        // Improve soft keyboard toolbar pop-up https://github.com/siyuan-note/siyuan/issues/16548
+        webView.setFocusable(focusable);
+        webView.setFocusableInTouchMode(focusable);
+        if (!focusable) {
+            webView.clearFocus();
+        } else {
+            webView.requestFocus();
+        }
+    }
 
     public static void registerSoftKeyboardToolbar(final Activity activity, final WebView webView) {
+        if (Utils.isTablet(activity)) {
+            return;
+        }
+
         KeyboardUtils.registerSoftInputChangedListener(activity, height -> {
             if (activity.isInMultiWindowMode()) {
-                Utils.logInfo("keyboard", "In multi window mode, do not show keyboard toolbar");
-                return;
-            }
-
-            final long now = System.currentTimeMillis();
-            if (lastFrontendForceHideKeyboard != 0 && now - lastFrontendForceHideKeyboard < 500) {
-                // 键盘被前端强制隐藏后短时间内又触发弹起，则再次强制隐藏键盘 https://github.com/siyuan-note/siyuan/issues/14589
-                webView.evaluateJavascript("javascript:hideKeyboardToolbar()", null);
-                KeyboardUtils.hideSoftInput(activity);
-                //Utils.logInfo("keyboard", "Force hide keyboard");
-                new Thread(() -> {
-                    try {
-                        Thread.sleep(500);
-                        lastFrontendForceHideKeyboard = 0;
-                    } catch (final Exception e) {
-                        Utils.logError("runtime", "sleep failed", e);
-                    }
-                }).start();
                 return;
             }
 
             if (KeyboardUtils.isSoftInputVisible(activity)) {
-                final int h = height / 2 - 42;
-                webView.evaluateJavascript("javascript:showKeyboardToolbar(" + h + ")", null);
-                lastShowKeyboard = now;
-                //Utils.logInfo("keyboard", "Show keyboard toolbar");
+                showKeyboardAndToolbar(webView);
             } else {
-                if (now - lastShowKeyboard < 500) {
-                    // 短时间内键盘显示又隐藏，则再次强制显示键盘 https://github.com/siyuan-note/siyuan/issues/11098#issuecomment-2273704439
-                    KeyboardUtils.showSoftInput(activity);
-                    //Utils.logInfo("keyboard", "Force show keyboard");
-                    return;
-                }
-                webView.evaluateJavascript("javascript:hideKeyboardToolbar()", null);
-                //Utils.logInfo("keyboard", "Hide keyboard toolbar");
-                activity.getWindow().getDecorView().clearFocus();
-                webView.clearFocus();
+                hideKeyboardAndToolbar(webView);
             }
         });
     }
 
-    public static void unzipAsset(final AssetManager assetManager, final String zipName, final String targetDirectory) {
-        ZipInputStream zis = null;
-        try {
-            final InputStream zipFile = assetManager.open(zipName);
-            zis = new ZipInputStream(new BufferedInputStream(zipFile));
-            ZipEntry ze;
-            int count;
-            byte[] buffer = new byte[1024 * 512];
-            while ((ze = zis.getNextEntry()) != null) {
-                final File file = new File(targetDirectory, ze.getName());
-                try {
-                    ensureZipPathSafety(file, targetDirectory);
-                } catch (final Exception se) {
-                    throw se;
-                }
-
-                final File dir = ze.isDirectory() ? file : file.getParentFile();
-                if (!dir.isDirectory() && !dir.mkdirs())
-                    throw new FileNotFoundException("Failed to ensure directory: " + dir.getAbsolutePath());
-                if (ze.isDirectory())
-                    continue;
-                FileOutputStream fout = new FileOutputStream(file);
-                try {
-                    while ((count = zis.read(buffer)) != -1)
-                        fout.write(buffer, 0, count);
-                } finally {
-                    fout.close();
-                }
-            /* if time should be restored as well
-            long time = ze.getTime();
-            if (time > 0)
-                file.setLastModified(time);
-            */
-            }
-        } catch (final Exception e) {
-            Utils.logError("boot", "unzip asset [from=" + zipName + ", to=" + targetDirectory + "] failed", e);
-        } finally {
-            if (null != zis) {
-                try {
-                    zis.close();
-                } catch (final Exception e) {
-                }
-            }
-        }
+    public static void showKeyboardAndToolbar(final WebView webView) {
+        webView.post(() -> {
+            webView.postDelayed(() -> webView.evaluateJavascript("javascript:showKeyboardToolbar();", null), 288);
+            Utils.setWebViewFocusable(webView, true);
+        });
     }
 
-    private static void ensureZipPathSafety(final File outputFile, final String destDirectory) throws Exception {
-        final String destDirCanonicalPath = (new File(destDirectory)).getCanonicalPath();
-        final String outputFileCanonicalPath = outputFile.getCanonicalPath();
-        if (!outputFileCanonicalPath.startsWith(destDirCanonicalPath)) {
-            throw new Exception(String.format("Found Zip Path Traversal Vulnerability with %s", outputFileCanonicalPath));
+    public static void hideKeyboardAndToolbar(final WebView webView) {
+        webView.post(() -> {
+            webView.evaluateJavascript("javascript:hideKeyboardToolbar();document.activeElement.blur();", null);
+            Utils.setWebViewFocusable(webView, false);
+        });
+    }
+
+    public static void unzipAsset(final String appZipPath, final String targetDirectory) {
+        try {
+            Mobile.unzip(appZipPath, targetDirectory);
+        } catch (final Exception e) {
+            Utils.logError("boot", "unzip asset [from=" + appZipPath + ", to=" + targetDirectory + "] failed", e);
         }
     }
 
@@ -405,6 +347,22 @@ public final class Utils {
         final Uri uri = Uri.parse(url);
         final Intent browserIntent = new Intent(Intent.ACTION_VIEW, uri);
         activity.startActivity(browserIntent);
+    }
+
+    // Try opening the URL with Custom Tabs; fall back to default browser on failure.
+    // Returns true if Custom Tabs was used, false if we fell back.
+    public static boolean tryOpenCustomTabs(Uri uri, final Activity activity) {
+        try {
+            final CustomTabsIntent customTabsIntent = new CustomTabsIntent.Builder()
+                    .setShowTitle(true)
+                    .build();
+
+            customTabsIntent.launchUrl(activity, uri);
+            return true;
+        } catch (final Exception e) {
+            openByDefaultBrowser(uri.toString(), activity);
+            return false;
+        }
     }
 
     public static String getLanguage() {

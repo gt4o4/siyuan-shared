@@ -1,17 +1,54 @@
 plugins {
     id 'com.android.application'
+    id 'base' // 显式引入 base 插件以确保 base 闭包可用
 }
+
+// 多渠道打包配置
+apply from: rootProject.file('flavors.gradle')
+apply from: rootProject.file('signings.gradle')
+apply from: rootProject.file('buildRelease.gradle')
+
+// 1. 配置 App Bundle (.aab) 的基础文件名
+base {
+    archivesName = "siyuan-${siyuanVersionName}"
+}
+
+tasks.withType(Copy).configureEach {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
 
 android {
     namespace 'org.b3log.siyuan'
-    compileSdk 36
+    compileSdk = 36
+
+    // 2. 配置 APK 输出文件名
+    applicationVariants.configureEach { variant ->
+        variant.outputs.configureEach { output ->
+            def buildType = variant.buildType.name
+            def flavorName = variant.flavorName
+            def versionName = variant.versionName
+
+            def fileName = "siyuan-${versionName}-${flavorName}-${buildType}"
+
+            if (buildType != "release") {
+                def formattedDate = new Date().format('yyyyMMddHHmmss')
+                fileName += "-${formattedDate}"
+            }
+            output.outputFileName = "${fileName}.apk"
+        }
+    }
 
     defaultConfig {
         applicationId "org.b3log.siyuan"
-        minSdk 26
-        targetSdk 36
+        minSdk = 26
+        targetSdk = 36
         versionCode siyuanVersionCode
         versionName siyuanVersionName
+    }
+
+    buildFeatures {
+        buildConfig true
     }
 
     buildTypes {
@@ -76,11 +113,11 @@ dependencies {
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'com.google.android.material:material:1.10.0'
     implementation 'androidx.lifecycle:lifecycle-process:2.6.2'
-    implementation 'androidx.work:work-runtime:2.10.5'
-    implementation("commons-io:commons-io:2.20.0")
+    implementation 'androidx.work:work-runtime:2.11.1'
+    implementation 'androidx.browser:browser:1.7.0'
+    implementation 'commons-io:commons-io:2.21.0'
     implementation 'com.gitee.zackratos:UltimateBarX:0.8.1'
     implementation 'com.blankj:utilcodex:1.31.1'
     implementation 'com.koushikdutta.async:androidasync:3.1.0'
-
     implementation(name: 'kernel', ext: 'aar')
 }

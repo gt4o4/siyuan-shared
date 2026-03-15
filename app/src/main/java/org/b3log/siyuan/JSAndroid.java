@@ -17,15 +17,29 @@
  */
 package org.b3log.siyuan;
 
+import android.Manifest;
+import android.app.AlarmManager;
+import android.app.Notification;
+import android.app.PendingIntent;
 import android.content.ClipData;
+import android.content.ClipDescription;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.Uri;
+import android.os.Build;
+import android.os.SystemClock;
+import android.provider.Settings;
 import android.util.Log;
 import android.webkit.JavascriptInterface;
+import android.webkit.WebView;
 
+import androidx.core.app.ActivityCompat;
+import androidx.core.app.AlarmManagerCompat;
+import androidx.core.app.NotificationCompat;
+import androidx.core.app.NotificationManagerCompat;
 import androidx.core.app.ShareCompat;
 import androidx.core.content.FileProvider;
 
@@ -36,6 +50,7 @@ import com.zackratos.ultimatebarx.ultimatebarx.java.UltimateBarX;
 
 import java.io.File;
 import java.net.URLDecoder;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import mobile.Mobile;
 
@@ -44,7 +59,7 @@ import mobile.Mobile;
  *
  * @author <a href="https://88250.b3log.org">Liang Ding</a>
  * @author <a href="https://github.com/Soltus">绛亽</a>
- * @version 1.3.0.2, Dec 9, 2025
+ * @version 1.6.0.4, Mar 12, 2026
  * @since 1.0.0
  */
 public final class JSAndroid {
@@ -55,6 +70,68 @@ public final class JSAndroid {
     }
 
     @JavascriptInterface
+    public void cancelNotification(final int id) {
+        final Intent intent = new Intent(this.activity, NotificationReceiver.class);
+        final PendingIntent pendingIntent = PendingIntent.getBroadcast(this.activity, id, intent, PendingIntent.FLAG_NO_CREATE | PendingIntent.FLAG_IMMUTABLE);
+        if (pendingIntent != null) {
+            final AlarmManager alarmManager = (AlarmManager) this.activity.getSystemService(Context.ALARM_SERVICE);
+            alarmManager.cancel(pendingIntent);
+            pendingIntent.cancel();
+        }
+
+        NotificationManagerCompat.from(this.activity).cancel(id);
+    }
+
+    @JavascriptInterface
+    public int sendNotification(final String channel, final String title, final String body, final int delayInSeconds) {
+        if (ActivityCompat.checkSelfPermission(this.activity, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            Utils.showToast(this.activity, "请允许通知权限以接收通知 / Please allow notification permission to receive notifications");
+            final Intent intent = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS);
+            intent.setData(Uri.parse("package:" + this.activity.getPackageName()));
+            this.activity.startActivity(intent);
+            return -1;
+        }
+
+        if (!NotificationReceiver.createNotificationChannel(activity, channel)) {
+            return -1;
+        }
+
+        final int ret = NotificationReceiver.getNextNotificationId();
+        if (0 < delayInSeconds) {
+            final AlarmManager alarmManager = (AlarmManager) this.activity.getSystemService(Context.ALARM_SERVICE);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
+                Utils.showToast(this.activity, "请允许精确闹钟权限以接收定时通知（同时需要允许自启动） / Please allow exact alarm permission to receive scheduled notifications (also need to allow auto-start)");
+                final Intent intent = new Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM);
+                intent.setData(Uri.parse("package:" + this.activity.getPackageName()));
+                this.activity.startActivity(intent);
+                return -1;
+            }
+
+            final Intent intent = new Intent(this.activity, NotificationReceiver.class);
+            intent.putExtra("channel", channel);
+            intent.putExtra("id", ret);
+            intent.putExtra("title", title);
+            intent.putExtra("body", body);
+            final long triggerTime = SystemClock.elapsedRealtime() + (delayInSeconds * 1000L);
+            final PendingIntent pendingIntent = PendingIntent.getBroadcast(this.activity, ret, intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            AlarmManagerCompat.setExactAndAllowWhileIdle((AlarmManager) this.activity.getSystemService(Context.ALARM_SERVICE), AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerTime, pendingIntent);
+            return ret;
+        }
+
+        final PendingIntent resultPendingIntent = NotificationReceiver.createNotificationPendingIntent(this.activity);
+        final NotificationCompat.Builder builder = new NotificationCompat.Builder(activity, channel).
+                setSmallIcon(R.drawable.icon).
+                setContentTitle(title).
+                setContentText(body).
+                setPriority(NotificationCompat.PRIORITY_HIGH).
+                setAutoCancel(true).
+                setContentIntent(resultPendingIntent).
+                setCategory(Notification.CATEGORY_REMINDER);
+        NotificationManagerCompat.from(this.activity).notify(ret, builder.build());
+        return ret;
+    }
+
+    @JavascriptInterface
     public void exit() {
         this.activity.exit();
     }
@@ -62,15 +139,35 @@ public final class JSAndroid {
     @JavascriptInterface
     public void hideKeyboard() {
         activity.runOnUiThread(() -> {
+            final WebView webView = activity.findViewById(R.id.webView);
+            Utils.hideKeyboardAndToolbar(webView);
             KeyboardUtils.hideSoftInput(activity);
-            Utils.lastFrontendForceHideKeyboard = System.currentTimeMillis();
-            //Utils.logInfo("keyboard", "Hide keyboard");
+        });
+    }
+
+    @JavascriptInterface
+    public void showKeyboard() {
+        activity.runOnUiThread(() -> {
+            final WebView webView = activity.findViewById(R.id.webView);
+            Utils.showKeyboardAndToolbar(webView);
+            KeyboardUtils.showSoftInput(activity);
+        });
+    }
+
+    @JavascriptInterface
+    public void setWebViewFocusable(final boolean focusable) {
+        activity.runOnUiThread(() -> {
+            final WebView webView = activity.findViewById(R.id.webView);
+            Utils.setWebViewFocusable(webView, focusable);
         });
     }
 
     @JavascriptInterface
     public String getBlockURL() {
-        final String blockURL = activity.getIntent().getStringExtra("blockURL");
+        String blockURL = activity.getIntent().getStringExtra("blockURL");
+        if (StringUtils.isEmpty(blockURL)) {
+            blockURL = "";
+        }
         return blockURL;
     }
 
@@ -130,6 +227,24 @@ public final class JSAndroid {
     }
 
     @JavascriptInterface
+    public String readSiYuanHTMLClipboard() {
+        final ClipboardManager clipboard = (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
+        final ClipData clipData = clipboard.getPrimaryClip();
+        if (null == clipData) {
+            return "";
+        }
+
+        if (clipData.getDescription().hasMimeType("text/siyuan") && 2 == clipData.getItemCount()) {
+            final ClipData.Item item = clipData.getItemAt(1);
+            final CharSequence text = item.getText();
+            if (null != text) {
+                return text.toString();
+            }
+        }
+        return "";
+    }
+
+    @JavascriptInterface
     public void writeImageClipboard(final String uri) {
         final ClipboardManager clipboard = (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
         final ClipData clip = ClipData.newUri(activity.getContentResolver(), "Copied img from SiYuan", Uri.parse("http://127.0.0.1:6806/" + uri));
@@ -148,6 +263,17 @@ public final class JSAndroid {
         final ClipboardManager clipboard = (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
         final ClipData clip = ClipData.newHtmlText("Copied html from SiYuan", text, html);
         clipboard.setPrimaryClip(clip);
+    }
+
+    @JavascriptInterface
+    public void writeSiYuanHTMLClipboard(final String text, final String html, final String siyuanHTML) {
+        final ClipboardManager clipboard = (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
+        final String[] mimeTypes = new String[]{ClipDescription.MIMETYPE_TEXT_PLAIN, ClipDescription.MIMETYPE_TEXT_HTML, "text/siyuan"};
+        final ClipData.Item standardItem = new ClipData.Item(text, html, null, null);
+        final ClipData.Item siyuanItem = new ClipData.Item(siyuanHTML);
+        ClipData clipData = new ClipData("Copied html from SiYuan", mimeTypes, standardItem);
+        clipData.addItem(siyuanItem);
+        clipboard.setPrimaryClip(clipData);
     }
 
     @JavascriptInterface
@@ -221,14 +347,33 @@ public final class JSAndroid {
     }
 
     @JavascriptInterface
+    public void openAuthURL(final String url) {
+        if (StringUtils.isEmpty(url) || url.startsWith("#")) {
+            Utils.logError("JSAndroid", "openAuthURL failed: invalid url");
+            return;
+        }
+
+        final Uri uri = Uri.parse(url);
+        final String scheme = uri.getScheme();
+        if ((!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme))) {
+            Utils.logError("JSAndroid", "openAuthURL failed: only support http/https protocol, not " + scheme);
+            return;
+        }
+
+        Utils.tryOpenCustomTabs(uri, activity);
+    }
+
+    @JavascriptInterface
     public void changeStatusBarColor(final String color, final int appearanceMode) {
-        if (Utils.isTablet(MainActivity.userAgent)) {
+        if (Utils.isTablet(activity)) {
             return;
         }
 
         activity.runOnUiThread(() -> {
-            UltimateBarX.statusBarOnly(activity).transparent().light(appearanceMode == 0).color(parseColor(color)).apply();
+            final int colorVal = parseColor(color);
+            UltimateBarX.statusBarOnly(activity).transparent().light(appearanceMode == 0).color(colorVal).apply();
             BarUtils.setNavBarVisibility(activity, false);
+            activity.webView.getRootView().setBackgroundColor(colorVal);
         });
     }
 
@@ -260,6 +405,4 @@ public final class JSAndroid {
             return Color.parseColor("#212224");
         }
     }
-
-
 }
