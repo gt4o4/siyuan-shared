@@ -31,6 +31,9 @@
     <!-- 添加桌面快捷方式 -->
     <uses-permission android:name="com.android.launcher.permission.INSTALL_SHORTCUT" />
 
+    <!-- 预约通知 -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+
     <application
         android:name=".App"
         android:icon="@mipmap/ic_launcher"
@@ -39,6 +42,7 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.SiYuan"
         android:usesCleartextTraffic="true"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:enableOnBackInvokedCallback="true"
         tools:targetApi="tiramisu">
 
@@ -58,7 +62,10 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="siyuan" />
+
+                <data
+                    android:scheme="siyuan"
+                    android:host="blocks" />
             </intent-filter>
 
             <intent-filter>
@@ -72,6 +79,24 @@
                 android:name="android.app.shortcuts"
                 android:resource="@xml/shortcuts" />
             -->
+        </activity>
+
+        <activity
+            android:name=".RedirectUriReceiverActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:noHistory="true"
+            android:theme="@style/Theme.SiYuan.Transparent">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data
+                    android:scheme="siyuan"
+                    android:host="oidc-callback" />
+            </intent-filter>
         </activity>
 
         <activity
@@ -157,6 +182,9 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="hosting" />
         </service>
+
+        <!-- 监听系统广播以实现预约通知 -->
+        <receiver android:name=".NotificationReceiver" />
 
         <!--
             Support opening assets through other apps on the Android

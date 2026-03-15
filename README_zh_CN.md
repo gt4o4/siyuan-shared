@@ -19,23 +19,57 @@
 <a title="Last Commit" target="_blank" href="https://github.com/siyuan-note/siyuan/commits/master"><img src="https://img.shields.io/github/last-commit/siyuan-note/siyuan.svg?style=flat-square&color=FF9900"></a>
 <br><br>
 <a title="Twitter" target="_blank" href="https://twitter.com/b3logos"><img alt="Twitter Follow" src="https://img.shields.io/twitter/follow/b3logos?label=Follow&style=social"></a>
+<a title="Discord" target="_blank" href="https://discord.gg/dmMbCqVX7G"><img alt="Chat on Discord" src="https://img.shields.io/discord/808152298789666826?label=Discord&logo=Discord&style=social"></a>
 <br><br>
 <a href="https://trendshift.io/repositories/3949" target="_blank"><img src="https://trendshift.io/api/badge/repositories/3949" alt="siyuan-note%2Fsiyuan | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-<br><br>
-<a href="https://www.producthunt.com/products/siyuan/reviews?utm_source=badge-product_rating&utm_medium=badge&utm_souce=badge-siyuan" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/product_rating.svg?product_id=534576&theme=light" alt="SiYuan - A&#0032;privacy&#0045;first&#0032;personal&#0032;knowledge&#0032;management&#0032;software | Product Hunt" style="width: 242px; height: 108px;" width="242" height="108" /></a>
 </p>
 
 <p align="center">
-<a href="README.md">English</a> | <a href="README_ja_JP.md">日本語</a>
+<a href="README.md">English</a> | <a href="README_ja_JP.md">日本語</a> | <a href="README_tr_TR.md">Türkçe</a>
 </p>
+
+---
+
+## 目录
+
+* [💡 简介](#-简介)
+* [🔮 特性](#-特性)
+* [🏗️ 架构和生态](#️-架构和生态)
+* [🌟 星标历史](#-星标历史)
+* [🗺️ 路线图](#️-路线图)
+* [🚀 下载安装](#-下载安装)
+  * [应用市场](#应用市场)
+  * [安装包](#安装包)
+  * [包管理器](#包管理器)
+  * [Docker 部署](#docker-部署)
+  * [Unraid 部署](#unraid-部署)
+  * [TrueNAS 部署](#trueNAS-部署)
+  * [宝塔面板部署](#宝塔面板部署)
+  * [小皮面板部署](#小皮面板部署)
+  * [1Panel 面板部署](#1Panel-面板部署)
+  * [内部预览版](#内部预览版)
+* [🏘️ 社区](#️-社区)
+* [🛠️ 开发指南](#️-开发指南)
+* [❓ 常见问题和解答](#-常见问题和解答)
+  * [思源是如何存储数据的？](#思源是如何存储数据的)
+  * [支持通过第三方同步盘进行数据同步吗？](#支持通过第三方同步盘进行数据同步吗)
+  * [思源是开源的吗？](#思源是开源的吗)
+  * [如何升级到新版本？](#如何升级到新版本)
+  * [有的块（比如在列表项中的段落块）找不到块标怎么办？](#有的块比如在列表项中的段落块找不到块标怎么办)
+  * [数据仓库密钥遗失怎么办？](#数据仓库密钥遗失怎么办)
+  * [使用需要付费吗？](#使用需要付费吗)
+* [🙏 鸣谢](#-鸣谢)
+  * [贡献者列表](#贡献者列表)
+
+---
 
 ## 💡 简介
 
 思源笔记是一款隐私优先的个人知识管理系统，支持细粒度块级引用和 Markdown 所见即所得。
 
-![feature0.png](https://b3logfile.com/file/2024/01/feature0-1orBRlI.png)
+![feature0.png](https://b3logfile.com/file/2025/11/feature0-GfbhEqf.png)
 
-![feature51.png](https://b3logfile.com/file/2024/02/feature5-1-uYYjAqy.png)
+![feature51.png](https://b3logfile.com/file/2025/11/feature5-1-7DJSfEP.png)
 
 欢迎到[思源笔记官方讨论区](https://ld246.com/domain/siyuan)了解更多。同时也欢迎关注 B3log 开源社区微信公众号 `B3log开源`：
 
@@ -78,7 +112,7 @@
 
 部分功能需要付费会员才能使用，更多细节请参考[定价](https://b3log.org/siyuan/pricing.html)。
 
-## 🏗️ 架构设计和开源生态
+## 🏗️ 架构和生态
 
 ![思源笔记架构设计](https://b3logfile.com/file/2023/05/SiYuan_Arch-Sgu8vXT.png "思源笔记架构设计")
 
@@ -94,9 +128,15 @@
 | [harmony](https://github.com/siyuan-note/siyuan-harmony)         | 鸿蒙 App       | ![GitHub forks](https://img.shields.io/github/forks/siyuan-note/siyuan-harmony)     | ![GitHub Repo stars](https://img.shields.io/github/stars/siyuan-note/siyuan-harmony)     |
 | [riff](https://github.com/siyuan-note/riff)              | 间隔重复         | ![GitHub forks](https://img.shields.io/github/forks/siyuan-note/riff)           | ![GitHub Repo stars](https://img.shields.io/github/stars/siyuan-note/riff)           |
 
-## 🌟 Star History
+## 🌟 星标历史
 
-[![Star History Chart](https://api.star-history.com/svg?repos=siyuan-note/siyuan&type=Date)](https://star-history.com/#siyuan-note/siyuan&Date)
+<a href="https://star-history.com/#siyuan-note/siyuan&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=siyuan-note/siyuan&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=siyuan-note/siyuan&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=siyuan-note/siyuan&type=Date" />
+ </picture>
+</a>
 
 ## 🗺️ 路线图
 
@@ -121,6 +161,21 @@
 桌面端：
 
 * [Microsoft Store](https://apps.microsoft.com/detail/9p7hpmxp73k4)
+
+### 安装包
+
+* [B3log](https://b3log.org/siyuan/download.html)
+* [GitHub](https://github.com/siyuan-note/siyuan/releases)
+
+### 包管理器
+
+#### `siyuan`
+
+[![包状态](https://repology.org/badge/vertical-allrepos/siyuan.svg)](https://repology.org/project/siyuan/versions)
+
+#### `siyuan-note`
+
+[![包状态](https://repology.org/badge/vertical-allrepos/siyuan-note.svg)](https://repology.org/project/siyuan-note/versions)
 
 ### Docker 部署
 
@@ -168,7 +223,10 @@ docker run -d \
 * `PGID`: 自定义组 ID（可选，如果未提供，默认为 `1000`）
 * `workspace_dir_host`：宿主机上的工作空间文件夹路径
 * `workspace_dir_container`：容器内工作空间文件夹路径，和后面 `--workspace` 指定成一样的
+  * 另外，也可以通过 `SIYUAN_WORKSPACE_PATH` 环境变量设置路径。如果两者都设置了，命令行的值将优先
 * `accessAuthCode`：访问授权码，请**务必修改**，否则任何人都可以读写你的数据
+  * 另外，也可以通过 `SIYUAN_ACCESS_AUTH_CODE` 环境变量设置授权码。如果两者都设置了，命令行的值将优先
+  * 可通过设置环境变量 `SIYUAN_ACCESS_AUTH_CODE_BYPASS=true` 禁用访问授权码
 
 为了简化，建议将 workspace 文件夹路径在宿主机和容器上配置为一致的，比如将 `workspace_dir_host` 和 `workspace_dir_container` 都配置为 `/siyuan/workspace`，对应的启动命令示例：
 
@@ -240,10 +298,153 @@ chown -R 1001:1002 /siyuan/workspace
 
 </details>
 
-### 安装包
+### Unraid 部署
 
-* [B3log](https://github.com/appdev/siyuan-unlock/releases)
-* [GitHub](https://github.com/siyuan-note/siyuan/releases)
+<details>
+<summary>Unraid 部署文档</summary>
+
+注意：首先终端运行 `chown -R 1000:1000 /mnt/user/appdata/siyuan`
+
+模板参考：
+
+```
+Web UI: 6806
+Container Port: 6806
+Container Path: /home/siyuan
+Host path: /mnt/user/appdata/siyuan
+PUID: 1000
+PGID: 1000
+Publish parameters: --accessAuthCode=******（访问授权码）
+```
+
+</details>
+
+### TrueNAS 部署
+
+<details>
+<summary>TrueNAS 部署文档</summary>
+
+注意：首先在 TrueNAS Shell 中运行下面的命令。请将 `Pool_1/Apps_Data/siyuan` 更新为与你的应用数据集对应的路径。
+
+```shell
+zfs create Pool_1/Apps_Data/siyuan
+chown -R 1001:1002 /mnt/Pool_1/Apps_Data/siyuan
+chmod 755 /mnt/Pool_1/Apps_Data/siyuan
+```
+
+进入 Apps - DiscoverApps - More Options（右上，除 Custom App 外）- 通过 YAML 安装
+
+模板参考：
+
+```yaml
+services:
+  siyuan:
+    image: b3log/siyuan
+    container_name: siyuan
+    command: ['--workspace=/siyuan/workspace/', '--accessAuthCode=2222']
+    ports:
+      - 6806:6806
+    volumes:
+      - /mnt/Pool_1/Apps_Data/siyuan:/siyuan/workspace  # Adjust to your dataset path 
+    restart: unless-stopped
+    environment:
+      - TZ=America/Los_Angeles  # Replace with your timezone if needed
+      - PUID=1001
+      - PGID=1002
+```
+
+</details>
+
+### 宝塔面板部署
+
+<details>
+<summary>宝塔面板 部署文档</summary>
+
+#### 前提
+
+* 仅适用于宝塔面板9.2.0及以上版本
+* 安装宝塔面板，前往[宝塔面板](https://www.bt.cn/new/download.html)官网，选择正式版的脚本下载安装
+
+#### 部署
+
+1. 登录宝塔面板，在左侧菜单栏中点击 `Docker`
+2. 首次会提示安装 `Docker` 和 `Docker Compose` 服务，点击立即安装，若已安装请忽略
+3. 安装完成后在 `Docker-应用商店-实用工具` 中找到 `思源笔记`，点击`安装`，也可以在搜索框直接搜索
+4. 设置域名等基本信息，点击 `确定`
+   * 名称：应用名称，默认 `siyuan_随机字符`
+   * 版本选择：默认 `latest`
+   * 域名：如你需要通过域名访问，请在此处填写你的域名
+   * 允许外部访问：如你需通过 `IP+Port` 直接访问，请勾选，如你已经设置了域名，请不要勾选此处
+   * 端口：默认 `6806`，可自行修改
+   * 访问授权码：默认随机生成
+   * 内存限制：0为不限制，根据实际需要设置
+5. 提交后面板会自动进行应用初始化，大概需要`1-3`分钟，初始化完成后即可访问
+
+#### 访问思源笔记
+
+* 如果你填写了域名，请在浏览器输入域名访问
+* 如你选择了 `IP+端口`，请在浏览器地输入 `http://<宝塔面板IP>:6806` 访问
+
+</details>
+
+### 小皮面板部署
+
+<details>
+<summary>小皮面板 部署文档</summary>
+
+#### 前提
+
+* 需要安装小皮面板，前往[小皮面板](https://www.xp.cn/download)，选择对应的脚本执行安装
+
+#### 部署
+
+1. 登录小皮面板后，点击左侧菜单的 **Docker**
+2. 首次打开会提示安装 Docker，点击 **点击安装 Docker**
+3. 按照提示安装 Docker
+4. 点击 **应用商店**，找到 **思源笔记**，点击 **安装** -> **立即安装**
+5. 等待安装结束后，可在 **任务队列** 界面的 **已结束** 中点击 **详情** 查看安装信息
+
+#### 访问思源笔记
+
+* 在浏览器输入 `http://<小皮面板机器IP>:6806` 访问
+
+</details>
+
+### 1Panel 面板部署
+
+<details>
+<summary>1Panel面板 部署文档</summary>
+
+#### 前提
+
+- 仅适用于1Panel面板v1.10.32-lts及以上版本
+- 安装1Panel面板，前往[1Panel](https://1panel.cn/)官网，选择正式版安装脚本下载安装
+
+#### 部署
+
+1. 登录1Panel面板，在左侧菜单栏中点击 `应用商店`
+2. 在 `应用商店-实用工具` 中找到 `思源笔记`，点击`安装`，也可以在搜索框直接搜索
+3. 配置访问授权码等基本信息，点击 `确定`
+
+    - 名称：应用名称，默认 `siyuan`
+    - 版本：默认最新发行版
+    - 端口：默认 `6806`
+    - 访问授权码：访问笔记时需要使用的`访问密码`
+    - 端口外部访问：如你需通过 `IP+Port` 直接访问，请勾选，同时会开放服务器防火墙端口
+    - CPU限制：默认为0，不限制，可根据实际需要设置
+    - 内存限制：默认为0，不限制，可根据实际需要设置
+4. 提交后面板会自动进行应用安装启动，应用状态会变为`安装中`，大概需要`1-3`分钟，耐心等待安装完成
+5. 当应用状态变为`已启动`后，点击左侧的网站，首次使用需要安装`OpenResty`，点击`安装`
+6. 安装完成后，点击`网站`菜单栏左上角`创建`，在弹出的页面中选择`反向代理`
+7. 在`主域名`填入你的域名，网站代号会自动生成，代理选择`http`，代理地址填写`127.0.0.1:6806`，点击`确定`
+8. (可选) 配置你创建的网站，可根据需要配置`https`访问增强访问安全性
+
+#### 访问思源笔记
+
+- 如果你通过`OpenResty`反向代理反代了网站，并且填写了域名，请在浏览器输入`域名`访问
+- 如你选择了 `端口外部访问`，请在浏览器地输入 `http://<1Panel面板IP>:6806` 访问
+
+</details>
 
 ### 内部预览版
 
@@ -304,29 +505,13 @@ chown -R 1001:1002 /siyuan/workspace
 * 如果是桌面端通过安装包安装的，可打开 <kbd>设置</kbd> - <kbd>关于</kbd> - <kbd>自动下载更新安装包</kbd> 选项，这样思源会自动下载最新版安装包并提示安装
 * 如果是通过手动安装包安装的，请再次下载安装包安装
 
-可在 <kbd>设置</kbd> - <kbd>关于</kbd> - <kbd>当前版本</kbd> 中 <kbd>检查更新</kbd>，也可以通过关注[官方下载](https://github.com/appdev/siyuan-unlock/releases)或者 [GitHub Releases](https://github.com/siyuan-note/siyuan/releases) 来获取新版本。
+可在 <kbd>设置</kbd> - <kbd>关于</kbd> - <kbd>当前版本</kbd> 中 <kbd>检查更新</kbd>，也可以通过关注[官方下载](https://b3log.org/siyuan/download.html)或者 [GitHub Releases](https://github.com/siyuan-note/siyuan/releases) 来获取新版本。
 
 **注意**：切勿将工作空间放置于安装目录下，因为更新版本会清空安装目录下的所有文件
 
-### 删除文档有什么注意事项吗？
-
-文档被删除后不会出现在操作系统回收站中，而是直接删除，删除时思源会生成数据历史。
-
-### 如何才能只换行不新起段落？
-
-请使用 <kbd>Shift+Enter</kbd>。
-
-## 有的块（比如在列表项中的段落块）找不到块标怎么办？
+### 有的块（比如在列表项中的段落块）找不到块标怎么办？
 
 在列表项下的第一个子块是省略块标的。可以将光标移到这个块中，然后通过 <kbd>Ctrl+/</kbd> 触发它的块标菜单。
-
-### 如何分享笔记？
-
-* 分享文档到链滴
-* 导出导入 `.sy.zip` 数据包
-* 通过网络伺服
-* 导出导入 Markdown
-* <kbd>导出预览</kbd> 中复制到第三方在线服务
 
 ### 数据仓库密钥遗失怎么办？
 

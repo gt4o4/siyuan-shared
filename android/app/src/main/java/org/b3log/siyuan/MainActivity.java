@@ -70,6 +70,7 @@ import com.koushikdutta.async.util.Charsets;
 import com.zackratos.ultimatebarx.ultimatebarx.java.UltimateBarX;
 
 import org.apache.commons.io.FileUtils;
+import org.apache.commons.io.IOUtils;
 import org.apache.commons.io.filefilter.DirectoryFileFilter;
 import org.apache.commons.io.filefilter.TrueFileFilter;
 import org.json.JSONArray;
@@ -93,13 +94,13 @@ import mobile.Mobile;
  * 主程序.
  *
  * @author <a href="https://88250.b3log.org">Liang Ding</a>
- * @version 1.1.2.0, Dec 20, 2025
+ * @version 1.1.3.2, Feb 15, 2026
  * @since 1.0.0
  */
 public class MainActivity extends AppCompatActivity implements com.blankj.utilcode.util.Utils.OnAppStatusChangedListener {
 
     private AsyncHttpServer server;
-    private WebView webView;
+    WebView webView;
     private ImageView bootLogo;
     private ProgressBar bootProgressBar;
     private TextView bootDetailsText;
@@ -115,11 +116,26 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
     @Override
     public void onNewIntent(final Intent intent) {
         super.onNewIntent(intent);
-        if (null != webView) {
-            final String blockURL = intent.getStringExtra("blockURL");
-            if (!StringUtils.isEmpty(blockURL)) {
-                webView.evaluateJavascript("javascript:window.openFileByURL('" + blockURL + "')", null);
+        setIntent(intent);
+
+        if (null == intent || null == webView) {
+            return;
+        }
+
+        try {
+            final String script;
+            if (!StringUtils.isEmpty(intent.getStringExtra("oidcCallback"))) {
+                script = "window.handleOidcCallbackLink(" + JSONObject.quote(intent.getStringExtra("oidcCallback")) + ");";
+            } else if (!StringUtils.isEmpty(intent.getStringExtra("blockURL"))) {
+                script = "window.openFileByURL(" + JSONObject.quote(intent.getStringExtra("blockURL")) + ");";
+            } else {
+                return;
             }
+
+            runOnUiThread(() -> webView.evaluateJavascript(script, null));
+
+        } catch (final Exception e) {
+            Utils.logError("intent", "handle payload failed", e);
         }
     }
 
@@ -162,10 +178,10 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
         // Fix https://github.com/siyuan-note/siyuan/issues/9765
         Utils.registerSoftKeyboardToolbar(this, webView);
 
-        if (Utils.isTablet(userAgent)) {
+        if (Utils.isTablet(this)) {
             // 平板上隐藏状态栏 Hide the status bar on tablet https://github.com/siyuan-note/siyuan/issues/12204
             BarUtils.setStatusBarVisibility(this, false);
-            Log.i("boot", "Hide status bar on tablet");
+            Utils.setWebViewFocusable(webView, true);
         } else {
             // 沉浸式状态栏设置
             UltimateBarX.statusBarOnly(this).transparent().light(false).color(Color.parseColor("#1e1e1e")).apply();
@@ -183,7 +199,9 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
         bootProgressBar = findViewById(R.id.progressBar);
         bootDetailsText = findViewById(R.id.bootDetails);
         webView = findViewById(R.id.webView);
-        webView.setBackgroundColor(Color.parseColor("#1e1e1e"));
+        if (!Utils.isTablet(this)) {
+            Utils.setWebViewFocusable(webView, false);
+        }
 
         webView.setDownloadListener((url, userAgent, contentDisposition, mimetype, contentLength) -> {
             final Uri uri = Uri.parse(url);
@@ -214,7 +232,7 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
             public boolean shouldOverrideUrlLoading(final WebView view, final WebResourceRequest request) {
                 final Uri uri = request.getUrl();
                 final String url = uri.toString();
-                if (url.contains("127.0.0.1")) {
+                if (url.contains("127.0.0.1") && !url.contains("openExternal")) {
                     view.loadUrl(url);
                     return true;
                 }
@@ -239,13 +257,11 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
             @Override
             public WebResourceResponse shouldInterceptRequest(final WebView view, final WebResourceRequest request) {
                 final Map<String, String> headers = request.getRequestHeaders();
-
-                if (request.getUrl().toString().toLowerCase().contains("youtube")) {
+                final String lowerCaseURL = request.getUrl().toString().toLowerCase();
+                if (lowerCaseURL.contains("youtube")) {
                     // YouTube 设置 Referer https://github.com/siyuan-note/siyuan/issues/16319
                     headers.put("Referer", "https://b3log.org/siyuan/");
-                }
-
-                if (request.getUrl().toString().contains("qpic")) {
+                } else if (lowerCaseURL.contains("qpic")) {
                     // 改进公众号图片加载 https://github.com/siyuan-note/siyuan/issues/16326
                     return handleRequest(request.getUrl().toString(), headers);
                 }
@@ -582,7 +598,16 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
             }
 
             setBootProgress("Initializing appearance...", 60);
-            Utils.unzipAsset(getAssets(), "app.zip", appDir + "/app");
+
+            try {
+                final String appZip = getCacheDir() + "/app.zip";
+                IOUtils.copy(getAssets().open("app.zip"), FileUtils.openOutputStream(new File(appZip)));
+                Utils.unzipAsset(appZip, appDir + "/app");
+            } catch (final Exception e) {
+                Utils.logError("boot", "unzip assets failed, exit application", e);
+                exit();
+                return;
+            }
 
             try {
                 FileUtils.writeStringToFile(appVerFile, Utils.versionCode + "", StandardCharsets.UTF_8);
