@@ -1,0 +1,98 @@
+# Multi-stage Dockerfile for building SiYuan Unlock desktop Linux packages
+# Outputs: tar.gz and AppImage in /output/
+#
+# Usage:
+#   docker build -f docker/Dockerfile.desktop -t siyuan-desktop-builder .
+#   docker run --rm -v $(pwd)/build:/output siyuan-desktop-builder
+
+ARG SIYUAN_VERSION=v3.6.0
+ARG GO_VERSION=1.25
+ARG NODE_VERSION=21
+
+# ============================================================
+# Stage 1: Build UI
+# ============================================================
+FROM node:${NODE_VERSION} AS ui-build
+
+ARG SIYUAN_VERSION
+
+WORKDIR /workspace
+COPY patches/siyuan/ patches/siyuan/
+
+RUN git clone --branch ${SIYUAN_VERSION} --depth=1 https://github.com/siyuan-note/siyuan.git
+
+WORKDIR /workspace/siyuan
+RUN git apply /workspace/patches/siyuan/disable-update.patch && \
+    git apply /workspace/patches/siyuan/default-config.patch && \
+    git apply /workspace/patches/siyuan/mock-vip-user.patch
+
+WORKDIR /workspace/siyuan/app
+RUN corepack enable && \
+    corepack install --global $(node -e 'console.log(require("./package.json").packageManager)') && \
+    pnpm install --no-frozen-lockfile && \
+    pnpm run build
+
+# ============================================================
+# Stage 2: Build Kernel (Linux amd64, static with musl)
+# ============================================================
+FROM golang:${GO_VERSION}-alpine AS kernel-build
+
+RUN apk add --no-cache gcc musl-dev wget tar
+
+# Download musl cross-compiler for static builds
+RUN wget -q https://github.com/appdev/musl-archive/releases/download/latest/x86_64-linux-musl-cross.tgz && \
+    tar -xzf x86_64-linux-musl-cross.tgz -C /usr/local && \
+    rm x86_64-linux-musl-cross.tgz
+
+WORKDIR /workspace/siyuan/kernel
+COPY --from=ui-build /workspace/siyuan/kernel/ .
+
+ENV GO111MODULE=on \
+    CGO_ENABLED=1 \
+    GOOS=linux \
+    GOARCH=amd64 \
+    CC=/usr/local/x86_64-linux-musl-cross/bin/x86_64-linux-musl-gcc
+
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg \
+    go build --tags fts5 -v -o /workspace/SiYuan-Kernel \
+    -ldflags "-s -w -X github.com/siyuan-note/siyuan/kernel/util.Mode=prod" .
+
+# ============================================================
+# Stage 3: Package with Electron Builder
+# ============================================================
+FROM node:${NODE_VERSION} AS package
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libarchive-tools rpm fakeroot dpkg && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install pnpm
+RUN corepack enable
+
+WORKDIR /workspace/siyuan/app
+COPY --from=ui-build /workspace/siyuan/app/ .
+RUN corepack install --global $(node -e 'console.log(require("./package.json").packageManager)')
+
+# Place kernel binary
+RUN mkdir -p kernel-linux
+COPY --from=kernel-build /workspace/SiYuan-Kernel kernel-linux/SiYuan-Kernel
+RUN chmod +x kernel-linux/SiYuan-Kernel
+
+# Clean any prior build artifacts
+RUN rm -rf build
+
+# Package
+RUN pnpm run dist-linux
+
+# Copy outputs
+RUN mkdir -p /output && \
+    cp build/siyuan-*linux*.tar.gz /output/ 2>/dev/null; \
+    cp build/siyuan-*linux*.AppImage /output/ 2>/dev/null; \
+    ls -la /output/
+
+# ============================================================
+# Output stage
+# ============================================================
+FROM scratch
+COPY --from=package /output/ /output/

@@ -1,0 +1,161 @@
+# Multi-stage Dockerfile for building SiYuan Unlock Android APK
+# Outputs: APK in /output/
+#
+# Usage:
+#   docker build -f docker/Dockerfile.android -t siyuan-android-builder .
+#   docker run --rm -v $(pwd)/build:/output siyuan-android-builder
+#
+# For signed builds, pass keystore as build args:
+#   docker build -f docker/Dockerfile.android \
+#     --build-arg KEYSTORE_B64="$(base64 -w0 keystore/siyuan.jks)" \
+#     --build-arg KEYSTORE_PASSWORD=your_password \
+#     -t siyuan-android-builder .
+
+ARG SIYUAN_VERSION=v3.6.0
+ARG GO_VERSION=1.25.4
+ARG NODE_VERSION=21
+
+# ============================================================
+# Stage 1: Build UI
+# ============================================================
+FROM node:${NODE_VERSION} AS ui-build
+
+ARG SIYUAN_VERSION
+
+WORKDIR /workspace
+COPY patches/ patches/
+
+RUN git clone --branch ${SIYUAN_VERSION} --depth=1 https://github.com/siyuan-note/siyuan.git
+
+WORKDIR /workspace/siyuan
+RUN git apply /workspace/patches/siyuan/disable-update.patch && \
+    git apply /workspace/patches/siyuan/default-config.patch && \
+    git apply /workspace/patches/siyuan/mock-vip-user.patch
+
+WORKDIR /workspace/siyuan/app
+RUN corepack enable && \
+    corepack install --global $(node -e 'console.log(require("./package.json").packageManager)') && \
+    pnpm install --no-frozen-lockfile && \
+    pnpm run build
+
+# Prepare assets zip for Android
+RUN apt-get update && apt-get install -y --no-install-recommends zip && rm -rf /var/lib/apt/lists/*
+RUN cd /workspace/siyuan/app && \
+    zip -r /workspace/app.zip appearance guide stage changelogs
+
+# ============================================================
+# Stage 2: Build Android Kernel AAR (gomobile)
+# ============================================================
+FROM eclipse-temurin:17-jdk AS kernel-build
+
+ARG GO_VERSION
+
+# Install Go
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    unzip wget git && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN wget -q https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz && \
+    tar -C /usr/local -xzf go${GO_VERSION}.linux-amd64.tar.gz && \
+    rm go${GO_VERSION}.linux-amd64.tar.gz
+ENV PATH=${PATH}:/usr/local/go/bin:/root/go/bin
+ENV GOPATH=/root/go
+
+# Install Android NDK (required by gomobile)
+ENV ANDROID_HOME=/opt/android-sdk
+ENV ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/27.2.12479018
+ENV PATH=${PATH}:${ANDROID_HOME}/cmdline-tools/latest/bin
+
+RUN mkdir -p ${ANDROID_HOME}/cmdline-tools && \
+    wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O /tmp/cmdline-tools.zip && \
+    unzip -q /tmp/cmdline-tools.zip -d ${ANDROID_HOME}/cmdline-tools && \
+    mv ${ANDROID_HOME}/cmdline-tools/cmdline-tools ${ANDROID_HOME}/cmdline-tools/latest && \
+    rm /tmp/cmdline-tools.zip
+
+RUN yes | sdkmanager --licenses > /dev/null 2>&1 && \
+    sdkmanager "ndk;27.2.12479018" "platforms;android-36" "build-tools;36.0.0"
+
+# Install gomobile
+RUN go install golang.org/x/mobile/cmd/gomobile@latest && \
+    gomobile init
+
+WORKDIR /workspace/siyuan/kernel
+COPY --from=ui-build /workspace/siyuan/kernel/ .
+
+ENV GO111MODULE=on \
+    CGO_ENABLED=1
+
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg \
+    cd mobile && \
+    gomobile bind --tags fts5 -androidapi 21 -target='android/arm64' \
+    -ldflags '-s -w' -v -o /workspace/kernel.aar ./
+
+# ============================================================
+# Stage 3: Build Android APK with Gradle
+# ============================================================
+FROM eclipse-temurin:17-jdk AS apk-build
+
+ARG SIYUAN_VERSION
+ARG KEYSTORE_B64=""
+ARG KEYSTORE_PASSWORD=""
+
+ENV ANDROID_HOME=/opt/android-sdk
+ENV PATH=${PATH}:${ANDROID_HOME}/cmdline-tools/latest/bin
+
+# Install Android SDK
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    unzip wget git && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p ${ANDROID_HOME}/cmdline-tools && \
+    wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O /tmp/cmdline-tools.zip && \
+    unzip -q /tmp/cmdline-tools.zip -d ${ANDROID_HOME}/cmdline-tools && \
+    mv ${ANDROID_HOME}/cmdline-tools/cmdline-tools ${ANDROID_HOME}/cmdline-tools/latest && \
+    rm /tmp/cmdline-tools.zip
+
+RUN yes | sdkmanager --licenses > /dev/null 2>&1 && \
+    sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+# Clone siyuan-android and apply patch
+WORKDIR /workspace
+COPY patches/siyuan-android/ patches/siyuan-android/
+
+RUN git clone --branch ${SIYUAN_VERSION} --depth=1 https://github.com/siyuan-note/siyuan-android.git
+
+WORKDIR /workspace/siyuan-android
+RUN git apply --ignore-whitespace /workspace/patches/siyuan-android/debug-build.patch
+
+# Place kernel AAR and app assets
+RUN mkdir -p app/libs app/src/main/assets
+COPY --from=kernel-build /workspace/kernel.aar app/libs/kernel.aar
+COPY --from=ui-build /workspace/app.zip app/src/main/assets/app.zip
+
+# Setup keystore (if provided)
+RUN mkdir -p keystore && \
+    if [ -n "$KEYSTORE_B64" ]; then \
+        echo "$KEYSTORE_B64" | base64 -d > keystore/siyuan.jks; \
+    else \
+        keytool -genkeypair -v -keystore keystore/siyuan.jks \
+            -alias siyuan -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=SiYuan, OU=Dev, O=Dev, L=Unknown, ST=Unknown, C=US"; \
+        KEYSTORE_PASSWORD=android; \
+    fi
+
+# Build APK
+ENV KEYSTORE_PASSWORD=${KEYSTORE_PASSWORD:-android}
+RUN chmod +x gradlew && \
+    (./gradlew :app:assembleGoogleplayRelease || \
+     ./gradlew :app:assembleRelease)
+
+# Collect outputs
+RUN mkdir -p /output && \
+    find app/build/outputs/apk -name '*.apk' -exec cp {} /output/ \; && \
+    ls -la /output/
+
+# ============================================================
+# Output stage
+# ============================================================
+FROM scratch
+COPY --from=apk-build /output/ /output/

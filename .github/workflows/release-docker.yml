@@ -10,7 +10,8 @@ on:
 jobs:
   build:
     name: build
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-set
+    container: catthehacker/ubuntu:act-22.04
 
     permissions:
       packages: write
@@ -33,38 +34,36 @@ jobs:
           docker-images: true
           swap-storage: true
 
-      - uses: actions/checkout@v4
-        with:
-          path: siyuan-note
+      - uses: actions/checkout@v6
 
       - name: clone origin and apply patches
         run: |
           mkdir -p ${{ github.workspace }}/go
-          cd ${{ github.workspace }}/siyuan-note/
+          cd ${GITHUB_WORKSPACE}/
 
           git clone --branch ${{ github.event.inputs.version }} --depth=1 https://github.com/siyuan-note/siyuan.git
           cd siyuan
 
-          git apply ${{ github.workspace }}/siyuan-note/patches/siyuan/disable-update.patch
-          git apply ${{ github.workspace }}/siyuan-note/patches/siyuan/default-config.patch
-          git apply ${{ github.workspace }}/siyuan-note/patches/siyuan/mock-vip-user.patch
+          git apply ${GITHUB_WORKSPACE}/patches/siyuan/disable-update.patch
+          git apply ${GITHUB_WORKSPACE}/patches/siyuan/default-config.patch
+          git apply ${GITHUB_WORKSPACE}/patches/siyuan/mock-vip-user.patch
 
           git status
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Setup Docker buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKER_HUB_USER }}
           password: ${{ secrets.DOCKER_HUB_PWD }}
 
       - name: Build the Docker image
-        working-directory: ${{ github.workspace }}/siyuan-note/siyuan
+        working-directory: ${GITHUB_WORKSPACE}/siyuan
         run: |
           docker buildx build --push --platform linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v8 -t ${{ env.DOCKER_HUB_USER }}/siyuan-unlock:latest -t ${{ env.DOCKER_HUB_USER }}/siyuan-unlock:${{ github.event.inputs.version }} .
         env:

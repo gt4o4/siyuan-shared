@@ -8,8 +8,9 @@ on:
 jobs:
   create_release:
     name: get version and create release
-    runs-on: ubuntu-latest
-    if: github.repository == 'appdev/siyuan-unlock'
+    runs-on: arc-runner-set
+    container: catthehacker/ubuntu:act-22.04
+    if: github.repository == 'gt4o4/siyuan-unlock'
     steps:
       - name: version check
         id: version

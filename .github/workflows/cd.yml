@@ -16,7 +16,8 @@ env:
 jobs:
   create_release:
     name: Create Release
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-set
+    container: catthehacker/ubuntu:act-22.04
     outputs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}
       release_version: ${{ steps.release_info.outputs.release_version }}
@@ -24,10 +25,10 @@ jobs:
       packageManager: ${{ steps.packageManager.outputs.value }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
       - run: pip install PyGithub
@@ -86,7 +87,8 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
   build:
-    runs-on: ${{ matrix.config.os }}
+    runs-on: ${{ contains(matrix.config.goos, 'linux') && 'arc-runner-set' || matrix.config.os }}
+    container: ${{ contains(matrix.config.goos, 'linux') && 'ghcr.io/goreleaser/goreleaser-cross:latest' || '' }}
     name: ${{ matrix.config.name }}
     needs: create_release
     strategy:
@@ -141,7 +143,7 @@ jobs:
             suffix: "win.exe"
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
       with:
         path: ${{ github.workspace }}/go/src/github.com/${{ env.repo_owner }}/${{ env.repo_name }}
 
@@ -152,7 +154,7 @@ jobs:
         install: p7zip mingw-w64-x86_64-lua
 
     - name: Set up Go
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@v6
       with:
         go-version-file: ${{ github.workspace }}/go/src/github.com/${{ env.repo_owner }}/${{ env.repo_name }}/kernel/go.mod
     - run: go version
@@ -169,7 +171,7 @@ jobs:
         GOARCH: ${{ matrix.config.goarch }}
 
     - name: Set up Node
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v6
       with:
         node-version: 20
 

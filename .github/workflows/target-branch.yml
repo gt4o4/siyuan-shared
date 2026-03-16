@@ -6,7 +6,8 @@ on:
 
 jobs:
   check-branch:
-    runs-on: ubuntu-latest
+    runs-on: arc-runner-set
+    container: catthehacker/ubuntu:act-22.04
     permissions:
       pull-requests: write
     steps:
