@@ -40,7 +40,7 @@ jobs:
           # had agreement with the author to use the PKGBUILD
           # for change request, PLEASE MAKE A PR ON GITHUB REPO, keep commenting here would be ignored
 
-          pkgname=siyuan-unlock-bin
+          pkgname=siyuan-shared-bin
           pkgver=${{ steps.get_version_without_v.outputs.TAG_VERSION_WITHOUT_V }}
           pkgrel=1
           pkgdesc="auto upload to AUR when SiYuan stable release"
@@ -50,7 +50,7 @@ jobs:
           options=("!strip" "!debug")
           depends=("fuse2")
           optdepends=('pandoc: docx export')
-          source=("https://github.com/appdev/siyuan-unlock/releases/download/v\${pkgver}/siyuan-\${pkgver}-linux.AppImage")
+          source=("https://github.com/appdev/siyuan-shared/releases/download/v\${pkgver}/siyuan-\${pkgver}-linux.AppImage")
           sha256sums=('SKIP')
 
           _pkgname=siyuan-\${pkgver}-linux.AppImage

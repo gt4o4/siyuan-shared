@@ -3,10 +3,10 @@
 <br>
 <em>Refactor your thinking</em>
 <br><br>
-<a title="Releases" target="_blank" href="https://github.com/appdev/siyuan-unlock/releases"><img src="https://img.shields.io/github/release/appdev/siyuan-unlock.svg?style=flat-square&color=9CF"></a>
-<a title="Downloads" target="_blank" href="https://github.com/appdev/siyuan-unlock/releases"><img src="https://img.shields.io/github/downloads/appdev/siyuan-unlock/total.svg?style=flat-square&color=blueviolet"></a>
-<a title="Docker Pulls" target="_blank" href="https://hub.docker.com/r/apkdv/siyuan-unlock"><img src="https://img.shields.io/docker/pulls/apkdv/siyuan-unlock.svg?style=flat-square&color=green"></a>
-<a title="Docker Image Size" target="_blank" href="https://hub.docker.com/r/apkdv/siyuan-unlock"><img src="https://img.shields.io/docker/image-size/apkdv/siyuan-unlock.svg?style=flat-square&color=ff96b4"></a>
+<a title="Releases" target="_blank" href="https://github.com/gt4o4/siyuan-shared/releases"><img src="https://img.shields.io/github/release/gt4o4/siyuan-shared.svg?style=flat-square&color=9CF"></a>
+<a title="Downloads" target="_blank" href="https://github.com/gt4o4/siyuan-shared/releases"><img src="https://img.shields.io/github/downloads/gt4o4/siyuan-shared/total.svg?style=flat-square&color=blueviolet"></a>
+<a title="Docker Pulls" target="_blank" href="https://hub.docker.com/r/apkdv/siyuan-shared"><img src="https://img.shields.io/docker/pulls/apkdv/siyuan-shared.svg?style=flat-square&color=green"></a>
+<a title="Docker Image Size" target="_blank" href="https://hub.docker.com/r/apkdv/siyuan-shared"><img src="https://img.shields.io/docker/image-size/apkdv/siyuan-shared.svg?style=flat-square&color=ff96b4"></a>
 <br>
 <a title="AGPLv3" target="_blank" href="https://www.gnu.org/licenses/agpl-3.0.txt"><img src="http://img.shields.io/badge/license-AGPLv3-orange.svg?style=flat-square"></a>
 <a title="Discord" target="_blank" href="https://discord.gg/dmMbCqVX7G"><img alt="Chat on Discord" src="https://img.shields.io/discord/808152298789666826?label=Discord&logo=Discord&style=social"></a>
@@ -30,9 +30,9 @@
 
 ## 💡 Introduction
 
-This is a community fork of [SiYuan Note](https://github.com/siyuan-note/siyuan), a privacy-first personal knowledge management system that supports fine-grained block-level reference and Markdown WYSIWYG.
+A community fork of [SiYuan Note](https://github.com/siyuan-note/siyuan) — a privacy-first personal knowledge management system with fine-grained block-level reference and Markdown WYSIWYG.
 
-This fork unlocks premium features and disables automatic update checks. It tracks the upstream SiYuan releases and applies a set of patches during the build process.
+This fork runs the Go kernel as an in-process N-API addon (c-shared library linked into Electron via Node.js native module), eliminating the separate kernel process. It also provides S3/WebDAV sync, self-hosted Docker deployment with all features enabled, and tracks upstream SiYuan releases.
 
 ![feature0.png](https://b3logfile.com/file/2025/11/feature0-GfbhEqf.png)
 
@@ -92,7 +92,7 @@ Most features are free, even for commercial use.
 
 ## 🚀 Download
 
-[GitHub Releases](https://github.com/appdev/siyuan-unlock/releases)
+[GitHub Releases](https://github.com/gt4o4/siyuan-shared/releases)
 
 Available builds: Linux (AppImage, tar.gz), macOS (Intel & ARM64 DMG), Windows (exe), Android (APK), iOS (IPA).
 
@@ -105,8 +105,8 @@ Available builds: Linux (AppImage, tar.gz), macOS (Intel & ARM64 DMG), Windows (
 
 The easiest way to serve SiYuan on a server is to deploy it through Docker.
 
-* Image name `apkdv/siyuan-unlock`
-* [Image URL](https://hub.docker.com/r/apkdv/siyuan-unlock)
+* Image name `apkdv/siyuan-shared`
+* [Image URL](https://hub.docker.com/r/apkdv/siyuan-shared)
 
 #### File structure
 
@@ -121,7 +121,7 @@ The overall program is located under `/opt/siyuan/`, which is basically the stru
 
 The entry point is set when building the Docker image: `ENTRYPOINT ["/opt/siyuan/entrypoint.sh"]`. This script allows changing the `PUID` and `PGID` of the user that will run inside the container. This is especially relevant to solve permission issues when mounting directories from the host.
 
-Use the following parameters when running the container with `docker run apkdv/siyuan-unlock`:
+Use the following parameters when running the container with `docker run apkdv/siyuan-shared`:
 
 * `--workspace`: Specifies the workspace folder path, mounted to the container via `-v` on the host
 * `--accessAuthCode`: Specifies the access authorization code
@@ -133,7 +133,7 @@ docker run -d \
   -v workspace_dir_host:workspace_dir_container \
   -p 6806:6806 \
   -e PUID=1001 -e PGID=1002 \
-  apkdv/siyuan-unlock \
+  apkdv/siyuan-shared \
   --workspace=workspace_dir_container \
   --accessAuthCode=xxx
 ```
@@ -154,7 +154,7 @@ docker run -d \
   -v /siyuan/workspace:/siyuan/workspace \
   -p 6806:6806 \
   -e PUID=1001 -e PGID=1002 \
-  apkdv/siyuan-unlock \
+  apkdv/siyuan-shared \
   --workspace=/siyuan/workspace/ \
   --accessAuthCode=xxx
 ```
@@ -165,7 +165,7 @@ docker run -d \
 version: "3.9"
 services:
   main:
-    image: apkdv/siyuan-unlock
+    image: apkdv/siyuan-shared
     command: ['--workspace=/siyuan/workspace/', '--accessAuthCode=${AuthCode}']
     ports:
       - 6806:6806

@@ -10,6 +10,7 @@ directories:
   output: "build"
 files:
   - "electron"
+  - "native/build/Release"
 afterPack: "./scripts/afterPack.js"
 extraFiles:
   - from: "../LICENSE"
@@ -41,6 +42,15 @@ nsis:
   warningsAsErrors: false
   installerSidebar: "nsis/installerSidebar.bmp"
   uninstallerSidebar: "nsis/uninstallerSidebar.bmp"
+
+mac:
+  icon: "src/assets/icon.icns"
+  target:
+    - target: "dmg"
+      arch: "arm64"
+
+dmg:
+  sign: false
 
 extraResources:
   - from: "changelogs"

@@ -506,6 +506,6 @@ ${renewHTML}<div class="fn__hr--b"></div>`;
                 html += `<div class="toolbar__item ariaLabel" aria-label="${item.name}：${item.desc}">${item.icon}</div>`;
             });
         }
-        document.getElementById("toolbarVIP").innerHTML = "";
+        document.getElementById("toolbarVIP").innerHTML = html;
     }
 };

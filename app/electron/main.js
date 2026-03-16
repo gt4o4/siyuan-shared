@@ -78,6 +78,7 @@ app.setAsDefaultProtocolClient("siyuan");
 app.commandLine.appendSwitch("disable-web-security");
 app.commandLine.appendSwitch("auto-detect", "false");
 app.commandLine.appendSwitch("no-proxy-server");
+app.commandLine.appendSwitch("host-resolver-rules", "MAP siyuan.local 127.0.0.1");
 app.commandLine.appendSwitch("enable-features", "PlatformHEVCDecoderSupport");
 app.commandLine.appendSwitch("xdg-portal-required-version", "4");
 
@@ -292,7 +293,7 @@ const exitApp = (port, errorWindowId) => {
     }
 };
 
-const localServer = "http://127.0.0.1";
+const localServer = "http://siyuan.local";
 
 const getServer = (port = kernelPort) => {
     return localServer + ":" + port;
@@ -583,21 +584,14 @@ const initKernel = (workspace, port, lang) => {
             bootWindow.show();
         }
 
-        const kernelName = "win32" === process.platform ? "SiYuan-Kernel.exe" : "SiYuan-Kernel";
-        const kernelPath = path.join(appDir, "kernel", kernelName);
-        if (!fs.existsSync(kernelPath)) {
-            showErrorWindow("内核程序丢失", "Kernel program is missing", `<div>内核程序丢失，请重新安装思源，并将思源内核程序加入杀毒软件信任列表。</div><div>The kernel program is not found, please reinstall SiYuan and add SiYuan Kernel prgram into the trust list of your antivirus software.</div><div><i>${kernelPath}</i></div>`);
-            bootWindow.destroy();
-            resolve(false);
-            return;
-        }
+        // Start kernel in-process via N-API c-shared library
+        const kernelLib = require("../native/build/Release/kernel.node");
 
         if (!isDevEnv || workspaces.length > 0) {
             if (port && "" !== port) {
                 kernelPort = port;
             } else {
                 const getAvailablePort = () => {
-                    // https://gist.github.com/mikeal/1840641
                     return new Promise((portResolve, portReject) => {
                         const server = gNet.createServer();
                         server.on("error", error => {
@@ -620,67 +614,22 @@ const initKernel = (workspace, port, lang) => {
             resolve(false);
             return;
         }
-        const cmds = ["--port", kernelPort, "--wd", appDir];
-        if (isDevEnv && workspaces.length === 0) {
-            cmds.push("--mode", "dev");
-        }
-        if (workspace && "" !== workspace) {
-            cmds.push("--workspace", workspace);
-        }
-        if (port && "" !== port) {
-            cmds.push("--port", port);
-        }
-        if (lang && "" !== lang) {
-            cmds.push("--lang", lang);
-        }
-        let cmd = `ui version [${appVer}], booting kernel [${kernelPath} ${cmds.join(" ")}]`;
-        writeLog(cmd);
-        if (!isDevEnv || workspaces.length > 0) {
-            const cp = require("child_process");
-            const kernelProcess = cp.spawn(kernelPath, cmds, {
-                detached: false, // 桌面端内核进程不再以游离模式拉起 https://github.com/siyuan-note/siyuan/issues/6336
-                stdio: "ignore",
-            },);
 
-            const currentKernelPort = kernelPort;
-            writeLog("booted kernel process [pid=" + kernelProcess.pid + ", port=" + kernelPort + "]");
-            kernelProcess.on("close", (code) => {
-                writeLog(`kernel [pid=${kernelProcess.pid}, port=${currentKernelPort}] exited with code [${code}]`);
-                if (0 !== code) {
-                    let errorWindowId;
-                    switch (code) {
-                        case 20:
-                            errorWindowId = showErrorWindow("数据库不可用", "The database is unavailable", "<div>无法访问数据库文件，请查看 工作空间/temp/siyuan.log 获取详细报错信息</div><div>Cannot access the database file. Please check workspace/temp/siyuan.log for detailed error information.</div>");
-                            break;
-                        case 21:
-                            errorWindowId = showErrorWindow("监听端口 " + currentKernelPort + " 失败", "Failed to listen to port " + currentKernelPort, "<div>监听 " + currentKernelPort + " 端口失败，请确保程序拥有网络权限并不受防火墙和杀毒软件阻止。</div><div>Failed to listen to port " + currentKernelPort + ", please make sure the program has network permissions and is not blocked by firewalls and antivirus software.</div>");
-                            break;
-                        case 24: // 工作空间已被锁定，尝试切换到第一个打开的工作空间
-                            if (workspaces && 0 < workspaces.length) {
-                                showWindow(workspaces[0].browserWindow);
-                            }
-
-                            errorWindowId = showErrorWindow("工作空间已被锁定", "The workspace is locked", "<div>该工作空间正在被使用，请尝试在任务管理器中结束 SiYuan-Kernel 进程或者重启操作系统后再启动思源。</div><div>The workspace is being used, please try to end the SiYuan-Kernel process in the task manager or restart the operating system and then start SiYuan.</div>");
-                            break;
-                        case 25:
-                            errorWindowId = showErrorWindow("初始化工作空间失败", "Failed to create workspace directory", "<div>工作空间文件夹权限不足，请查看 工作空间/temp/siyuan.log 获取详细报错信息</div><div>Insufficient permissions for the workspace folder. Please check workspace/temp/siyuan.log for detailed error information.</div>");
-                            break;
-                        case 26:
-                            errorWindowId = showErrorWindow("已成功避免潜在的数据损坏", "Successfully avoid potential data corruption", "<div>工作空间下的文件正在被第三方软件（比如同步网盘、杀毒软件等）打开占用，继续使用会导致数据损坏，思源内核已经安全退出。</div><div>请将工作空间移动到其他路径后再打开，停止同步盘同步工作空间，并将工作空间加入杀毒软件信任列表。如果以上步骤无法解决问题，请参考<a href=\"https://ld246.com/article/1684586140917\" target=\"_blank\">这里</a>或者<a href=\"https://ld246.com/article/1649901726096\" target=\"_blank\">发帖</a>寻求帮助。</div><div>The files in the workspace are being opened and occupied by third-party software (such as synchronized network disk, antivirus software, etc.), continuing to use it will cause data corruption, and the SiYuan Kernel is already safe shutdown.</div><div>Move the workspace to another path and open it again, stop the network disk to sync the workspace, and add the workspace to the antivirus software trust list. If the above steps do not resolve the issue, please look for help or report bugs <a href=\"https://liuyun.io/article/1686530886208\" target=\"_blank\">here</a>.</div>", "🚒");
-                            break;
-                        case 0:
-                            break;
-                        default:
-                            errorWindowId = showErrorWindow("内核因未知原因退出", "The kernel exited for unknown reasons", `<div>思源内核因未知原因退出 [code=${code}]，请尝试重启操作系统后再启动思源。如果该问题依然发生，请检查杀毒软件是否阻止思源内核启动。</div><div>SiYuan Kernel exited for unknown reasons [code=${code}], please try to reboot your operating system and then start SiYuan again. If occurs this problem still, please check your anti-virus software whether kill the SiYuan Kernel.</div>`);
-                            break;
-                    }
-
-                    exitApp(currentKernelPort, errorWindowId);
-                    bootWindow.destroy();
-                    resolve(false);
-                }
-            });
+        writeLog(`ui version [${appVer}], booting kernel in-process [port=${kernelPort}]`);
+        const rc = kernelLib.startKernel(
+            workspace || "",
+            String(kernelPort),
+            lang || "",
+            appDir
+        );
+        if (0 !== rc) {
+            writeLog(`kernel startKernel returned error code [${rc}]`);
+            showErrorWindow("内核启动失败", "Kernel failed to start", `<div>内核启动失败 [code=${rc}]</div><div>Kernel failed to start [code=${rc}]</div>`);
+            bootWindow.destroy();
+            resolve(false);
+            return;
         }
+        writeLog("kernel started in-process [port=" + kernelPort + "]");
 
         let apiData;
         let count = 0;

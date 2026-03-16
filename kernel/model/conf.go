@@ -357,7 +357,7 @@ func InitConf() {
 	if "" == Conf.System.Name {
 		Conf.System.Name = util.GetDeviceName()
 	}
-	if util.ContainerStd == util.Container {
+	if util.ContainerStd == util.Container || util.ContainerCShared == util.Container {
 		Conf.System.ID = util.GetDeviceID()
 		Conf.System.Name = util.GetDeviceName()
 	}
@@ -822,7 +822,7 @@ func Close(force, setCurrentWorkspace bool, execInstallPkg int) (exitCode int) {
 		}
 		util.HttpServing = false
 
-		if util.ContainerAndroid == util.Container || util.ContainerIOS == util.Container || util.ContainerHarmony == util.Container {
+		if util.ContainerCShared == util.Container || util.ContainerAndroid == util.Container || util.ContainerIOS == util.Container || util.ContainerHarmony == util.Container {
 			return
 		}
 

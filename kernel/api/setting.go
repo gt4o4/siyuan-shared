@@ -636,6 +636,11 @@ func getCloudUserOrigin(c *gin.Context) {
 }
 
 func getCloudUser(c *gin.Context) {
+	if util.ContainerDocker != util.Container {
+		getCloudUserOrigin(c)
+		return
+	}
+
 	ret := gulu.Ret.NewResult()
 	defer c.JSON(http.StatusOK, ret)
 

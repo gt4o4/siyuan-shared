@@ -10,6 +10,7 @@ directories:
   output: "build"
 files:
   - "electron"
+  - "native/build/Release"
 afterPack: "./scripts/afterPack.js"
 extraFiles:
   - from: "../LICENSE"

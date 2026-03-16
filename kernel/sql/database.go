@@ -1340,6 +1340,9 @@ func beginTx() (tx *sql.Tx, err error) {
 	if tx, err = db.Begin(); err != nil {
 		logging.LogErrorf("begin tx failed: %s\n  %s", err, logging.ShortStack())
 		if strings.Contains(err.Error(), "database is locked") {
+			if util.ContainerCShared == util.Container {
+				return
+			}
 			os.Exit(logging.ExitCodeUnavailableDatabase)
 		}
 	}
@@ -1364,6 +1367,9 @@ func beginHistoryTx() (tx *sql.Tx, err error) {
 	if tx, err = historyDB.Begin(); err != nil {
 		logging.LogErrorf("begin history tx failed: %s\n  %s", err, logging.ShortStack())
 		if strings.Contains(err.Error(), "database is locked") {
+			if util.ContainerCShared == util.Container {
+				return
+			}
 			os.Exit(logging.ExitCodeUnavailableDatabase)
 		}
 	}
@@ -1388,6 +1394,9 @@ func beginAssetContentTx() (tx *sql.Tx, err error) {
 	if tx, err = assetContentDB.Begin(); err != nil {
 		logging.LogErrorf("begin asset content tx failed: %s\n  %s", err, logging.ShortStack())
 		if strings.Contains(err.Error(), "database is locked") {
+			if util.ContainerCShared == util.Container {
+				return
+			}
 			os.Exit(logging.ExitCodeUnavailableDatabase)
 		}
 	}

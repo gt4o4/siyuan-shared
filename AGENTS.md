@@ -4,14 +4,14 @@ This file provides guidance to AI coding agents when working with code in this r
 
 ## Project Overview
 
-**siyuan-unlock** is a community fork of [SiYuan Note](https://github.com/siyuan-note/siyuan) that removes licensing restrictions. The repo contains the full SiYuan source merged at root level, an Android subtree under `android/`, and a set of patches applied during CI builds to customize upstream code.
+**siyuan-shared** is a community fork of [SiYuan Note](https://github.com/siyuan-note/siyuan) with an in-process kernel (Go c-shared library via N-API), S3/WebDAV sync, and self-hosted Docker deployment. The repo contains the full SiYuan source merged at root level, an Android subtree under `android/`, and a set of patches applied during CI builds.
 
 ## Repository Remotes & Merge Strategy
 
 | Remote | URL | Purpose |
 |--------|-----|---------|
-| `origin` | github.com/gt4o4/siyuan-unlock | Fork |
-| `upstream` | github.com/appdev/siyuan-unlock | Upstream unlock project |
+| `origin` | github.com/gt4o4/siyuan-shared | Fork |
+| `upstream` | github.com/appdev/siyuan-shared | Upstream unlock project |
 | `siyuan` | github.com/siyuan-note/siyuan | Official SiYuan |
 | `siyuan-android` | github.com/siyuan-note/siyuan-android | Official Android app |
 
@@ -76,7 +76,7 @@ cd app && pnpm run lint
 
 ### Docker
 ```bash
-docker build -t siyuan-unlock .
+docker build -t siyuan-shared .
 ```
 
 ## Patch System

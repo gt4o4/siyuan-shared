@@ -1,4 +1,4 @@
-# Multi-stage Dockerfile for building SiYuan Unlock Android APK
+# Multi-stage Dockerfile for building SiYuan Shared Android APK
 # Outputs: APK in /output/
 #
 # Usage:

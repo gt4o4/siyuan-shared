@@ -10,7 +10,7 @@ jobs:
     name: get version and create release
     runs-on: arc-runner-set
     container: catthehacker/ubuntu:act-22.04
-    if: github.repository == 'gt4o4/siyuan-unlock'
+    if: github.repository == 'gt4o4/siyuan-shared'
     steps:
       - name: version check
         id: version

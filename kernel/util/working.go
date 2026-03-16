@@ -46,7 +46,7 @@ import (
 var Mode = "prod"
 
 const (
-	Ver       = "103.6.0"
+	Ver       = "3.6.0"
 	IsInsider = false
 )
 
@@ -393,11 +393,12 @@ var (
 )
 
 const (
-	ContainerStd     = "std"     // 桌面端
-	ContainerDocker  = "docker"  // Docker 容器端
-	ContainerAndroid = "android" // Android 端
-	ContainerIOS     = "ios"     // iOS 端
-	ContainerHarmony = "harmony" // 鸿蒙端
+	ContainerStd      = "std"      // 桌面端
+	ContainerDocker   = "docker"   // Docker 容器端
+	ContainerAndroid  = "android"  // Android 端
+	ContainerIOS      = "ios"      // iOS 端
+	ContainerHarmony  = "harmony"  // 鸿蒙端
+	ContainerCShared  = "cshared"  // 桌面端 c-shared 库模式 (内核作为 Electron 进程内库运行)
 
 	LocalHost = "127.0.0.1" // 伺服地址
 	FixedPort = "6806"      // 固定端口

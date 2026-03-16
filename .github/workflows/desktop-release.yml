@@ -1,4 +1,4 @@
-name: CD For SiYuan Unlock
+name: CD For SiYuan Shared
 on:
   workflow_dispatch:
     inputs:
@@ -61,13 +61,13 @@ jobs:
           GOARCH: arm64
           CC: /usr/local/osxcross/bin/aarch64-apple-darwin25-cc
 
-      - name: Build kernel.dll windows/amd64 (c-shared + import lib)
+      - name: Build libkernel.dll windows/amd64 (c-shared + import lib)
         run: |
           OUTDIR=$(realpath ../app/native/windows-amd64)
           mkdir -p "$OUTDIR"
           go build -buildmode=c-shared -buildvcs=false --tags fts5 \
-            -o "$OUTDIR/kernel.dll" \
-            -ldflags "$BUILD_ARGS -extldflags '-Wl,--output-def,$OUTDIR/kernel.def,--out-implib,$OUTDIR/kernel.lib'" \
+            -o "$OUTDIR/libkernel.dll" \
+            -ldflags "$BUILD_ARGS -extldflags '-Wl,--output-def,$OUTDIR/libkernel.def,--out-implib,$OUTDIR/libkernel.lib'" \
             ./cshared/
         working-directory: kernel
         env:
@@ -223,10 +223,10 @@ jobs:
 
       - name: Build kernel.node for Windows (MSVC + import lib)
         run: |
-          cp windows-amd64/kernel.h libkernel.h
-          cp windows-amd64/kernel.lib kernel.lib
+          cp windows-amd64/libkernel.h libkernel.h
+          cp windows-amd64/libkernel.lib libkernel.lib
           npx node-gyp rebuild
-          cp windows-amd64/kernel.dll build/Release/
+          cp windows-amd64/libkernel.dll build/Release/
         shell: bash
         working-directory: app/native
 

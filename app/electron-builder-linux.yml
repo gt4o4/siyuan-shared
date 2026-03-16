@@ -10,6 +10,7 @@ directories:
   output: "build"
 files:
   - "electron"
+  - "native/build/Release"
 afterPack: "./scripts/afterPack.js"
 extraFiles:
   - from: "../LICENSE"
@@ -27,9 +28,6 @@ linux:
       Categories: "Utility;"
     }
   }
-  extraResources:
-    - from: "kernel-linux"
-      to: "kernel"
   target:
     - target: "tar.gz"
     - target: "AppImage"
