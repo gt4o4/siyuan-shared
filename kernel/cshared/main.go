@@ -36,6 +36,7 @@ import (
 	"github.com/siyuan-note/siyuan/kernel/job"
 	"github.com/siyuan-note/siyuan/kernel/model"
 	"github.com/siyuan-note/siyuan/kernel/server"
+	"github.com/siyuan-note/siyuan/kernel/server/tunnel"
 	"github.com/siyuan-note/siyuan/kernel/sql"
 	"github.com/siyuan-note/siyuan/kernel/util"
 )
@@ -138,6 +139,8 @@ func StopKernel() {
 		}
 	}()
 
+	tunnel.StopTailscale()
+	tunnel.StopCloudflared()
 	model.Close(false, true, 0)
 }
 

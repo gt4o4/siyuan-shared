@@ -46,6 +46,7 @@ import (
 	"github.com/siyuan-note/siyuan/kernel/cmd"
 	"github.com/siyuan-note/siyuan/kernel/model"
 	"github.com/siyuan-note/siyuan/kernel/server/proxy"
+	"github.com/siyuan-note/siyuan/kernel/server/tunnel"
 	"github.com/siyuan-note/siyuan/kernel/util"
 	"github.com/soheilhy/cmux"
 	"golang.org/x/net/webdav"
@@ -238,6 +239,8 @@ func Serve(fastMode bool, cookieKey string) {
 		time.Sleep(1 * time.Second)
 		go proxy.InitFixedPortService(host, useTLS, certPath, keyPath)
 		go proxy.InitPublishService()
+		go tunnel.InitTailscale()
+		go tunnel.InitCloudflared()
 		// 反代服务器启动失败不影响核心服务器启动
 	}()
 

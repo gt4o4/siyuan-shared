@@ -24,6 +24,7 @@ jobs:
         with:
           fetch-depth: 1
           set-safe-directory: true
+          submodules: recursive
 
       - name: Build libkernel linux/amd64
         run: go build -buildmode=c-archive -buildvcs=false --tags fts5 -o "../app/native/linux-amd64/libkernel.a" -ldflags "$BUILD_ARGS" ./cshared/

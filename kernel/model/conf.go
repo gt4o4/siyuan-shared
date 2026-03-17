@@ -77,6 +77,7 @@ type AppConf struct {
 	Api            *conf.API        `json:"api"`            // API
 	Repo           *conf.Repo       `json:"repo"`           // 数据仓库
 	Publish        *conf.Publish    `json:"publish"`        // 发布服务
+	Tunnel         *conf.Tunnel     `json:"tunnel"`         // 隧道配置（Tailscale、Cloudflare）
 	OpenHelp       bool             `json:"openHelp"`       // 启动后是否需要打开用户指南
 	ShowChangelog  bool             `json:"showChangelog"`  // 是否显示版本更新日志
 	CloudRegion    int              `json:"cloudRegion"`    // 云端区域，0：中国大陆，1：北美
@@ -452,6 +453,16 @@ func InitConf() {
 	}
 	if Conf.OpenHelp && Conf.Publish.Enable {
 		Conf.OpenHelp = false
+	}
+
+	if nil == Conf.Tunnel {
+		Conf.Tunnel = conf.NewTunnel()
+	}
+	if nil == Conf.Tunnel.Tailscale {
+		Conf.Tunnel.Tailscale = &conf.TailscaleConf{Hostname: "siyuan", Port: 443, UseTLS: true}
+	}
+	if nil == Conf.Tunnel.Cloudflared {
+		Conf.Tunnel.Cloudflared = &conf.CloudflaredConf{TunnelType: "quick"}
 	}
 
 	if nil == Conf.Repo {
@@ -1057,6 +1068,7 @@ func HideConfSecret(c *AppConf) {
 	c.Flashcard = &conf.Flashcard{}
 	c.ServerAddrs = []string{}
 	c.Publish = &conf.Publish{}
+	c.Tunnel = &conf.Tunnel{}
 	c.Repo = &conf.Repo{}
 	c.Sync = &conf.Sync{}
 	c.System.AppDir = ""
