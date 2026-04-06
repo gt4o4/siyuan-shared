@@ -68,11 +68,6 @@ if (!app.requestSingleInstanceLock()) {
     return;
 }
 
-if (process.platform === "linux") {
-    app.commandLine.appendSwitch("enable-wayland-ime");
-    app.commandLine.appendSwitch("wayland-text-input-version", "3");
-}
-
 app.setAsDefaultProtocolClient("siyuan");
 
 app.commandLine.appendSwitch("disable-web-security");
@@ -792,6 +787,13 @@ app.whenReady().then(() => {
         if (data.cmd === "getContentsId") {
             return event.sender.id;
         }
+        if (data.cmd === "isAlwaysOnTop") {
+            const wnd = getWindowByContentId(event.sender.id);
+            if (!wnd) {
+                return false;
+            }
+            return wnd.isAlwaysOnTop();
+        }
         if (data.cmd === "availableSpellCheckerLanguages") {
             return event.sender.session.availableSpellCheckerLanguages;
         }
@@ -1107,6 +1109,7 @@ app.whenReady().then(() => {
         } else {
             win.center();
         }
+        win.setAlwaysOnTop(data.alwaysOnTop);
         win.webContents.userAgent = "SiYuan/" + appVer + " https://b3log.org/siyuan Electron " + win.webContents.userAgent;
         win.webContents.session.setSpellCheckerLanguages(["en-US"]);
         win.loadURL(data.url);
