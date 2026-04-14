@@ -11,29 +11,47 @@ This file provides guidance to AI coding agents when working with code in this r
 | Remote | URL | Purpose |
 |--------|-----|---------|
 | `origin` | github.com/gt4o4/siyuan-shared | Fork |
-| `upstream` | github.com/appdev/siyuan-shared | Upstream unlock project |
+| `upstream` | github.com/appdev/siyuan-unlock | Upstream unlock project |
 | `siyuan` | github.com/siyuan-note/siyuan | Official SiYuan |
 | `siyuan-android` | github.com/siyuan-note/siyuan-android | Official Android app |
+| `siyuan-ios` | github.com/siyuan-note/siyuan-ios | Official iOS app |
 
 - **siyuan** is merged as a full-repo merge (root level: `kernel/`, `app/`, `scripts/`)
-- **siyuan-android** is merged as a git subtree into `android/` using `git merge -s subtree`
+- **siyuan-android** is merged as a proper git subtree into `android/` using `git subtree pull --prefix=android siyuan-android main` (no `--squash`)
+- **upstream** (appdev) is merged with `git merge upstream/master`, keeping our custom CI workflow
 - **Tag collision warning**: upstream (appdev) and siyuan share tag names (e.g. `v3.6.0`) pointing to different commits. Delete local tags before fetching siyuan tags.
+- **Release tags**: Use `v<upstream>-gbc<N>` format (e.g. `v3.6.4-gbc1`) for fork releases
 
 ## Architecture
 
 ```
-kernel/          Go backend (HTTP server, API, data model, search, sync)
-app/             TypeScript/Electron frontend (editor, UI, themes, i18n)
-android/         Android app (subtree from siyuan-android)
-patches/         Unified diff patches applied to upstream during CI
-  siyuan/          3 patches: disable-update, default-config, mock-vip-user
-  siyuan-android/  1 patch: debug-build (custom signing config)
-  siyuan-ios/      1 patch: build-failed
-scripts/         Build scripts (linux-build.sh, darwin-build.sh, win-build.bat)
-.github/workflows/  CI pipelines (desktop, android, iOS, docker, cron)
+kernel/              Go backend (HTTP server, API, data model, search, sync)
+  server/tunnel/       Cloudflared + Tailscale tunnel support (in-process)
+  api/tunnel.go        Tunnel management API endpoints
+  conf/tunnel.go       Tunnel configuration structs
+app/                 TypeScript/Electron frontend (editor, UI, themes, i18n)
+android/             Android app (git subtree from siyuan-android)
+third_party/
+  cloudflared/         Submodule: gt4o4/cloudflared (patched for in-process embedding)
+patches/             Unified diff patches applied to upstream during CI
+  siyuan/              3 patches: disable-update, default-config, mock-vip-user
+  siyuan-android/      1 patch: debug-build (custom signing config)
+  siyuan-ios/          1 patch: build-failed
+scripts/             Build scripts (linux-build.sh, darwin-build.sh, win-build.bat)
+.github/workflows/   CI pipelines (desktop, android, iOS, docker, cron)
 ```
 
-**Key relationship**: CI workflows clone upstream repos fresh, apply patches, then build. The merged source in this repo serves as reference; the patches define all fork customizations.
+### Cloudflared / Tailscale Tunnel Embedding
+
+The fork embeds cloudflared and tailscale tsnet in-process (no external binaries). Key `replace` directives in `kernel/go.mod`:
+
+| Replace | Target | Reason |
+|---------|--------|--------|
+| `cloudflare/cloudflared` | `../third_party/cloudflared` | Patched fork with `cmd/cloudflared` API for in-process use |
+| `quic-go/quic-go` | `chungthuang/quic-go v0.45.1` | Cloudflared needs old `logging/` package + interface API |
+| `imroc/req/v3` | `v3.53.0` | Last version compatible with quic-go v0.45 (v3.54+ needs struct API) |
+| `quic-go/qpack` | `v0.5.1` | req v3.53 uses `NewDecoder(callback)` + `DecodeFull`, removed in v0.6.0 |
+| `urfave/cli/v2` | `ipostelnik/cli/v2` | Cloudflared needs `ApplyInputSource` not in upstream urfave/cli |
 
 ## Build Commands
 
@@ -112,10 +130,12 @@ After merging a new upstream version, always verify all patches still apply clea
 
 ## Upstream Sync Workflow
 
-1. `git fetch siyuan && git merge v<version>` — full-repo merge, resolve conflicts preserving fork modifications
-2. `git fetch siyuan-android && git merge -s subtree <sha>` — subtree merge into `android/`
-3. Verify all patches apply against the new version
-4. Update patches if needed (regenerate diffs against the new upstream tag)
+1. `git fetch siyuan && git merge siyuan/master` — full-repo merge, resolve go.mod conflicts keeping our deps + upstream's newer versions
+2. `git fetch upstream && git merge upstream/master` — merge appdev/siyuan-unlock, keep our CI workflow
+3. `git subtree pull --prefix=android siyuan-android main` — subtree merge into `android/` (no `--squash`)
+4. Verify all patches apply against the new version
+5. Update patches if needed (regenerate diffs against the new upstream tag)
+6. Tag as `v<upstream>-gbc<N>` and trigger build: `gh workflow run desktop-release.yml --ref <tag> -f version=<tag> -f packageManager=pnpm@latest`
 
 ## Version Convention
 
@@ -123,7 +143,15 @@ The fork uses version prefix `103.x.y` (e.g., `103.6.0`) in `kernel/util/working
 
 ## Key Technologies
 
-- **Go 1.25+** with SQLite FTS5 for the kernel
-- **pnpm 10.x** / Node 20 / Electron 40 / Webpack 5 / TypeScript for the frontend
+- **Go 1.26+** with SQLite FTS5 for the kernel
+- **pnpm** / Node / Electron / Webpack 5 / TypeScript for the frontend
 - **Gradle / Android SDK 36** for Android builds
-- **musl libc** cross-compilers for static Linux binaries
+- **goreleaser-cross** container for cross-compiling kernel (linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64)
+
+## Submodules
+
+| Submodule | Path | URL |
+|-----------|------|-----|
+| cloudflared | `third_party/cloudflared` | github.com/gt4o4/cloudflared |
+
+After cloning, run `git submodule update --init --recursive` to fetch submodules.
