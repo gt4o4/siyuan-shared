@@ -47,6 +47,7 @@ jobs:
           git apply ${GITHUB_WORKSPACE}/patches/siyuan/disable-update.patch
           git apply ${GITHUB_WORKSPACE}/patches/siyuan/default-config.patch
           git apply ${GITHUB_WORKSPACE}/patches/siyuan/mock-vip-user.patch
+          git apply ${GITHUB_WORKSPACE}/patches/siyuan/hide-account-entry.patch
 
           git status
 

@@ -685,6 +685,14 @@ app.whenReady().then(() => {
                 showHideWindow(tray, lang, mainWindow);
             },
         }, {
+            label: lang.officialWebsite, click: () => {
+                shell.openExternal("https://b3log.org/siyuan/");
+            },
+        }, {
+            label: lang.openSource, click: () => {
+                shell.openExternal("https://github.com/siyuan-note/siyuan");
+            },
+        }, {
             label: lang.resetWindow, type: "checkbox", click: v => {
                 resetWindowStateOnRestart = v.checked;
                 mainWindow.webContents.send("siyuan-save-close", true);

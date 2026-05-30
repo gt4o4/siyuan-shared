@@ -148,12 +148,6 @@ export const syncGuide = (app?: App) => {
     if (window.siyuan.config.readonly) {
         return;
     }
-
-    if (!window.siyuan.config.sync.enabled) {
-        showMessage("请在 设置 - 云端 中配置同步信息");
-        return;
-    }
-
     /// #if MOBILE
     if (0 === window.siyuan.config.sync.provider) {
         if (needSubscribe()) {
