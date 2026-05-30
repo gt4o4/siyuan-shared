@@ -20,6 +20,7 @@ package org.b3log.siyuan;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.KeyguardManager;
 import android.content.ClipData;
 import android.content.ContentValues;
 import android.content.Intent;
@@ -94,7 +95,7 @@ import mobile.Mobile;
  * 主程序.
  *
  * @author <a href="https://88250.b3log.org">Liang Ding</a>
- * @version 1.1.3.2, Feb 15, 2026
+ * @version 1.2.0.0, May 5, 2026
  * @since 1.0.0
  */
 public class MainActivity extends AppCompatActivity implements com.blankj.utilcode.util.Utils.OnAppStatusChangedListener {
@@ -378,6 +379,15 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
         keepLiveActive = true;
         keepLiveThread = new Thread(this::keepLive, "KeepLiveThread");
         keepLiveThread.start();
+
+        // Start the kernel background service to keep the Go server alive
+        // when the app is backgrounded or the screen is off
+        try {
+            final Intent kernelServiceIntent = new Intent(this, KernelService.class);
+            ContextCompat.startForegroundService(this, kernelServiceIntent);
+        } catch (final Exception e) {
+            Utils.logError("boot", "start kernel service failed", e);
+        }
     }
 
     private Handler bootHandler = new Handler(Looper.getMainLooper()) {
@@ -789,6 +799,17 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
     }
 
     @Override
+    protected void onStop() {
+        super.onStop();
+        if (webView != null) {
+            final KeyguardManager keyguardManager = (KeyguardManager) getSystemService(KEYGUARD_SERVICE);
+            if (keyguardManager != null && keyguardManager.isKeyguardLocked()) {
+                webView.evaluateJavascript("javascript:window.lockscreenByMode && window.lockscreenByMode()", null);
+            }
+        }
+    }
+
+    @Override
     public void onMultiWindowModeChanged(boolean isInMultiWindowMode) {
         super.onMultiWindowModeChanged(isInMultiWindowMode);
     }
@@ -856,6 +877,13 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
             }
         } catch (final Exception e) {
             Utils.logError("runtime", "stop keep live thread failed", e);
+        }
+
+        try {
+            final Intent kernelServiceIntent = new Intent(this, KernelService.class);
+            stopService(kernelServiceIntent);
+        } catch (final Exception e) {
+            Utils.logError("runtime", "stop kernel service failed", e);
         }
     }
 

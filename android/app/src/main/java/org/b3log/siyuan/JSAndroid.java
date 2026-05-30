@@ -24,13 +24,16 @@ import android.app.PendingIntent;
 import android.content.ClipData;
 import android.content.ClipDescription;
 import android.content.ClipboardManager;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Environment;
 import android.os.SystemClock;
+import android.provider.MediaStore;
 import android.provider.Settings;
 import android.util.Log;
 import android.webkit.JavascriptInterface;
@@ -58,7 +61,7 @@ import mobile.Mobile;
  *
  * @author <a href="https://88250.b3log.org">Liang Ding</a>
  * @author <a href="https://github.com/Soltus">绛亽</a>
- * @version 1.6.0.5, Mar 14, 2026
+ * @version 1.6.0.6, Apr 30, 2026
  * @since 1.0.0
  */
 public final class JSAndroid {
@@ -287,6 +290,84 @@ public final class JSAndroid {
     @JavascriptInterface
     public void exportByDefault(String url) {
         Utils.openByDefaultBrowser(url, activity);
+    }
+
+    @JavascriptInterface
+    public void saveExportFile(final String url) {
+        if (StringUtils.isEmpty(url)) {
+            return;
+        }
+
+        String fileName = url.substring(url.lastIndexOf('/') + 1);
+        final int queryIdx = fileName.indexOf('?');
+        if (-1 != queryIdx) {
+            fileName = fileName.substring(0, queryIdx);
+        }
+        try {
+            fileName = URLDecoder.decode(fileName, "UTF-8");
+        } catch (final Exception e) {
+            Utils.logError("JSAndroid", "decode fileName failed", e);
+        }
+        if (StringUtils.isEmpty(fileName)) {
+            fileName = "export";
+        }
+
+        final String finalFileName = fileName;
+        new Thread(() -> {
+            java.io.FileInputStream inputStream = null;
+            java.io.OutputStream outputStream = null;
+            try {
+                final String srcPath = Mobile.getExportFilePath(url);
+                if (null == srcPath || srcPath.isEmpty()) {
+                    Mobile.showMsg(Mobile.language(291), 5000);
+                    return;
+                }
+
+                final String mimeType = Mobile.getMimeTypeByExt(finalFileName);
+                inputStream = new java.io.FileInputStream(srcPath);
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    final ContentValues values = new ContentValues();
+                    values.put(MediaStore.Downloads.DISPLAY_NAME, finalFileName);
+                    values.put(MediaStore.Downloads.MIME_TYPE, mimeType);
+                    values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
+
+                    final Uri insertUri = activity.getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                    if (null == insertUri) {
+                        Mobile.showMsg(Mobile.language(292), 5000);
+                        return;
+                    }
+
+                    outputStream = activity.getContentResolver().openOutputStream(insertUri);
+                    if (null == outputStream) {
+                        Mobile.showMsg(Mobile.language(293), 5000);
+                        return;
+                    }
+                } else {
+                    final File downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                    if (!downloadsDir.exists()) {
+                        downloadsDir.mkdirs();
+                    }
+                    final File outFile = new File(downloadsDir, finalFileName);
+                    outputStream = new java.io.FileOutputStream(outFile);
+                }
+
+                final byte[] buffer = new byte[65536];
+                int bytesRead;
+                while ((bytesRead = inputStream.read(buffer)) != -1) {
+                    outputStream.write(buffer, 0, bytesRead);
+                }
+                outputStream.flush();
+
+                Mobile.showMsg(Mobile.language(289), 5000);
+            } catch (final Exception e) {
+                Utils.logError("JSAndroid", "saveExportFile failed", e);
+                Mobile.showMsg(Mobile.language(290), 5000);
+            } finally {
+                try { if (null != inputStream) { inputStream.close(); } } catch (final Exception ignored) {}
+                try { if (null != outputStream) { outputStream.close(); } } catch (final Exception ignored) {}
+            }
+        }).start();
     }
 
     @JavascriptInterface
