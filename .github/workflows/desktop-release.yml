@@ -45,22 +45,26 @@ jobs:
           CC: aarch64-linux-gnu-gcc
 
       - name: Build libkernel darwin/amd64
-        run: go build -buildmode=c-archive -buildvcs=false --tags fts5 -o "../app/native/darwin-amd64/libkernel.a" -ldflags "$BUILD_ARGS" ./cshared/
+        run: |
+          export CC=$(ls /usr/local/osxcross/bin/x86_64-apple-darwin*-cc | sort -V | tail -1)
+          echo "using CC=$CC"
+          go build -buildmode=c-archive -buildvcs=false --tags fts5 -o "../app/native/darwin-amd64/libkernel.a" -ldflags "$BUILD_ARGS" ./cshared/
         working-directory: kernel
         env:
           CGO_ENABLED: 1
           GOOS: darwin
           GOARCH: amd64
-          CC: /usr/local/osxcross/bin/x86_64-apple-darwin25-cc
 
       - name: Build libkernel darwin/arm64
-        run: go build -buildmode=c-archive -buildvcs=false --tags fts5 -o "../app/native/darwin-arm64/libkernel.a" -ldflags "$BUILD_ARGS" ./cshared/
+        run: |
+          export CC=$(ls /usr/local/osxcross/bin/aarch64-apple-darwin*-cc | sort -V | tail -1)
+          echo "using CC=$CC"
+          go build -buildmode=c-archive -buildvcs=false --tags fts5 -o "../app/native/darwin-arm64/libkernel.a" -ldflags "$BUILD_ARGS" ./cshared/
         working-directory: kernel
         env:
           CGO_ENABLED: 1
           GOOS: darwin
           GOARCH: arm64
-          CC: /usr/local/osxcross/bin/aarch64-apple-darwin25-cc
 
       - name: Build libkernel.dll windows/amd64 (c-shared + import lib)
         run: |
