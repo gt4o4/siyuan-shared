@@ -120,6 +120,9 @@ jobs:
           npx node-gyp rebuild
         working-directory: app/native
 
+      - name: Install rpm (rpmbuild for .rpm target)
+        run: apt-get update && apt-get install -y rpm
+
       - name: Package Linux amd64
         run: pnpm run dist-linux
         working-directory: app
