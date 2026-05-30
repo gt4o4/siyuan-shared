@@ -37,6 +37,9 @@ logs
 package-lock.json
 yarn.lock
 
+# musl toolchain
+muslbin/
+
 # Workflows
 **/__pycache__
 .claude/

@@ -6,8 +6,9 @@ on:
 
 jobs:
   check-branch:
-    runs-on: arc-runner-set
-    container: catthehacker/ubuntu:act-22.04
+    # https://docs.github.com/en/webhooks/webhook-events-and-payloads?actionType=edited#pull_request
+    if: ${{ github.repository_owner == 'siyuan-note' && (github.event.action == 'opened' || github.event.changes.base) }}
+    runs-on: ubuntu-latest
     permissions:
       pull-requests: write
     steps:
