@@ -157,9 +157,11 @@ jobs:
             app/build/siyuan-*-linux.tar.gz
             app/build/siyuan-*-linux.AppImage
             app/build/siyuan-*-linux.deb
+            app/build/siyuan-*-linux.rpm
             app/build/siyuan-*-linux-arm64.tar.gz
             app/build/siyuan-*-linux-arm64.AppImage
             app/build/siyuan-*-linux-arm64.deb
+            app/build/siyuan-*-linux-arm64.rpm
 
   package-macos:
     needs: build-kernel
