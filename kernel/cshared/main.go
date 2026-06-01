@@ -29,10 +29,13 @@ package main
 */
 import "C"
 import (
+	"os"
 	"sync"
+	"unsafe"
 
 	"github.com/siyuan-note/logging"
 	"github.com/siyuan-note/siyuan/kernel/cache"
+	"github.com/siyuan-note/siyuan/kernel/cli/cmd"
 	"github.com/siyuan-note/siyuan/kernel/job"
 	"github.com/siyuan-note/siyuan/kernel/model"
 	"github.com/siyuan-note/siyuan/kernel/server"
@@ -142,6 +145,53 @@ func StopKernel() {
 	tunnel.StopTailscale()
 	tunnel.StopCloudflared()
 	model.Close(false, true, 0)
+}
+
+// RunCLI runs a SiYuan CLI command (the cobra command tree from kernel/cli/cmd)
+// in-process. It is invoked from a dedicated launcher process (electron-as-node),
+// never from the GUI process, so stdout/exit-code semantics behave normally.
+//
+// argv holds the CLI arguments (without argv[0]); appDir is the directory that
+// contains the bundled "appearance/langs" (the GUI's appDir = resources/). The
+// "serve" subcommand is rejected because it blocks on HandleSignal — the GUI uses
+// StartKernel instead.
+//
+// Returns 0 on success, 1 on command error/panic, 2 if "serve" was requested.
+//
+//export RunCLI
+func RunCLI(argc C.int, argv **C.char, appDir *C.char) (retCode C.int) {
+	defer func() {
+		if r := recover(); r != nil {
+			logging.LogErrorf("cli panic: %v", r)
+			if retCode == 0 {
+				retCode = C.int(1)
+			}
+		}
+	}()
+
+	n := int(argc)
+	args := make([]string, 0, n+1)
+	args = append(args, "siyuan-cli") // argv[0]; root.go init() derives Use from base(os.Args[0])
+	cargs := unsafe.Slice(argv, n)
+	for i := 0; i < n; i++ {
+		args = append(args, C.GoString(cargs[i]))
+	}
+
+	// "serve" blocks on HandleSignal — not valid for a one-shot launcher; the GUI uses StartKernel.
+	if n > 0 && C.GoString(cargs[0]) == "serve" {
+		logging.LogErrorf("serve is not supported via RunCLI; the GUI uses StartKernel")
+		return C.int(2)
+	}
+
+	if ad := C.GoString(appDir); "" != ad {
+		os.Setenv("SIYUAN_WORKING_DIR", ad) // consumed by kernel/cli/cmd/root.go
+	}
+	os.Args = args
+
+	if err := cmd.Execute(); err != nil {
+		return C.int(1)
+	}
+	return C.int(0)
 }
 
 // required for c-shared build mode

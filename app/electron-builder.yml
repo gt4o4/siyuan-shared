@@ -17,9 +17,6 @@ extraFiles:
     to: "LICENSE"
 win:
   icon: "src/assets/icon.ico"
-  extraResources:
-    - from: "kernel"
-      to: "kernel"
   requestedExecutionLevel: "asInvoker"
   signtoolOptions:
     #certificateSubjectName: "Yunnan Liandi Technology Co., Ltd."

@@ -28,9 +28,6 @@ mac:
     - name: "SiYuan"
       schemes:
         - "siyuan"
-  extraResources:
-    - from: "kernel-darwin-arm64"
-      to: "kernel"
   target:
     - target: "dmg"
       arch: "arm64"

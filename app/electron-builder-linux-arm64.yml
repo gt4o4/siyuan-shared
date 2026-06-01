@@ -28,9 +28,6 @@ linux:
       Categories: "Utility;"
     }
   }
-  extraResources:
-    - from: "kernel-linux-arm64"
-      to: "kernel"
   target:
     - target: "tar.gz"
       arch: "arm64"

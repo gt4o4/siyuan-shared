@@ -46,17 +46,23 @@ var rootCmd = &cobra.Command{
 		}
 
 		// 确定工作目录
-		if exePath, err := os.Executable(); err == nil {
-			if resolved, err2 := filepath.EvalSymlinks(exePath); err2 == nil {
-				exePath = resolved
+		if env := os.Getenv("SIYUAN_WORKING_DIR"); "" != env {
+			// 内核以进程内库（N-API）方式运行时 os.Executable() 指向宿主（Electron/Node），
+			// 由调用方（RunCLI）显式传入工作目录。
+			util.WorkingDir = env
+		} else {
+			if exePath, err := os.Executable(); err == nil {
+				if resolved, err2 := filepath.EvalSymlinks(exePath); err2 == nil {
+					exePath = resolved
+				}
+				util.WorkingDir = filepath.Dir(exePath)
 			}
-			util.WorkingDir = filepath.Dir(exePath)
-		}
 
-		// 尝试在常见位置查找 appearance 目录
-		appDir := findAppDir()
-		if appDir != "" {
-			util.WorkingDir = appDir
+			// 尝试在常见位置查找 appearance 目录
+			appDir := findAppDir()
+			if appDir != "" {
+				util.WorkingDir = appDir
+			}
 		}
 
 		langsDir := filepath.Join(util.WorkingDir, "appearance", "langs")

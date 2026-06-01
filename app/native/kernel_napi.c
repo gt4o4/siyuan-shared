@@ -57,12 +57,46 @@ static napi_value napi_stop_kernel(napi_env env, napi_callback_info info) {
     return undefined;
 }
 
+// runCLI(args: string[], appDir: string) → number
+// Runs a SiYuan CLI command in-process. Intended for a dedicated launcher process
+// (electron-as-node), not the GUI. Returns the command's exit code.
+static napi_value napi_run_cli(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2];
+    napi_get_cb_info(env, info, &argc, argv, NULL, NULL);
+
+    uint32_t n = 0;
+    if (argc > 0) {
+        napi_get_array_length(env, argv[0], &n);
+    }
+    char** cargs = (char**)malloc(sizeof(char*) * (n ? n : 1));
+    for (uint32_t i = 0; i < n; i++) {
+        napi_value el;
+        napi_get_element(env, argv[0], i, &el);
+        cargs[i] = get_string_arg(env, el);
+    }
+    char* appDir = argc > 1 ? get_string_arg(env, argv[1]) : strdup("");
+
+    int rc = RunCLI((int)n, cargs, appDir);
+
+    for (uint32_t i = 0; i < n; i++) {
+        free(cargs[i]);
+    }
+    free(cargs);
+    free(appDir);
+
+    napi_value result;
+    napi_create_int32(env, rc, &result);
+    return result;
+}
+
 // Module initialization
 static napi_value init(napi_env env, napi_value exports) {
     napi_property_descriptor props[] = {
         {"startKernel",    NULL, napi_start_kernel,     NULL, NULL, NULL, napi_default, NULL},
         {"isHttpServing",  NULL, napi_is_http_serving,  NULL, NULL, NULL, napi_default, NULL},
         {"stopKernel",     NULL, napi_stop_kernel,      NULL, NULL, NULL, napi_default, NULL},
+        {"runCLI",         NULL, napi_run_cli,          NULL, NULL, NULL, napi_default, NULL},
     };
     napi_define_properties(env, exports, sizeof(props) / sizeof(props[0]), props);
     return exports;
