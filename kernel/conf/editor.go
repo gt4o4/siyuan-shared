@@ -20,17 +20,23 @@ import "github.com/siyuan-note/siyuan/kernel/util"
 
 type Editor struct {
 	AllowSVGScript                  bool           `json:"allowSVGScript"`                  // 允许执行 SVG 内脚本
-	AllowHTMLBLockScript            bool           `json:"allowHTMLBLockScript"`            // 允许执行 HTML 块内脚本
+	AllowHTMLBLockScript            bool           `json:"allowHTMLBLockScript"`            // 允许执行 HTML 内容中的脚本
 	FontSize                        int            `json:"fontSize"`                        // 字体大小
 	FontSizeScrollZoom              bool           `json:"fontSizeScrollZoom"`              // 字体大小是否支持滚轮缩放
 	FontFamily                      string         `json:"fontFamily"`                      // 字体
 	FontWeight                      int            `json:"fontWeight"`                      // 字重
+	FontFamilyDisplay               string         `json:"fontFamilyDisplay"`               // 设置面板中展示的字体名称（与 FontFamily/FontWeight 对应，可选）
 	CodeSyntaxHighlightLineNum      bool           `json:"codeSyntaxHighlightLineNum"`      // 代码块是否显示行号
 	CodeTabSpaces                   int            `json:"codeTabSpaces"`                   // 代码块中 Tab 转换空格数，配置为 0 则表示不转换
 	CodeLineWrap                    bool           `json:"codeLineWrap"`                    // 代码块是否自动折行
 	CodeLigatures                   bool           `json:"codeLigatures"`                   // 代码块是否连字
 	DisplayBookmarkIcon             bool           `json:"displayBookmarkIcon"`             // 是否显示内容块角标
 	DisplayNetImgMark               bool           `json:"displayNetImgMark"`               // 是否显示网络图片角标
+	DatabaseAttrShow                *bool          `json:"databaseAttrShow"`                // 是否在文档顶部显示数据库属性
+	DatabaseAttrClickMode           int            `json:"databaseAttrClickMode"`           // 数据库角标点击模式，0：聚焦块并展开数据库面板，1：打开块属性面板
+	DatabaseAttrViewMode            int            `json:"databaseAttrViewMode"`            // 数据库属性默认展开状态，0：展开，1：折叠
+	DatabaseAttrHideEmpty           bool           `json:"databaseAttrHideEmpty"`           // 是否隐藏数据库空属性
+	DatabaseAttrUseTabs             *bool          `json:"databaseAttrUseTabs"`             // 数据库属性是否使用页签
 	GenerateHistoryInterval         int            `json:"generateHistoryInterval"`         // 生成历史时间间隔，单位：分钟
 	HistoryRetentionDays            int            `json:"historyRetentionDays"`            // 历史保留天数
 	Emoji                           []string       `json:"emoji"`                           // 常用表情
@@ -47,7 +53,7 @@ type Editor struct {
 	ListItemDotNumberClickFocus     bool           `json:"listItemDotNumberClickFocus"`     // 单击列表项标记聚焦
 	FloatWindowMode                 int            `json:"floatWindowMode"`                 // 浮窗触发模式，0：光标悬停，1：按住 Ctrl 悬停，2：不触发浮窗
 	FloatWindowDelay                *int           `json:"floatWindowDelay"`                // 浮窗悬停触发延迟，单位：毫秒，默认 620，nil 表示未设置
-	DynamicLoadBlocks               int            `json:"dynamicLoadBlocks"`               // 块动态数，可配置区间 [48, 1024]
+	DynamicLoadBlocks               int            `json:"dynamicLoadBlocks"`               // 块动态数，下限 48
 	Justify                         bool           `json:"justify"`                         // 是否两端对齐
 	RTL                             bool           `json:"rtl"`                             // 是否从右到左显示
 	Spellcheck                      bool           `json:"spellcheck"`                      // 是否启用拼写检查
@@ -56,15 +62,19 @@ type Editor struct {
 	BacklinkExpandCount             int            `json:"backlinkExpandCount"`             // 反向链接默认展开数量
 	BackmentionExpandCount          int            `json:"backmentionExpandCount"`          // 反链提及默认展开数量
 	BacklinkContainChildren         bool           `json:"backlinkContainChildren"`         // 反向链接是否包含子块进行计算
+	BacklinkShowBottom              bool           `json:"backlinkShowBottom"`              // 是否在文档底部显示反向链接
 	BacklinkSort                    *int           `json:"backlinkSort"`                    // 反向链接排序方式
 	BackmentionSort                 *int           `json:"backmentionSort"`                 // 反链提及排序方式
+	HeadingNumber                   bool           `json:"headingNumber"`                   // 是否显示标题编号
+	HeadingNumberFormat             string         `json:"headingNumberFormat"`             // 标题编号格式
 	HeadingEmbedMode                int            `json:"headingEmbedMode"`                // 标题嵌入块模式，0：显示标题与下方的块，1：仅显示标题，2：仅显示标题下方的块
 	PasteURLAutoConvert             bool           `json:"pasteURLAutoConvert"`             // 粘贴网址时自动转为链接
 	Markdown                        *util.Markdown `json:"markdown"`                        // Markdown 配置
 }
 
 const (
-	MinDynamicLoadBlocks = 48
+	MinDynamicLoadBlocks       = 48
+	DefaultHeadingNumberFormat = "decimal-hierarchical"
 )
 
 func NewEditor() *Editor {
@@ -77,6 +87,11 @@ func NewEditor() *Editor {
 		CodeLigatures:                   false,
 		DisplayBookmarkIcon:             true,
 		DisplayNetImgMark:               true,
+		DatabaseAttrShow:                new(true),
+		DatabaseAttrClickMode:           0,
+		DatabaseAttrViewMode:            0,
+		DatabaseAttrHideEmpty:           false,
+		DatabaseAttrUseTabs:             new(true),
 		GenerateHistoryInterval:         10,
 		HistoryRetentionDays:            30,
 		Emoji:                           []string{},
@@ -90,7 +105,7 @@ func NewEditor() *Editor {
 		ListLogicalOutdent:              false,
 		ListItemDotNumberClickFocus:     true,
 		FloatWindowMode:                 0,
-		FloatWindowDelay:                func() *int { v := 620; return &v }(),
+		FloatWindowDelay:                new(620),
 		DynamicLoadBlocks:               192,
 		Justify:                         false,
 		RTL:                             false,
@@ -99,8 +114,11 @@ func NewEditor() *Editor {
 		BacklinkExpandCount:             8,
 		BackmentionExpandCount:          -1,
 		BacklinkContainChildren:         true,
-		BacklinkSort:                    func() *int { v := util.SortModeUpdatedDESC; return &v }(),
-		BackmentionSort:                 func() *int { v := util.SortModeUpdatedDESC; return &v }(),
+		BacklinkShowBottom:              false,
+		BacklinkSort:                    new(util.SortModeUpdatedDESC),
+		BackmentionSort:                 new(util.SortModeUpdatedDESC),
+		HeadingNumber:                   false,
+		HeadingNumberFormat:             DefaultHeadingNumberFormat,
 		HeadingEmbedMode:                0,
 		PasteURLAutoConvert:             false,
 		Markdown:                        util.MarkdownSettings,

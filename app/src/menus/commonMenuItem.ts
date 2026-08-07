@@ -3,18 +3,20 @@ import {shell} from "electron";
 /// #endif
 import {confirmDialog} from "../dialog/confirmDialog";
 import {getSearch, isMobile, isValidCustomAttrName} from "../util/functions";
-import {isLocalPath, movePathTo, moveToPath, pathPosix} from "../util/pathName";
+import {getAssetExtension, isEncryptedBox, isLocalPath, movePathTo, moveToPath, pathPosix} from "../util/pathName";
 import {MenuItem} from "./Menu";
 import {onExport, saveExport} from "../protyle/export";
+import {exportMarkdownZip} from "../protyle/export/exportMd";
 import {
     isInAndroid,
     isInHarmony,
     isInIOS,
     isInMobileApp,
-    openByMobile,
     saveExportFile,
     writeText
 } from "../protyle/util/compatibility";
+import {openByMobile} from "../editor/openLink";
+import {processSiYuanUri} from "../util/uri";
 import {fetchPost, fetchSyncPost} from "../util/fetch";
 import {hideMessage, showMessage} from "../dialog/message";
 import {Dialog} from "../dialog";
@@ -26,7 +28,7 @@ import {rename, replaceFileName} from "../editor/rename";
 import * as dayjs from "dayjs";
 import {Constants} from "../constants";
 import {exportImage} from "../protyle/export/util";
-import {App} from "../index";
+import type {App} from "../index";
 import {renderAVAttribute} from "../protyle/render/av/blockAttr";
 import {openAssetNewWindow} from "../window/openNewWindow";
 import {copyTextByType} from "../protyle/toolbar/util";
@@ -110,9 +112,13 @@ export const openWechatNotify = (nodeElement: Element) => {
 };
 
 export const openFileWechatNotify = (protyle: IProtyle) => {
-    fetchPost("/api/block/getDocInfo", {
+    const docInfoParam: IObject = {
         id: protyle.block.rootID
-    }, (response) => {
+    };
+    if (isEncryptedBox(protyle.notebookId)) {
+        docInfoParam.notebook = protyle.notebookId;
+    }
+    fetchPost("/api/block/getDocInfo", docInfoParam, (response) => {
         const reminder = response.data.ial[Constants.CUSTOM_REMINDER_WECHAT];
         let reminderFormat = "";
         if (reminder) {
@@ -165,7 +171,7 @@ export const openFileWechatNotify = (protyle: IProtyle) => {
     });
 };
 
-export const openFileAttr = (attrs: IObject, focusName = "bookmark", protyle?: IProtyle) => {
+export const openFileAttr = (attrs: Record<string, string>, focusName = "bookmark", protyle?: IProtyle) => {
     let customHTML = "";
     let notifyHTML = "";
     let hasAV = false;
@@ -208,11 +214,11 @@ export const openFileAttr = (attrs: IObject, focusName = "bookmark", protyle?: I
         }
     });
     const dialog = new Dialog({
-        width: isMobile() ? "92vw" : "50vw",
+        width: isMobile() ? "100vw" : "50vw",
         containerClassName: "b3-dialog__container--theme",
-        height: "80vh",
+        height: isMobile() ? "100vh" : "80vh",
         content: `<div class="fn__flex-column">
-    <div class="layout-tab-bar fn__flex" style="flex-shrink:0;border-radius: var(--b3-border-radius-b) var(--b3-border-radius-b) 0 0">
+    <div class="layout-tab-bar fn__flex" style="${isMobile() ? "padding-right: 38px;" : ""}flex-shrink:0;border-radius: var(--b3-border-radius-b) var(--b3-border-radius-b) 0 0">
         <div class="item item--full item--focus" data-type="attr">
             <span class="fn__flex-1"></span>
             <span class="item__text">${window.siyuan.languages.builtIn}</span>
@@ -621,8 +627,7 @@ export const exportMd = (id: string) => {
                 fetchPost("/api/export/exportSY", {
                     id,
                 }, response => {
-                    hideMessage(msgId);
-                    saveExportFile(response.data.zip);
+                    saveExportFile(response.data.zip, msgId);
                 });
             }
         }, {
@@ -630,13 +635,7 @@ export const exportMd = (id: string) => {
             label: "Markdown .zip",
             icon: "iconMarkdown",
             click: () => {
-                const msgId = showMessage(window.siyuan.languages.exporting, -1);
-                fetchPost("/api/export/exportMd", {
-                    id,
-                }, response => {
-                    hideMessage(msgId);
-                    saveExportFile(response.data.zip);
-                });
+                exportMarkdownZip({id});
             }
         }, {
             id: "exportImage",
@@ -690,8 +689,7 @@ export const exportMd = (id: string) => {
                         fetchPost("/api/export/exportReStructuredText", {
                             id,
                         }, response => {
-                            hideMessage(msgId);
-                            saveExportFile(response.data.zip);
+                            saveExportFile(response.data.zip, msgId);
                         });
                     }
                 }, {
@@ -703,8 +701,7 @@ export const exportMd = (id: string) => {
                         fetchPost("/api/export/exportAsciiDoc", {
                             id,
                         }, response => {
-                            hideMessage(msgId);
-                            saveExportFile(response.data.zip);
+                            saveExportFile(response.data.zip, msgId);
                         });
                     }
                 }, {
@@ -716,8 +713,7 @@ export const exportMd = (id: string) => {
                         fetchPost("/api/export/exportTextile", {
                             id,
                         }, response => {
-                            hideMessage(msgId);
-                            saveExportFile(response.data.zip);
+                            saveExportFile(response.data.zip, msgId);
                         });
                     }
                 }, {
@@ -729,8 +725,7 @@ export const exportMd = (id: string) => {
                         fetchPost("/api/export/exportOPML", {
                             id,
                         }, response => {
-                            hideMessage(msgId);
-                            saveExportFile(response.data.zip);
+                            saveExportFile(response.data.zip, msgId);
                         });
                     }
                 }, {
@@ -742,8 +737,7 @@ export const exportMd = (id: string) => {
                         fetchPost("/api/export/exportOrgMode", {
                             id,
                         }, response => {
-                            hideMessage(msgId);
-                            saveExportFile(response.data.zip);
+                            saveExportFile(response.data.zip, msgId);
                         });
                     }
                 }, {
@@ -755,8 +749,7 @@ export const exportMd = (id: string) => {
                         fetchPost("/api/export/exportMediaWiki", {
                             id,
                         }, response => {
-                            hideMessage(msgId);
-                            saveExportFile(response.data.zip);
+                            saveExportFile(response.data.zip, msgId);
                         });
                     }
                 }, {
@@ -768,8 +761,7 @@ export const exportMd = (id: string) => {
                         fetchPost("/api/export/exportODT", {
                             id,
                         }, response => {
-                            hideMessage(msgId);
-                            saveExportFile(response.data.zip);
+                            saveExportFile(response.data.zip, msgId);
                         });
                     }
                 }, {
@@ -781,8 +773,7 @@ export const exportMd = (id: string) => {
                         fetchPost("/api/export/exportRTF", {
                             id,
                         }, response => {
-                            hideMessage(msgId);
-                            saveExportFile(response.data.zip);
+                            saveExportFile(response.data.zip, msgId);
                         });
                     }
                 }, {
@@ -794,8 +785,7 @@ export const exportMd = (id: string) => {
                         fetchPost("/api/export/exportEPUB", {
                             id,
                         }, response => {
-                            hideMessage(msgId);
-                            saveExportFile(response.data.zip);
+                            saveExportFile(response.data.zip, msgId);
                         });
                     }
                 }]
@@ -863,9 +853,10 @@ export const openMenu = (app: App, src: string, onlyMenu: boolean, showAccelerat
     });
     /// #else
     if (isLocalPath(src)) {
-        if (Constants.SIYUAN_ASSETS_EXTS.includes(pathPosix().extname(src).split("?")[0]) &&
-            (!src.endsWith(".pdf") ||
-                (src.endsWith(".pdf") && !src.startsWith("file://")))
+        const extension = getAssetExtension(src);
+        if (Constants.SIYUAN_ASSETS_EXTS.includes(extension) &&
+            (extension !== ".pdf" ||
+                (extension === ".pdf" && !src.startsWith("file://")))
         ) {
             submenu.push({
                 id: "insertRight",
@@ -954,6 +945,9 @@ export const openMenu = (app: App, src: string, onlyMenu: boolean, showAccelerat
             label: window.siyuan.languages.useDefault,
             accelerator: showAccelerator ? window.siyuan.languages.click : "",
             click: () => {
+                if (processSiYuanUri(app, src)) {
+                    return;
+                }
                 shell.openExternal(src).catch((e) => {
                     showMessage(e);
                 });
@@ -996,9 +990,13 @@ export const renameMenu = (options: {
         label: window.siyuan.languages.rename,
         click: () => {
             if (options.type === "file" && options.docId) {
-                fetchPost("/api/block/getDocInfo", {
+                const docInfoParam: IObject = {
                     id: options.docId
-                }, (response) => {
+                };
+                if (isEncryptedBox(options.notebookId)) {
+                    docInfoParam.notebook = options.notebookId;
+                }
+                fetchPost("/api/block/getDocInfo", docInfoParam, (response) => {
                     rename({
                         ...options,
                         name: response.data.ial.title,
@@ -1012,7 +1010,7 @@ export const renameMenu = (options: {
     }).element;
 };
 
-export const movePathToMenu = (paths: string[]) => {
+export const movePathToMenu = (paths: string[], sourceNotebookIds: string[] = []) => {
     return new MenuItem({
         id: "move",
         label: window.siyuan.languages.move,
@@ -1030,6 +1028,7 @@ export const movePathToMenu = (paths: string[]) => {
                 paths,
                 flashcard: false,
                 rootIDs,
+                sourceNotebookIds,
             });
         }
     }).element;

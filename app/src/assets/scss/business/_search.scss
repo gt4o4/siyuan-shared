@@ -105,7 +105,8 @@
     margin: 0 0 -6px 0;
     height: 6px;
     position: relative;
-    z-index: 2;
+    // 需高于 .protyle-breadcrumb，并低于 .protyle-toolbar
+    z-index: 6;
 
     &::after {
       content: "";
@@ -167,6 +168,7 @@
 
       padding: 1px 3px;
       font-family: var(--b3-font-family-kbd);
+      font-variant-emoji: text;
       background-color: var(--b3-theme-surface);
       border: solid 1px var(--b3-theme-surface-lighter);
       border-radius: var(--b3-border-radius);

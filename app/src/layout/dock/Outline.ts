@@ -4,6 +4,7 @@ import {Tree} from "../../util/Tree";
 import {getInstanceById, setPanelFocus} from "../util";
 import {getDockByType} from "../tabUtil";
 import {fetchPost} from "../../util/fetch";
+import {confirmBlockRef} from "../../util/checkBlockRef";
 import {getAllModels} from "../getAll";
 import {hasClosestBlock, hasClosestByClassName, hasTopClosestByClassName} from "../../protyle/util/hasClosest";
 import {
@@ -19,15 +20,21 @@ import {MenuItem} from "../../menus/Menu";
 import {escapeAttr, escapeHtml} from "../../util/escape";
 import {unicode2Emoji} from "../../emoji";
 import {getPreviousBlock} from "../../protyle/wysiwyg/getBlock";
-import {App} from "../../index";
+import type {App} from "../../index";
 import {checkFold} from "../../util/noRelyPCFunction";
 import {transaction, turnsIntoTransaction} from "../../protyle/wysiwyg/transaction";
 import {goHome} from "../../protyle/wysiwyg/commonHotkey";
-import {Editor} from "../../editor";
+import {isEncryptedBox} from "../../util/pathName";
+import type {Editor} from "../../editor";
 import {mathRender} from "../../protyle/render/mathRender";
 import {genEmptyElement} from "../../block/util";
 import {focusBlock, focusByWbr} from "../../protyle/util/selection";
 import {dragOverScroll, stopScrollAnimation} from "../../boot/globalEvent/dragover";
+import {getDocDisplayName} from "../../util/pathName";
+import {
+    operationsMayChangeOutline,
+    transactionsMayChangeRootHeadingNumberSetting
+} from "../../protyle/util/headingNumberCore";
 
 export class Outline extends Model {
     public tree: Tree;
@@ -35,66 +42,30 @@ export class Outline extends Model {
     public headerElement: HTMLElement;
     public type: "pin" | "local";
     public blockId: string;
+    public notebookId: string;
     public isPreview: boolean;
+    public protyle: IProtyle;
     private preFilterExpandIds: string[] | null = null;
+    private refreshId = 0;
 
     constructor(options: {
         app: App,
         tab: Tab,
         blockId: string,
+        notebookId?: string,
         type: "pin" | "local",
         isPreview: boolean
     }) {
-        super({
-            app: options.app,
+        super({app: options.app});
+        this.connect({
             id: options.tab.id,
             type: "outline",
-            callback() {
-                if (this.type === "local") {
-                    fetchPost("/api/block/checkBlockExist", {id: this.blockId}, existResponse => {
-                        if (!existResponse.data) {
-                            this.parent.parent.removeTab(this.parent.id);
-                        }
-                    });
-                }
-            },
-            msgCallback(data) {
-                if (data) {
-                    switch (data.cmd) {
-                        case "savedoc":
-                            this.onTransaction(data);
-                            break;
-                        case "rename":
-                            if (this.type === "local" && this.blockId === data.data.id) {
-                                this.parent.updateTitle(data.data.title);
-                            } else {
-                                this.updateDocTitle({
-                                    title: data.data.title,
-                                    icon: Constants.ZWSP
-                                }, -1);
-                            }
-                            break;
-                        case "closeBox":
-                        case "removeBox":
-                            if (this.type === "local") {
-                                fetchPost("/api/block/checkBlockExist", {id: this.blockId}, existResponse => {
-                                    if (!existResponse.data) {
-                                        this.parent.parent.removeTab(this.parent.id);
-                                    }
-                                });
-                            }
-                            break;
-                        case "removeDoc":
-                            if (data.data.ids.includes(this.blockId) && this.type === "local") {
-                                this.parent.parent.removeTab(this.parent.id);
-                            }
-                            break;
-                    }
-                }
-            }
+            callback: this.handleCallback.bind(this),
+            msgCallback: this.handleMsgCallback.bind(this)
         });
         this.isPreview = options.isPreview;
         this.blockId = options.blockId;
+        this.notebookId = options.notebookId || "";
         this.type = options.type;
         options.tab.panelElement.classList.add("fn__flex-column", "file-tree", "sy__outline", "dockPanel");
         options.tab.panelElement.innerHTML = `<div class="block__icons fn__hidescrollbar">
@@ -140,20 +111,25 @@ export class Outline extends Model {
                 filterIconElement.classList.remove("block__icon--active");
                 filterIconElement.setAttribute("aria-label", window.siyuan.languages.filter);
             }
-            if (inputElement.dataset.value !== value) {
+        });
+        inputElement.addEventListener("input", (event: InputEvent) => {
+            if (!event.isComposing) {
                 this.setFilter();
             }
         });
-        inputElement.addEventListener("keydown", (event: KeyboardEvent) => {
-            if (!event.isComposing && event.key === "Enter") {
-                inputElement.dataset.value = inputElement.value;
-                this.setFilter();
-            }
-        });
+        inputElement.addEventListener("compositionend", () => this.setFilter());
         this.tree = new Tree({
             element: this.element,
             data: null,
-            click: (element: HTMLElement) => {
+            click: (element: HTMLElement, event?: MouseEvent) => {
+                window.siyuan.menus.menu.remove();
+                if (event) {
+                    const actionElement = hasClosestByClassName(event.target as HTMLElement, "b3-list-item__action");
+                    if (actionElement) {
+                        this.showContextMenu(element, event);
+                        return;
+                    }
+                }
                 const id = element.getAttribute("data-node-id");
                 if (this.isPreview) {
                     const headElement = document.getElementById(id);
@@ -225,7 +201,9 @@ export class Outline extends Model {
                     }
                 }
                 this.saveExpendIds();
-            }
+            },
+            blockExtHTML: window.siyuan.config.readonly ? undefined : '<span class="b3-list-item__action"><svg><use xlink:href="#iconMore"></use></svg></span>',
+            topExtHTML: window.siyuan.config.readonly ? undefined : '<span class="b3-list-item__action"><svg><use xlink:href="#iconMore"></use></svg></span>',
         });
         // 为了快捷键的 dispatch
         options.tab.panelElement.querySelector('[data-type="collapse"]').addEventListener("click", () => {
@@ -327,15 +305,76 @@ export class Outline extends Model {
         });
         this.bindSort();
 
-        fetchPost("/api/outline/getDocOutline", {
+        const outlineParam: IObject = {
             id: this.blockId,
             preview: this.isPreview
-        }, response => {
+        };
+        const notebookId = this.getNotebookId();
+        if (isEncryptedBox(notebookId)) {
+            outlineParam.notebook = notebookId;
+        }
+        const refreshId = ++this.refreshId;
+        const blockId = this.blockId;
+        fetchPost("/api/outline/getDocOutline", outlineParam, response => {
+            if (refreshId !== this.refreshId || blockId !== this.blockId) {
+                return;
+            }
             this.update(response);
             if (this.blockId) {
                 this.updateDocTitle((options.tab.model as Editor)?.editor?.protyle?.background?.ial, response.data?.length || 0);
             }
         });
+    }
+
+    private handleCallback() {
+        if (this.type === "local") {
+            fetchPost("/api/block/checkBlockExist", {id: this.blockId}, existResponse => {
+                if (!existResponse.data) {
+                    this.parent.parent.removeTab(this.parent.id);
+                }
+            });
+        }
+    }
+
+    private handleMsgCallback(data: IWebSocketData) {
+        if (data) {
+            switch (data.cmd) {
+                case "savedoc":
+                    this.onTransaction(data);
+                    break;
+                case "transactions":
+                    if (transactionsMayChangeRootHeadingNumberSetting(data.data, this.blockId)) {
+                        this.refresh();
+                    }
+                    break;
+                case "rename":
+                    if (this.type === "local" && this.blockId === data.data.id) {
+                        this.parent.updateTitle(getDocDisplayName(data.data.title, data.data.empty));
+                        this.protyle.model.parent.updateTitle(getDocDisplayName(data.data.title, data.data.empty));
+                    } else {
+                        this.updateDocTitle({
+                            title: data.data.title,
+                            icon: Constants.ZWSP
+                        }, -1);
+                    }
+                    break;
+                case "closeBox":
+                case "removeBox":
+                    if (this.type === "local") {
+                        fetchPost("/api/block/checkBlockExist", {id: this.blockId}, existResponse => {
+                            if (!existResponse.data) {
+                                this.parent.parent.removeTab(this.parent.id);
+                            }
+                        });
+                    }
+                    break;
+                case "removeDoc":
+                    if (data.data.ids.includes(this.blockId) && this.type === "local") {
+                        this.parent.parent.removeTab(this.parent.id);
+                    }
+                    break;
+            }
+        }
     }
 
     private bindSort() {
@@ -479,7 +518,7 @@ export class Outline extends Model {
         });
     }
 
-    public updateDocTitle(ial?: IObject, count?: number) {
+    public updateDocTitle(ial?: Record<string, string>, count?: number) {
         const docTitleElement = this.headerElement.nextElementSibling as HTMLElement;
         if (this.type === "pin") {
             if (!ial && typeof count === "undefined") {
@@ -491,8 +530,9 @@ export class Outline extends Model {
                 if (ial.icon === Constants.ZWSP && docTitleElement.firstElementChild) {
                     iconHTML = docTitleElement.firstElementChild.outerHTML;
                 }
-                docTitleElement.innerHTML = `${iconHTML}<span class="b3-list-item__text">${escapeHtml(ial.title)}</span>${docTitleElement.querySelector(".counter")?.outerHTML || ""}`;
-                docTitleElement.setAttribute("title", ial.title);
+                const title = getDocDisplayName(ial.title, ial[Constants.CUSTOM_SY_TITLE_EMPTY] === "true");
+                docTitleElement.innerHTML = `${iconHTML}<span class="b3-list-item__text">${escapeHtml(title)}</span>${docTitleElement.querySelector(".counter")?.outerHTML || ""}`;
+                docTitleElement.setAttribute("title", title);
                 docTitleElement.classList.remove("fn__none");
             }
             // count 为 -1 时，不对数量进行更新
@@ -517,36 +557,25 @@ export class Outline extends Model {
         if (data.data.rootID !== this.blockId) {
             return;
         }
-        let needReload = false;
         const ops = data.data.sources[0];
-        ops.doOperations.find((item: IOperation) => {
-            if (item.action === "update" &&
-                (this.element.querySelector(`.b3-list-item[data-node-id="${item.id}"]`) || item.data.indexOf('data-type="NodeHeading"') > -1)) {
-                needReload = true;
-                return true;
-            } else if (item.action === "insert" && item.data.indexOf('data-type="NodeHeading"') > -1) {
-                needReload = true;
-                return true;
-            } else if (item.action === "delete" || item.action === "move") {
-                needReload = true;
-                return true;
-            }
-        });
-        if (!needReload && ops.undoOperations) {
-            ops.undoOperations.find((item: IOperation) => {
-                if (item.action === "update" && item.data?.indexOf('data-type="NodeHeading"') > -1) {
-                    needReload = true;
-                    return true;
-                }
-            });
-        }
+        const headingIDs = new Set(Array.from(this.element.querySelectorAll<HTMLElement>(
+            ".b3-list-item[data-node-id]"
+        )).map(item => item.dataset.nodeId!));
+        const needReload = operationsMayChangeOutline(ops.doOperations, headingIDs) ||
+            operationsMayChangeOutline(ops.undoOperations, headingIDs);
         if (needReload) {
-            fetchPost("/api/outline/getDocOutline", {
+            const outlineParam: IObject = {
                 id: this.blockId,
                 preview: this.isPreview
-            }, response => {
+            };
+            const notebookId = this.getNotebookId();
+            if (isEncryptedBox(notebookId)) {
+                outlineParam.notebook = notebookId;
+            }
+            const refreshId = ++this.refreshId;
+            fetchPost("/api/outline/getDocOutline", outlineParam, response => {
                 // 文档切换后不再更新原有推送 https://github.com/siyuan-note/siyuan/issues/13409
-                if (data.data.rootID !== this.blockId) {
+                if (refreshId !== this.refreshId || data.data.rootID !== this.blockId) {
                     return;
                 }
                 this.update(response);
@@ -584,10 +613,15 @@ export class Outline extends Model {
             if (previousElement) {
                 this.setCurrentById(previousElement.getAttribute("data-node-id"));
             } else {
-                fetchPost("/api/block/getBlockBreadcrumb", {
+                const breadcrumbParam: Record<string, any> = {
                     id: nodeElement.getAttribute("data-node-id"),
                     excludeTypes: []
-                }, (response) => {
+                };
+                const notebookId = this.getNotebookId();
+                if (isEncryptedBox(notebookId)) {
+                    breadcrumbParam.notebook = notebookId;
+                }
+                fetchPost("/api/block/getBlockBreadcrumb", breadcrumbParam, (response) => {
                     response.data.reverse().find((item: IBreadcrumb) => {
                         if (item.type === "NodeHeading") {
                             this.setCurrentById(item.id);
@@ -616,7 +650,7 @@ export class Outline extends Model {
         }
     }
 
-    private setCurrentById(id: string) {
+    private setCurrentById(id: string, scroll = true) {
         this.element.querySelectorAll(".b3-list-item.b3-list-item--focus").forEach(item => {
             item.classList.remove("b3-list-item--focus");
         });
@@ -639,12 +673,14 @@ export class Outline extends Model {
         }
         if (currentElement) {
             currentElement.classList.add("b3-list-item--focus");
-            const elementRect = this.element.getBoundingClientRect();
-            this.element.scrollTop = this.element.scrollTop + (currentElement.getBoundingClientRect().top - (elementRect.top + elementRect.height / 2));
+            if (scroll) {
+                const elementRect = this.element.getBoundingClientRect();
+                this.element.scrollTop = this.element.scrollTop + (currentElement.getBoundingClientRect().top - (elementRect.top + elementRect.height / 2));
+            }
         }
     }
 
-    public update(data: IWebSocketData, callbackId?: string) {
+    public update(data: IWebSocketData, callbackId?: string, notebookId?: string) {
         let currentElement = this.element.querySelector(".b3-list-item--focus");
         let currentId;
         if (currentElement) {
@@ -653,6 +689,7 @@ export class Outline extends Model {
         const scrollTop = this.element.scrollTop;
         if (typeof callbackId !== "undefined") {
             this.blockId = callbackId;
+            this.notebookId = typeof notebookId === "undefined" ? "" : notebookId;
         }
         this.tree.updateData(data.data);
 
@@ -674,6 +711,49 @@ export class Outline extends Model {
             }
         }
         this.element.removeAttribute("data-loading");
+    }
+
+    private getNotebookId() {
+        if (this.notebookId) {
+            return this.notebookId;
+        }
+        getAllModels().editor.some(item => {
+            if (item.editor.protyle.block.rootID === this.blockId) {
+                this.notebookId = item.editor.protyle.notebookId;
+                return true;
+            }
+        });
+        return this.notebookId;
+    }
+
+    public refresh() {
+        if (!this.blockId) {
+            return;
+        }
+        const blockId = this.blockId;
+        const refreshId = ++this.refreshId;
+        const outlineParam: IObject = {
+            id: blockId,
+            preview: this.isPreview,
+        };
+        let protyle: IProtyle;
+        getAllModels().editor.some(item => {
+            if (item.editor.protyle.block.rootID === blockId) {
+                protyle = item.editor.protyle;
+                return true;
+            }
+        });
+        const notebookId = this.getNotebookId();
+        if (isEncryptedBox(notebookId)) {
+            outlineParam.notebook = notebookId;
+        }
+        fetchPost("/api/outline/getDocOutline", outlineParam, response => {
+            if (refreshId !== this.refreshId || blockId !== this.blockId) {
+                return;
+            }
+            this.update(response);
+            this.updateDocTitle(protyle?.background?.ial, response.data?.length || 0);
+        });
     }
 
     public saveExpendIds() {
@@ -804,6 +884,8 @@ export class Outline extends Model {
             });
         }
         this.saveExpendIds();
+        window.siyuan.storage[Constants.LOCAL_OUTLINE].expandLevel = targetLevel;
+        setStorageVal(Constants.LOCAL_OUTLINE, window.siyuan.storage[Constants.LOCAL_OUTLINE]);
     }
 
     /**
@@ -817,6 +899,7 @@ export class Outline extends Model {
                 id: `heading${i}`,
                 icon: `iconH${i}`,
                 label: window.siyuan.languages[`heading${i}`],
+                current: window.siyuan.storage[Constants.LOCAL_OUTLINE].expandLevel === i,
                 click: () => this.expandToLevel(i)
             }).element);
         }
@@ -944,7 +1027,7 @@ export class Outline extends Model {
                     action: zoomIn ? [Constants.CB_GET_FOCUS, Constants.CB_GET_ALL, Constants.CB_GET_HTML, Constants.CB_GET_OUTLINE] : [Constants.CB_GET_FOCUS, Constants.CB_GET_OUTLINE, Constants.CB_GET_SETID, Constants.CB_GET_CONTEXT, Constants.CB_GET_HTML],
                 });
             });
-            this.setCurrentById(id);
+            this.setCurrentById(id, false);
             const headingSubMenu = [];
             if (currentLevel !== 1) {
                 headingSubMenu.push(this.genHeadingTransform(id, 1));
@@ -984,21 +1067,26 @@ export class Outline extends Model {
                 label: window.siyuan.languages.insertSameLevelHeadingBefore,
                 click: () => {
                     const data = this.getProtyleAndBlockElement(element);
+                    if (!data) {
+                        return;
+                    }
                     const newId = Lute.NewNodeID();
                     const html = `<div data-subtype="h${currentLevel}" data-node-id="${newId}" data-type="NodeHeading" class="h${currentLevel}"><div contenteditable="true" spellcheck="false"><wbr></div><div class="protyle-attr" contenteditable="false">${Constants.ZWSP}</div></div>`;
+                    const previousID = data.blockElement.previousElementSibling?.getAttribute("data-node-id");
+                    data.blockElement.insertAdjacentHTML("beforebegin", html);
+                    const newElement = data.blockElement.previousElementSibling;
+                    newElement.scrollIntoView();
+                    focusByWbr(newElement, document.createRange());
                     transaction(data.protyle, [{
                         action: "insert",
                         data: html,
                         id: newId,
-                        previousID: data.blockElement.previousElementSibling?.getAttribute("data-node-id"),
+                        previousID,
                         parentID: data.blockElement.parentElement.getAttribute("data-node-id") || data.protyle.block.parentID,
                     }], [{
                         action: "delete",
                         id: newId
                     }]);
-                    data.blockElement.insertAdjacentHTML("beforebegin", html);
-                    data.blockElement.previousElementSibling.scrollIntoView();
-                    focusByWbr(data.blockElement.previousElementSibling, document.createRange());
                 }
             }).element);
 
@@ -1012,10 +1100,20 @@ export class Outline extends Model {
                         id,
                     }, (deleteResponse) => {
                         const data = this.getProtyleAndBlockElement(element);
+                        if (!data || !deleteResponse.data?.doOperations?.length) {
+                            return;
+                        }
                         const previousID = deleteResponse.data.doOperations[deleteResponse.data.doOperations.length - 1].id;
 
                         const newId = Lute.NewNodeID();
                         const html = `<div data-subtype="h${currentLevel}" data-node-id="${newId}" data-type="NodeHeading" class="h${currentLevel}"><div contenteditable="true" spellcheck="false"><wbr></div><div class="protyle-attr" contenteditable="false">${Constants.ZWSP}</div></div>`;
+                        const previousElement = data.protyle.wysiwyg.element.querySelector(`[data-node-id="${previousID}"]`);
+                        if (previousElement) {
+                            previousElement.insertAdjacentHTML("afterend", html);
+                            const newElement = previousElement.nextElementSibling;
+                            newElement.scrollIntoView();
+                            focusByWbr(newElement, document.createRange());
+                        }
                         transaction(data.protyle, [{
                             action: "insert",
                             data: html,
@@ -1025,12 +1123,6 @@ export class Outline extends Model {
                             action: "delete",
                             id: newId
                         }]);
-                        const previousElement = data.protyle.wysiwyg.element.querySelector(`[data-node-id="${previousID}"]`);
-                        if (previousElement) {
-                            previousElement.insertAdjacentHTML("afterend", html);
-                            previousElement.nextElementSibling.scrollIntoView();
-                            focusByWbr(previousElement.nextElementSibling, document.createRange());
-                        }
                     });
                 }
             }).element);
@@ -1045,10 +1137,13 @@ export class Outline extends Model {
                         fetchPost("/api/block/getHeadingDeleteTransaction", {
                             id,
                         }, (deleteResponse) => {
+                            if (!deleteResponse.data?.doOperations?.length || !deleteResponse.data?.undoOperations) {
+                                return;
+                            }
                             let previousID = deleteResponse.data.doOperations[deleteResponse.data.doOperations.length - 1].id;
                             deleteResponse.data.undoOperations.find((operationsItem: IOperation, index: number) => {
                                 const startIndex = operationsItem.data.indexOf(' data-subtype="h');
-                                if (startIndex > -1 && startIndex < 260 && parseInt(operationsItem.data.substring(startIndex + 16, startIndex + 17)) === currentLevel + 1) {
+                                if (index > 0 && startIndex > -1 && startIndex < 260 && parseInt(operationsItem.data.substring(startIndex + 16, startIndex + 17)) === currentLevel + 1) {
                                     previousID = deleteResponse.data.undoOperations[index - 1].id;
                                     return true;
                                 }
@@ -1056,8 +1151,18 @@ export class Outline extends Model {
 
 
                             const data = this.getProtyleAndBlockElement(element);
+                            if (!data) {
+                                return;
+                            }
                             const newId = Lute.NewNodeID();
                             const html = `<div data-subtype="h${currentLevel + 1}" data-node-id="${newId}" data-type="NodeHeading" class="h${currentLevel + 1}"><div contenteditable="true" spellcheck="false"><wbr></div><div class="protyle-attr" contenteditable="false">${Constants.ZWSP}</div></div>`;
+                            const previousElement = data.protyle.wysiwyg.element.querySelector(`[data-node-id="${previousID}"]`);
+                            if (previousElement) {
+                                previousElement.insertAdjacentHTML("afterend", html);
+                                const newElement = previousElement.nextElementSibling;
+                                newElement.scrollIntoView();
+                                focusByWbr(newElement, document.createRange());
+                            }
                             transaction(data.protyle, [{
                                 action: "insert",
                                 data: html,
@@ -1067,12 +1172,6 @@ export class Outline extends Model {
                                 action: "delete",
                                 id: newId
                             }]);
-                            const previousElement = data.protyle.wysiwyg.element.querySelector(`[data-node-id="${previousID}"]`);
-                            if (previousElement) {
-                                previousElement.insertAdjacentHTML("afterend", html);
-                                previousElement.nextElementSibling.scrollIntoView();
-                                focusByWbr(previousElement.nextElementSibling, document.createRange());
-                            }
                         });
                     }
                 }).element);
@@ -1090,7 +1189,7 @@ export class Outline extends Model {
                 const data = this.getProtyleAndBlockElement(element);
                 fetchPost("/api/block/getHeadingChildrenDOM", {
                     id,
-                    removeFoldAttr: data.blockElement.getAttribute("fold") !== "1"
+                    removeFoldAttr: false
                 }, (response) => {
                     if (isInAndroid()) {
                         window.JSAndroid.writeHTMLClipboard(data.protyle.lute.BlockDOM2StdMd(response.data).trimEnd(), response.data + Constants.ZWSP);
@@ -1113,18 +1212,31 @@ export class Outline extends Model {
                     const data = this.getProtyleAndBlockElement(element);
                     fetchPost("/api/block/getHeadingChildrenDOM", {
                         id,
-                        removeFoldAttr: data.blockElement.getAttribute("fold") !== "1"
+                        removeFoldAttr: false
                     }, (response) => {
-                        if (isInAndroid()) {
-                            window.JSAndroid.writeHTMLClipboard(data.protyle.lute.BlockDOM2StdMd(response.data).trimEnd(), response.data + Constants.ZWSP);
-                        } else if (isInHarmony()) {
-                            window.JSHarmony.writeHTMLClipboard(data.protyle.lute.BlockDOM2StdMd(response.data).trimEnd(), response.data + Constants.ZWSP);
-                        } else {
-                            writeText(response.data + Constants.ZWSP);
-                        }
                         fetchPost("/api/block/getHeadingDeleteTransaction", {
                             id,
-                        }, (deleteResponse) => {
+                        }, async (deleteResponse) => {
+                            const deletedIDs = deleteResponse.data.doOperations.map(
+                                (operation: IOperation) => operation.id);
+                            if (!await confirmBlockRef({
+                                scope: "blocks",
+                                ids: deletedIDs,
+                                deletedIDs,
+                                notebook: data.protyle.notebookId,
+                            }, data.protyle)) {
+                                return;
+                            }
+                            if (!data.protyle.wysiwyg.element.querySelector(`[data-node-id="${id}"]`)) {
+                                return;
+                            }
+                            if (isInAndroid()) {
+                                window.JSAndroid.writeHTMLClipboard(data.protyle.lute.BlockDOM2StdMd(response.data).trimEnd(), response.data + Constants.ZWSP);
+                            } else if (isInHarmony()) {
+                                window.JSHarmony.writeHTMLClipboard(data.protyle.lute.BlockDOM2StdMd(response.data).trimEnd(), response.data + Constants.ZWSP);
+                            } else {
+                                writeText(response.data + Constants.ZWSP);
+                            }
                             deleteResponse.data.doOperations.forEach((operation: IOperation) => {
                                 data.protyle.wysiwyg.element.querySelectorAll(`[data-node-id="${operation.id}"]`).forEach((itemElement: HTMLElement) => {
                                     itemElement.remove();
@@ -1161,7 +1273,19 @@ export class Outline extends Model {
                     const data = this.getProtyleAndBlockElement(element);
                     fetchPost("/api/block/getHeadingDeleteTransaction", {
                         id,
-                    }, (response) => {
+                    }, async (response) => {
+                        const deletedIDs = response.data.doOperations.map((operation: IOperation) => operation.id);
+                        if (!await confirmBlockRef({
+                            scope: "blocks",
+                            ids: deletedIDs,
+                            deletedIDs,
+                            notebook: data.protyle.notebookId,
+                        }, data.protyle)) {
+                            return;
+                        }
+                        if (!data.protyle.wysiwyg.element.querySelector(`[data-node-id="${id}"]`)) {
+                            return;
+                        }
                         response.data.doOperations.forEach((operation: IOperation) => {
                             data.protyle.wysiwyg.element.querySelectorAll(`[data-node-id="${operation.id}"]`).forEach((itemElement: HTMLElement) => {
                                 itemElement.remove();

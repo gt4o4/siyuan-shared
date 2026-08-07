@@ -28,7 +28,6 @@ type System struct {
 	OSPlatform       string `json:"osPlatform"`
 	Container        string `json:"container"` // docker, android, ios, harmony, std
 	IsMicrosoftStore bool   `json:"isMicrosoftStore"`
-	IsInsider        bool   `json:"isInsider"`
 
 	HomeDir      string `json:"homeDir"`
 	WorkspaceDir string `json:"workspaceDir"`
@@ -40,13 +39,36 @@ type System struct {
 	NetworkServeTLS bool          `json:"networkServeTLS"` // 是否开启 HTTPS 网络伺服
 	NetworkProxy    *NetworkProxy `json:"networkProxy"`
 
-	DownloadInstallPkg bool `json:"downloadInstallPkg"`
-	AutoLaunch2        int  `json:"autoLaunch2"`    // 0：不自动启动，1：自动启动，2：自动启动+隐藏主窗口
-	LockScreenMode     int  `json:"lockScreenMode"` // 0：手动，1：手动+跟随系统 https://github.com/siyuan-note/siyuan/issues/9087
+	DownloadInstallPkg bool   `json:"downloadInstallPkg"`
+	UpdateChannel      string `json:"updateChannel,omitempty"`
+	AutoLaunch2        int    `json:"autoLaunch2"`    // 0：不自动启动，1：自动启动，2：自动启动+隐藏主窗口
+	LockScreenMode     int    `json:"lockScreenMode"` // 0：手动，1：手动+跟随系统 https://github.com/siyuan-note/siyuan/issues/9087
 
 	DisabledFeatures []string `json:"disabledFeatures"`
 
 	MicrosoftDefenderExcluded bool `json:"microsoftDefenderExcluded"` // 是否已加入 Microsoft Defender 排除项 https://github.com/siyuan-note/siyuan/issues/13650
+
+	SafeMode bool `json:"safeMode"` // 是否以安全模式运行（纯运行时状态，由 --safe-mode 注入，不随 conf.json 持久化）
+}
+
+const (
+	OnboardingPending         = "pending"
+	OnboardingNotebookCreated = "notebook-created"
+	OnboardingCompleted       = "completed"
+)
+
+const (
+	UpdateChannelStable = "stable"
+	UpdateChannelBeta   = "beta"
+	UpdateChannelAlpha  = "alpha"
+)
+
+type Onboarding struct {
+	State      string `json:"state"`
+	NewUser    bool   `json:"newUser"`
+	Dismissed  bool   `json:"dismissed"`
+	NotebookID string `json:"notebookID"`
+	DocumentID string `json:"documentID"`
 }
 
 func NewSystem() *System {
@@ -56,6 +78,7 @@ func NewSystem() *System {
 		KernelVersion:      util.Ver,
 		NetworkProxy:       &NetworkProxy{},
 		DownloadInstallPkg: false,
+		UpdateChannel:      UpdateChannelStable,
 	}
 }
 

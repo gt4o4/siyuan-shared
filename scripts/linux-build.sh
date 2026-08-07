@@ -55,6 +55,7 @@ echo
 echo 'Building UI'
 cd "$PROJECT_ROOT/app"
 pnpm install
+pnpm run install:electron
 pnpm run build
 
 echo
@@ -62,7 +63,7 @@ echo 'Building Kernel'
 cd "$PROJECT_ROOT/kernel"
 go version
 export GO111MODULE=on
-export GOPROXY=https://mirrors.aliyun.com/goproxy/
+export GOPROXY=https://mirrors.aliyun.com/goproxy/,https://goproxy.cn,direct
 export CGO_ENABLED=1
 export GOOS=linux
 
@@ -105,14 +106,14 @@ if [[ "$TARGET" == 'amd64' || "$TARGET" == 'all' ]]; then
     echo 'Building Kernel amd64'
     export GOARCH=amd64
     setup_cc amd64
-    go build -buildmode=pie -tags fts5 -o "../app/kernel-linux/SiYuan-Kernel" -ldflags "-s -w -extldflags -static-pie" .
+    go build -buildmode=pie -tags "fts5 sqlcipher" -o "../app/kernel-linux/SiYuan-Kernel" -ldflags "-s -w -extldflags -static-pie" .
 fi
 if [[ "$TARGET" == 'arm64' || "$TARGET" == 'all' ]]; then
     echo
     echo 'Building Kernel arm64'
     export GOARCH=arm64
     setup_cc arm64
-    go build -buildmode=pie -tags fts5 -o "../app/kernel-linux-arm64/SiYuan-Kernel" -ldflags "-s -w -extldflags -static-pie" .
+    go build -buildmode=pie -tags "fts5 sqlcipher" -o "../app/kernel-linux-arm64/SiYuan-Kernel" -ldflags "-s -w -extldflags -static-pie" .
 fi
 
 echo

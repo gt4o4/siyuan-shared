@@ -1,6 +1,6 @@
 import {Tab} from "../Tab";
 import {Model} from "../Model";
-import {App} from "../../index";
+import type {App} from "../../index";
 import {Protyle} from "../../protyle";
 
 export class Custom extends Model {
@@ -26,7 +26,7 @@ export class Custom extends Model {
         update?: () => void,
         init: (custom: Custom) => void
     }) {
-        super({app: options.app, id: options.tab.id});
+        super({app: options.app});
         if (window.siyuan.config.fileTree.openFilesUseCurrentTab) {
             options.tab.headElement?.classList.add("item--unupdate");
         }

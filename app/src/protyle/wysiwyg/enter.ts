@@ -1,11 +1,15 @@
 import {genEmptyElement, genHeadingElement, insertEmptyBlock} from "../../block/util";
-import {focusByRange, focusByWbr, getSelectionOffset, setLastNodeRange} from "../util/selection";
+import {focusByRange, focusByWbr, getSelectionOffset, getUndoFocusContext, setLastNodeRange} from "../util/selection";
 import {
     getContenteditableElement, getParentBlock,
+    getEmbedChildOperationContext,
+    getEmbedChildOperationParentID,
+    getPreviousBlockSibling,
     getTopEmptyElement,
     hasNextSibling,
     hasPreviousSibling,
-    isNotEditBlock
+    isNotEditBlock,
+    IEmbedChildOperationContext
 } from "./getBlock";
 import {transaction, turnsIntoOneTransaction, updateTransaction} from "./transaction";
 import {breakList, genListItemElement, listOutdent, updateListOrder} from "./list";
@@ -20,8 +24,10 @@ import {processRender} from "../util/processCode";
 import {hasClosestByAttribute, hasClosestByClassName} from "../util/hasClosest";
 import {blockRender} from "../render/blockRender";
 
-export const enter = (blockElement: HTMLElement, range: Range, protyle: IProtyle) => {
-    if (hasClosestByClassName(blockElement, "protyle-wysiwyg__embed")) {
+export const enter = async (blockElement: HTMLElement, range: Range, protyle: IProtyle) => {
+    const embedResultElement = hasClosestByClassName(blockElement, "protyle-wysiwyg__embed");
+    const embedContext = getEmbedChildOperationContext(blockElement);
+    if (embedResultElement && !embedContext && !blockElement.classList.contains("code-block")) {
         return;
     }
     const disableElement = isNotEditBlock(blockElement);
@@ -55,11 +61,18 @@ export const enter = (blockElement: HTMLElement, range: Range, protyle: IProtyle
 
     const trimStartHTML = editableElement.innerHTML.trimStart();
     const trimStartText = editableElement.textContent.trimStart();
-    if (trimStartHTML.startsWith("```") || trimStartHTML.startsWith("···") || trimStartHTML.startsWith("~~~") ||
-        (trimStartHTML.indexOf("\n```") > -1 && trimStartText.indexOf("\n```") > -1) ||
-        (trimStartHTML.indexOf("\n~~~") > -1 && trimStartText.indexOf("\n~~~") > -1) ||
-        (trimStartHTML.indexOf("\n···") > -1 && trimStartText.indexOf("\n···") > -1)) {
-        if (trimStartHTML.indexOf("\n") === -1 && trimStartHTML.replace(/·|~/g, "`").replace(/^`{3,}/g, "").indexOf("`") > -1) {
+    const enableCodeBlockMiddleDot = window.siyuan.config.editor.markdown.codeBlockMiddleDot !== false;
+    const codeBlockMarkerRegExp = enableCodeBlockMiddleDot ? /·|~/g : /~/g;
+    const codeBlockFenceStartRegExp = enableCodeBlockMiddleDot ? /^(~|·|`){3,}/g : /^(~|`){3,}/g;
+    const codeBlockFenceLineRegExp = enableCodeBlockMiddleDot ? /\n(~|·|`){3,}/g : /\n(~|`){3,}/g;
+    const hasCodeBlockFence = (html: string, text: string) => html.startsWith("```") || html.startsWith("~~~") ||
+        (html.indexOf("\n```") > -1 && text.indexOf("\n```") > -1) ||
+        (html.indexOf("\n~~~") > -1 && text.indexOf("\n~~~") > -1) ||
+        (enableCodeBlockMiddleDot && (html.startsWith("···") ||
+            (html.indexOf("\n···") > -1 && text.indexOf("\n···") > -1)));
+    if (hasCodeBlockFence(trimStartHTML, trimStartText)) {
+        if (trimStartHTML.indexOf("\n") === -1 &&
+            trimStartHTML.replace(codeBlockMarkerRegExp, "`").replace(/^`{3,}/g, "").indexOf("`") > -1) {
             // ```test` 不处理，正常渲染为段落块
         } else if (blockElement.classList.contains("p")) { // https://github.com/siyuan-note/siyuan/issues/6953
             range.insertNode(document.createElement("wbr"));
@@ -69,7 +82,9 @@ export const enter = (blockElement: HTMLElement, range: Range, protyle: IProtyle
             const wbrElement = document.createElement("wbr");
             range.insertNode(wbrElement);
             wbrElement.after(document.createTextNode("\n"));
-            let replaceInnerHTML = editableElement.innerHTML.replace(/\n(~|·|`){3,}/g, "\n```").trim().replace(/^(~|·|`){3,}/g, "```");
+            let replaceInnerHTML = editableElement.innerHTML
+                .replace(codeBlockFenceLineRegExp, "\n```").trim()
+                .replace(codeBlockFenceStartRegExp, "```");
             if (!replaceInnerHTML.endsWith("\n```")) {
                 replaceInnerHTML += "\n```";
             }
@@ -98,7 +113,7 @@ export const enter = (blockElement: HTMLElement, range: Range, protyle: IProtyle
                 protyle.toolbar.showRender(protyle, blockElement);
                 processRender(blockElement);
             }
-            updateTransaction(protyle, blockElement.getAttribute("data-node-id"), blockElement.outerHTML, oldHTML);
+            updateTransaction(protyle, blockElement, oldHTML);
             return true;
         }
     }
@@ -117,7 +132,7 @@ export const enter = (blockElement: HTMLElement, range: Range, protyle: IProtyle
         range.insertNode(wbrElement);
         editableElement.parentElement.removeAttribute("data-render");
         highlightRender(blockElement);
-        updateTransaction(protyle, blockElement.getAttribute("data-node-id"), blockElement.outerHTML, oldHTML);
+        updateTransaction(protyle, blockElement, oldHTML);
         scrollCenter(protyle);
         return true;
     }
@@ -127,8 +142,11 @@ export const enter = (blockElement: HTMLElement, range: Range, protyle: IProtyle
         ((blockElement.nextElementSibling && blockElement.nextElementSibling.classList.contains("protyle-attr") &&
                 blockElement.parentElement.getAttribute("data-type") === "NodeBlockquote") ||
             (blockElement.parentElement.classList.contains("callout-content") && !blockElement.nextElementSibling))) {
+        if (embedContext && !embedContext.boundaryElement.contains(getParentBlock(blockElement).parentElement)) {
+            return;
+        }
         range.insertNode(document.createElement("wbr"));
-        const topElement = getTopEmptyElement(blockElement);
+        const topElement = getTopEmptyElement(blockElement, embedContext?.boundaryElement);
         const blockId = blockElement.getAttribute("data-node-id");
         const topId = topElement.getAttribute("data-node-id");
         const doInsert: IOperation = {
@@ -147,31 +165,38 @@ export const enter = (blockElement: HTMLElement, range: Range, protyle: IProtyle
             undoInsert.previousID = blockElement.previousElementSibling.getAttribute("data-node-id");
             parentBlockElement.after(blockElement);
         } else {
-            doInsert.previousID = topElement.previousElementSibling ? topElement.previousElementSibling.getAttribute("data-node-id") : undefined;
-            doInsert.parentID = topElement.parentElement.getAttribute("data-node-id") || protyle.block.parentID;
+            doInsert.previousID = getPreviousBlockSibling(topElement)?.getAttribute("data-node-id");
+            doInsert.parentID = getEmbedChildOperationParentID(topElement, embedContext) ||
+                getParentBlock(topElement).getAttribute("data-node-id") || protyle.block.parentID;
             undoInsert.previousID = doInsert.previousID;
             undoInsert.parentID = doInsert.parentID;
             topElement.after(blockElement);
             topElement.remove();
         }
-        transaction(protyle, [{
+        parentBlockElement = getParentBlock(blockElement);
+        const enterDoOperations: IOperation[] = [{
             action: "delete",
             id: topId
-        }, doInsert], [{
+        }, doInsert];
+        const enterUndoOperations: IOperation[] = [{
             action: "delete",
             id: blockId,
-        }, undoInsert]);
-        parentBlockElement = getParentBlock(blockElement);
+        }, undoInsert];
         if (topId === blockId && parentBlockElement.classList.contains("sb") &&
             parentBlockElement.getAttribute("data-sb-layout") === "col") {
-            turnsIntoOneTransaction({
+            // 合并到同一个 transaction，避免新块 id 在第二个 transaction 中找不到
+            const sbOperations = await turnsIntoOneTransaction({
                 protyle,
                 selectsElement: [blockElement.previousElementSibling, blockElement],
                 type: "BlocksMergeSuperBlock",
                 level: "row",
                 unfocus: true,
+                getOperations: true,
             });
+            enterDoOperations.push(...sbOperations.doOperations);
+            enterUndoOperations.splice(0, 0, ...sbOperations.undoOperations);
         }
+        transaction(protyle, enterDoOperations, enterUndoOperations);
         focusByWbr(blockElement, range);
         return true;
     }
@@ -183,37 +208,42 @@ export const enter = (blockElement: HTMLElement, range: Range, protyle: IProtyle
             (blockElement.nextElementSibling.classList.contains("list") && blockElement.previousElementSibling?.classList.contains("protyle-action")) ||
             (position.start === 0 && blockElement.previousElementSibling.classList.contains("protyle-action")) ||
             blockElement.parentElement.getAttribute("fold") === "1"
-        ) && listEnter(protyle, blockElement, range)
-    ) {
-        return true;
+        )) {
+        const embedListEnterMode = embedContext ? getEmbedListEnterMode(blockElement, embedContext) : "list";
+        if ("none" === embedListEnterMode) {
+            return;
+        }
+        if ("list" === embedListEnterMode && listEnter(protyle, blockElement, range)) {
+            return true;
+        }
     }
 
     // 段首换行
     if (editableElement.textContent !== "" && range.toString() === "" && position.start === 0) {
         let newElement;
-        if (blockElement.previousElementSibling &&
-            blockElement.previousElementSibling.getAttribute("data-type") === "NodeHeading" &&
-            blockElement.previousElementSibling.getAttribute("fold") === "1") {
-            newElement = genHeadingElement(blockElement.previousElementSibling, false, true) as HTMLDivElement;
+        const previousBlockElement = getPreviousBlockSibling(blockElement);
+        if (previousBlockElement?.getAttribute("data-type") === "NodeHeading" &&
+            previousBlockElement.getAttribute("fold") === "1") {
+            newElement = genHeadingElement(previousBlockElement, false, true) as HTMLDivElement;
         } else {
             newElement = genEmptyElement(false, true);
         }
+        blockElement.insertAdjacentElement("beforebegin", newElement);
         const newId = newElement.getAttribute("data-node-id");
         transaction(protyle, [{
             action: "insert",
             data: newElement.outerHTML,
             id: newId,
-            previousID: blockElement.previousElementSibling ? blockElement.previousElementSibling.getAttribute("data-node-id") : "",
-            parentID: getParentBlock(blockElement).getAttribute("data-node-id") || protyle.block.parentID
+            nextID: blockElement.getAttribute("data-node-id"),
         }], [{
             action: "delete",
             id: newId,
         }]);
         newElement.querySelector("wbr").remove();
-        blockElement.insertAdjacentElement("beforebegin", newElement);
         removeEmptyNode(newElement);
         return true;
     }
+    const undoFocusContext = getUndoFocusContext(protyle.wysiwyg.element, range);
     range.insertNode(document.createElement("wbr"));
     const html = blockElement.outerHTML;
     const parentHTML = getParentBlock(blockElement).outerHTML;
@@ -252,14 +282,14 @@ export const enter = (blockElement: HTMLElement, range: Range, protyle: IProtyle
     const newHTML = newEditableElement.innerHTML.trimStart();
     const newText = newEditableElement.textContent.trimStart();
     // https://github.com/siyuan-note/siyuan/issues/10759
-    if (newHTML.startsWith("```") || newHTML.startsWith("···") || newHTML.startsWith("~~~") ||
-        (newHTML.indexOf("\n```") > -1 && newText.indexOf("\n```") > -1) ||
-        (newHTML.indexOf("\n~~~") > -1 && newText.indexOf("\n~~~") > -1) ||
-        (newHTML.indexOf("\n···") > -1 && newText.indexOf("\n···") > -1)) {
-        if (newHTML.indexOf("\n") === -1 && newHTML.replace(/·|~/g, "`").replace(/^`{3,}/g, "").indexOf("`") > -1) {
+    if (hasCodeBlockFence(newHTML, newText)) {
+        if (newHTML.indexOf("\n") === -1 &&
+            newHTML.replace(codeBlockMarkerRegExp, "`").replace(/^`{3,}/g, "").indexOf("`") > -1) {
             // ```test` 不处理，正常渲染为段落块
         } else {
-            let replaceNewHTML = newEditableElement.innerHTML.replace(/\n(~|·|`){3,}/g, "\n```").trim().replace(/^(~|·|`){3,}/g, "```");
+            let replaceNewHTML = newEditableElement.innerHTML
+                .replace(codeBlockFenceLineRegExp, "\n```").trim()
+                .replace(codeBlockFenceStartRegExp, "```");
             if (!replaceNewHTML.endsWith("\n```")) {
                 replaceNewHTML += "\n```";
             }
@@ -284,6 +314,7 @@ export const enter = (blockElement: HTMLElement, range: Range, protyle: IProtyle
         if (item.dataset.nodeId === id) {
             blockElement.before(item);
             blockElement.remove();
+            item.setAttribute(Constants.ATTRIBUTE_EDITING, "true");
             doOperation.push({
                 action: "update",
                 data: item.outerHTML,
@@ -293,6 +324,7 @@ export const enter = (blockElement: HTMLElement, range: Range, protyle: IProtyle
                 action: "update",
                 data: html,
                 id,
+                context: undoFocusContext,
             });
         } else {
             doOperation.push({
@@ -339,15 +371,17 @@ export const enter = (blockElement: HTMLElement, range: Range, protyle: IProtyle
         currentElement = item;
         selectsElement.push(item);
     });
-    if (currentElement.parentElement.classList.contains("bq") && currentElement.parentElement.childElementCount > 2 &&
+    let parentElement = currentElement.parentElement;
+    if (parentElement.classList.contains("bq") && parentElement.childElementCount > 2 &&
         currentElement.previousElementSibling.classList.contains("p") && currentElement.classList.contains("p") &&
         currentElement.previousElementSibling.textContent.startsWith("[!") && parentHTML) {
-        const parentId = currentElement.parentElement.getAttribute("data-node-id");
-        const calloutHTML = protyle.lute.SpinBlockDOM(currentElement.parentElement.outerHTML);
+        const calloutHTML = protyle.lute.SpinBlockDOM(parentElement.outerHTML);
         if (calloutHTML.indexOf('data-type="NodeCallout"') > -1) {
-            currentElement.parentElement.outerHTML = calloutHTML;
+            parentElement.insertAdjacentHTML("afterend", calloutHTML);
+            parentElement = parentElement.nextElementSibling as HTMLElement;
+            parentElement.previousElementSibling.remove();
             mathRender(protyle.wysiwyg.element);
-            updateTransaction(protyle, parentId, calloutHTML, parentHTML);
+            updateTransaction(protyle, parentElement, parentHTML);
             focusByWbr(protyle.wysiwyg.element, range);
             scrollCenter(protyle);
             return true;
@@ -360,20 +394,41 @@ export const enter = (blockElement: HTMLElement, range: Range, protyle: IProtyle
             return true;
         }
     });
-    transaction(protyle, doOperation, undoOperation);
-    if (currentElement.parentElement.classList.contains("sb") &&
-        currentElement.parentElement.getAttribute("data-sb-layout") === "col") {
-        turnsIntoOneTransaction({
+    if (parentElement.classList.contains("sb") &&
+        parentElement.getAttribute("data-sb-layout") === "col") {
+        // 合并到同一个 transaction，避免新块 id 在第二个 transaction 中找不到
+        const sbOperations = await turnsIntoOneTransaction({
             protyle,
             selectsElement,
             type: "BlocksMergeSuperBlock",
             level: "row",
             unfocus: true,
+            getOperations: true,
         });
+        doOperation.push(...sbOperations.doOperations);
+        undoOperation.splice(0, 0, ...sbOperations.undoOperations);
     }
+    transaction(protyle, doOperation, undoOperation);
     focusByWbr(currentElement, range);
     scrollCenter(protyle);
     return true;
+};
+
+const getEmbedListEnterMode = (blockElement: HTMLElement, embedContext: IEmbedChildOperationContext) => {
+    const listItemElement = blockElement.parentElement;
+    // 单独查询列表项时外层列表是渲染器补充的，回车只能在目标列表项内部创建普通子块。
+    if (listItemElement === embedContext.targetElement) {
+        return "block";
+    }
+    const listElement = listItemElement.parentElement;
+    const editableElement = getContenteditableElement(blockElement);
+    const exitsList = ["", "\n"].includes(editableElement.textContent) &&
+        blockElement.previousElementSibling.classList.contains("protyle-action") &&
+        !blockElement.querySelector("img");
+    if (exitsList && listElement.parentElement === embedContext.resultElement) {
+        return "none";
+    }
+    return embedContext.boundaryElement.contains(exitsList ? listElement.parentElement : listElement) ? "list" : "none";
 };
 
 const listEnter = (protyle: IProtyle, blockElement: HTMLElement, range: Range) => {
@@ -424,7 +479,7 @@ const listEnter = (protyle: IProtyle, blockElement: HTMLElement, range: Range) =
         if (listItemElement.getAttribute("data-subtype") === "o") {
             updateListOrder(listItemElement.parentElement);
         }
-        updateTransaction(protyle, listItemElement.parentElement.getAttribute("data-node-id"), listItemElement.parentElement.outerHTML, html);
+        updateTransaction(protyle, listItemElement.parentElement, html);
         focusByWbr(newElement, range);
         scrollCenter(protyle);
         removeEmptyNode(newElement);
@@ -449,7 +504,7 @@ const listEnter = (protyle: IProtyle, blockElement: HTMLElement, range: Range) =
             if (subListElement.getAttribute("data-subtype") === "o") {
                 updateListOrder(subListElement);
             }
-            updateTransaction(protyle, listItemElement.getAttribute("data-node-id"), listItemElement.outerHTML, html);
+            updateTransaction(protyle, listItemElement, html);
             focusByWbr(listItemElement, range);
             scrollCenter(protyle);
         } else {
@@ -485,6 +540,7 @@ const listEnter = (protyle: IProtyle, blockElement: HTMLElement, range: Range) =
                 updateListOrder(listItemElement.parentElement);
             }
             if (listItemElement.parentElement.classList.contains("protyle-wysiwyg")) {
+                listItemElement.setAttribute(Constants.ATTRIBUTE_EDITING, "true");
                 transaction(protyle, [{
                     action: "update",
                     data: listItemElement.outerHTML,
@@ -503,7 +559,7 @@ const listEnter = (protyle: IProtyle, blockElement: HTMLElement, range: Range) =
                     id: listItemElement.getAttribute("data-node-id")
                 }]);
             } else {
-                updateTransaction(protyle, listItemElement.parentElement.getAttribute("data-node-id"), listItemElement.parentElement.outerHTML, html);
+                updateTransaction(protyle, listItemElement.parentElement, html);
             }
             focusByWbr(newElement, range);
             scrollCenter(protyle);
@@ -573,6 +629,7 @@ const listEnter = (protyle: IProtyle, blockElement: HTMLElement, range: Range) =
         updateListOrder(listItemElement.parentElement);
     }
     if (listItemElement.parentElement.classList.contains("protyle-wysiwyg")) {
+        listItemElement.setAttribute(Constants.ATTRIBUTE_EDITING, "true");
         transaction(protyle, [{
             action: "update",
             id: listItemElement.getAttribute("data-node-id"),
@@ -591,7 +648,7 @@ const listEnter = (protyle: IProtyle, blockElement: HTMLElement, range: Range) =
             data: listItemHTML
         }]);
     } else {
-        updateTransaction(protyle, listItemElement.parentElement.getAttribute("data-node-id"), listItemElement.parentElement.outerHTML, oldHTML);
+        updateTransaction(protyle, listItemElement.parentElement, oldHTML);
     }
     focusByWbr(newElement, range);
     scrollCenter(protyle);
@@ -628,7 +685,7 @@ export const softEnter = (range: Range, nodeElement: HTMLElement, protyle: IProt
                 startElement.after(newlineNode);
                 range.selectNode(newlineNode);
                 range.collapse(false);
-                updateTransaction(protyle, nodeElement.getAttribute("data-node-id"), nodeElement.outerHTML, oldHTML);
+                updateTransaction(protyle, nodeElement, oldHTML);
                 return true;
             }
         }
@@ -679,5 +736,5 @@ const addNewLineToEnd = (range: Range, nodeElement: HTMLElement, protyle: IProty
     }
     range.collapse(true);
     focusByRange(range);
-    updateTransaction(protyle, nodeElement.getAttribute("data-node-id"), nodeElement.outerHTML, oldHTML);
+    updateTransaction(protyle, nodeElement, oldHTML);
 };

@@ -4,16 +4,17 @@
     <meta charset="UTF-8">
     <meta name="viewport"
           content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover, user-scalable=no">
+    <title>SiYuan</title>
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
     <link rel="apple-touch-icon" href="../../icon.png">
-    <script src="../../protyle/js/pdf/pdf.min.mjs?v=4.7.85" type="module"></script>
+    <script src="../../protyle/js/pdf/pdf.min.mjs?v=4.8.69" type="module"></script>
 </head>
 <body class="fn__flex-column">
 <div id="loading" class="b3-dialog b3-dialog--open">
     <div class="b3-dialog__scrim" style="background-color: #1e1e1e"></div>
-    <img style="position: absolute;width: 36vh;" src="../../icon.png">
+    <img style="position: absolute;width: 24vh;" src="../../icon.svg">
 </div>
 <div id="toolbar" class="toolbar fn__flex"></div>
 <div class="fn__flex-1 fn__flex">

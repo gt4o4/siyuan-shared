@@ -1,41 +1,59 @@
 import {Constants} from "../constants";
 /// #if !MOBILE
-import {Tab} from "./Tab";
+import type {Tab} from "./Tab";
 /// #endif
+import type {App} from "../index";
+import {kernelError} from "../util/kernelFault";
 import {processMessage} from "../util/processMessage";
-import {kernelError, reloadSync} from "../dialog/processSystem";
-import {App} from "../index";
+import {reloadSync} from "../util/reloadSync";
+
+interface IConnectOptions {
+    id: string,
+    type?: TWS,
+    callback?: () => void,
+    msgCallback?: (data: IWebSocketData) => void
+}
 
 export class Model {
     public ws: WebSocket;
     public reqId: number;
-    /// #if !MOBILE
-    public parent: Tab;
+    private mainMessageQueue: {
+        data: string,
+        callback: (data: IWebSocketData) => void
+    }[] = [];
+
+    public parent:
+
+        /// #if !MOBILE
+        Tab;
     /// #else
     // @ts-ignore
-    public parent: any;
+    null;
     /// #endif
     public app: App;
 
     constructor(options: {
         app: App,
-        id: string,
-        type?: TWS,
-        callback?: () => void,
-        msgCallback?: (data: IWebSocketData) => void
     }) {
         this.app = options.app;
-        if (options.msgCallback) {
-            this.connect(options);
-        }
     }
 
-    private connect(options: {
-        id: string,
-        type?: TWS,
-        callback?: () => void,
-        msgCallback?: (data: IWebSocketData) => void
-    }) {
+    private processWebSocketMessage(data: string, callback: (data: IWebSocketData) => void) {
+        callback.call(this, processMessage(JSON.parse(data)));
+    }
+
+    public flushMainMessages() {
+        const messages = this.mainMessageQueue.splice(0);
+        messages.forEach((message) => {
+            try {
+                this.processWebSocketMessage(message.data, message.callback);
+            } catch (error) {
+                console.error("Failed to process queued WebSocket message:", error);
+            }
+        });
+    }
+
+    public connect(options: IConnectOptions) {
         const websocketURL = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws`;
         const ws = new WebSocket(`${websocketURL}?app=${Constants.SIYUAN_APPID}&id=${options.id}${options.type ? "&type=" + options.type : ""}`);
         ws.onopen = () => {
@@ -55,11 +73,19 @@ export class Model {
             }
         };
         ws.onmessage = (event) => {
-            if (options.msgCallback &&
-                // 等待 config 加载完成才接受推送 https://github.com/siyuan-note/siyuan/issues/17508
-                window.siyuan.config) {
-                const data = processMessage(JSON.parse(event.data));
-                options.msgCallback.call(this, data);
+            if (!options.msgCallback) {
+                return;
+            }
+            if (options.type === "main" && !window.siyuan.isReady) {
+                this.mainMessageQueue.push({
+                    data: event.data,
+                    callback: options.msgCallback,
+                });
+                return;
+            }
+            // 非主 WebSocket 在界面初始化后创建，保留配置保护以避免异常连接提前处理消息。
+            if (window.siyuan.config) {
+                this.processWebSocketMessage(event.data, options.msgCallback);
             }
         };
         ws.onclose = (ev) => {
@@ -83,11 +109,17 @@ export class Model {
                 kernelError();
             }
         };
+        if (this.ws) {
+            this.ws.onclose = null;
+            this.ws.close();
+        }
         this.ws = ws;
     }
 
     public send(cmd: string, param: Record<string, unknown>, process = false) {
-        if (!this.ws) { // Inbox 无 ws
+        if (!this.ws ||
+            this.ws.readyState === WebSocket.CLOSING ||
+            this.ws.readyState === WebSocket.CLOSED) { // Inbox 无 WebSocket，关闭中的连接不能继续发送
             return;
         }
         this.reqId = process ? 0 : Date.now();

@@ -6,7 +6,7 @@
 		"id": "20200922101913-d5yitmq",
 		"title": "图标",
 		"type": "doc",
-		"updated": "20230821210605"
+		"updated": "20260804235500"
 	},
 	"Children": [
 		{
@@ -15,7 +15,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20230418094115-f5isydz",
-				"updated": "20230418094115"
+				"updated": "20260803163440"
 			},
 			"Children": [
 				{
@@ -44,7 +44,7 @@
 			"HeadingLevel": 3,
 			"Properties": {
 				"id": "20230418094130-0tddfdk",
-				"updated": "20230418094130"
+				"updated": "20260803163440"
 			},
 			"Children": [
 				{
@@ -59,7 +59,7 @@
 			"ListData": {},
 			"Properties": {
 				"id": "20230418094130-6a2zpka",
-				"updated": "20230418095522"
+				"updated": "20260803163440"
 			},
 			"Children": [
 				{
@@ -71,7 +71,7 @@
 					},
 					"Properties": {
 						"id": "20230418094130-2slk6q2",
-						"updated": "20230418095519"
+						"updated": "20260803163440"
 					},
 					"Children": [
 						{
@@ -79,7 +79,7 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20230418094130-jzo93fs",
-								"updated": "20230418095519"
+								"updated": "20260803163440"
 							},
 							"Children": [
 								{
@@ -120,7 +120,7 @@
 								},
 								{
 									"Type": "NodeText",
-									"Data": "​ 中在线浏览社区开发者贡献的图标"
+									"Data": " ​ 中在线浏览社区开发者贡献的图标"
 								}
 							]
 						}
@@ -396,7 +396,8 @@
 			"Type": "NodeHeading",
 			"HeadingLevel": 3,
 			"Properties": {
-				"id": "20210104091325-e2imifj"
+				"id": "20210104091325-e2imifj",
+				"updated": "20260804235500"
 			},
 			"Children": [
 				{
@@ -422,7 +423,7 @@
 			},
 			"Properties": {
 				"id": "20210104091325-n2kixht",
-				"updated": "20230821210605"
+				"updated": "20260804235500"
 			},
 			"Children": [
 				{
@@ -536,7 +537,7 @@
 					},
 					"Properties": {
 						"id": "20210104091325-fkdgqym",
-						"updated": "20230821210605"
+						"updated": "20260804235500"
 					},
 					"Children": [
 						{
@@ -544,7 +545,7 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20210104091325-up46nkf",
-								"updated": "20230821210605"
+								"updated": "20260804235500"
 							},
 							"Children": [
 								{
@@ -594,7 +595,7 @@
 								},
 								{
 									"Type": "NodeText",
-									"Data": "​，具体示例请参考 github repo: siyuan-note/icon-sample"
+									"Data": "​，具体示例请参考 GitHub repo: siyuan-note/icon-sample"
 								}
 							]
 						}

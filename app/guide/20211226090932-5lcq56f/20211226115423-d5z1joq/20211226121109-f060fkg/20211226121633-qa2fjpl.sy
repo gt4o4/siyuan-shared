@@ -6,7 +6,7 @@
 		"id": "20211226121633-qa2fjpl",
 		"title": "圖示",
 		"type": "doc",
-		"updated": "20230821210641"
+		"updated": "20260804235500"
 	},
 	"Children": [
 		{
@@ -15,7 +15,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20230418094656-xyftj25",
-				"updated": "20230418094656"
+				"updated": "20260803163402"
 			},
 			"Children": [
 				{
@@ -44,7 +44,7 @@
 			"HeadingLevel": 3,
 			"Properties": {
 				"id": "20230418094656-t7xqmab",
-				"updated": "20230418094656"
+				"updated": "20260803163402"
 			},
 			"Children": [
 				{
@@ -59,7 +59,7 @@
 			"ListData": {},
 			"Properties": {
 				"id": "20230418094656-bz4b34z",
-				"updated": "20230418095512"
+				"updated": "20260803163402"
 			},
 			"Children": [
 				{
@@ -71,7 +71,7 @@
 					},
 					"Properties": {
 						"id": "20230418094656-xzkir4a",
-						"updated": "20230418095512"
+						"updated": "20260803163402"
 					},
 					"Children": [
 						{
@@ -79,7 +79,7 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20230418094656-b60gk4h",
-								"updated": "20230418095512"
+								"updated": "20260803163402"
 							},
 							"Children": [
 								{
@@ -89,7 +89,7 @@
 								{
 									"Type": "NodeTextMark",
 									"TextMarkType": "kbd",
-									"TextMarkTextContent": "設置"
+									"TextMarkTextContent": "設定"
 								},
 								{
 									"Type": "NodeText",
@@ -120,7 +120,7 @@
 								},
 								{
 									"Type": "NodeText",
-									"Data": "​ 中在線瀏覽社區開發者貢獻的圖示"
+									"Data": " ​ 中在線瀏覽社區開發者貢獻的圖示"
 								}
 							]
 						}
@@ -237,7 +237,7 @@
 								{
 									"Type": "NodeTextMark",
 									"TextMarkType": "kbd",
-									"TextMarkTextContent": "設置"
+									"TextMarkTextContent": "設定"
 								},
 								{
 									"Type": "NodeText",
@@ -329,7 +329,7 @@
 								{
 									"Type": "NodeTextMark",
 									"TextMarkType": "kbd",
-									"TextMarkTextContent": "設置"
+									"TextMarkTextContent": "設定"
 								},
 								{
 									"Type": "NodeText",
@@ -380,7 +380,7 @@
 			"HeadingLevel": 3,
 			"Properties": {
 				"id": "20211226121706-wle01ma",
-				"updated": "20211226003711"
+				"updated": "20260804235500"
 			},
 			"Children": [
 				{
@@ -397,7 +397,7 @@
 			},
 			"Properties": {
 				"id": "20211226121706-eq30hv9",
-				"updated": "20230821210641"
+				"updated": "20260804235500"
 			},
 			"Children": [
 				{
@@ -460,7 +460,7 @@
 								{
 									"Type": "NodeTextMark",
 									"TextMarkType": "kbd",
-									"TextMarkTextContent": "設置"
+									"TextMarkTextContent": "設定"
 								},
 								{
 									"Type": "NodeText",
@@ -504,7 +504,7 @@
 					},
 					"Properties": {
 						"id": "20211226121706-cxvhk6a",
-						"updated": "20230821210641"
+						"updated": "20260804235500"
 					},
 					"Children": [
 						{
@@ -512,7 +512,7 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20211226121706-v9ibyud",
-								"updated": "20230821210641"
+								"updated": "20260804235500"
 							},
 							"Children": [
 								{
@@ -553,7 +553,7 @@
 								},
 								{
 									"Type": "NodeText",
-									"Data": "​ 文件，具體示例請參考 github repo: siyuan-note/icon-sample"
+									"Data": "​ 文件，具體示例請參考 GitHub repo: siyuan-note/icon-sample"
 								}
 							]
 						}
@@ -627,7 +627,7 @@
 								{
 									"Type": "NodeTextMark",
 									"TextMarkType": "kbd",
-									"TextMarkTextContent": "設置"
+									"TextMarkTextContent": "設定"
 								},
 								{
 									"Type": "NodeText",
@@ -1337,7 +1337,7 @@
 												{
 													"Type": "NodeTextMark",
 													"TextMarkType": "kbd",
-													"TextMarkTextContent": "設置"
+													"TextMarkTextContent": "設定"
 												},
 												{
 													"Type": "NodeText",

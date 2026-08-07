@@ -18,6 +18,7 @@ package api
 
 import (
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -27,12 +28,14 @@ import (
 	"github.com/88250/lute/parse"
 	"github.com/88250/lute/render"
 	"github.com/gin-gonic/gin"
-	"github.com/siyuan-note/filelock"
 	"github.com/siyuan-note/logging"
 	"github.com/siyuan-note/siyuan/kernel/model"
 	"github.com/siyuan-note/siyuan/kernel/treenode"
 	"github.com/siyuan-note/siyuan/kernel/util"
 )
+
+// maxSpinBlockDOMBytes 限制 spinBlockDOM 输入 DOM 的最大字节数。
+const maxSpinBlockDOMBytes = 1024 * 1024
 
 func copyStdMarkdown(c *gin.Context) {
 	ret := gulu.Ret.NewResult()
@@ -88,10 +91,22 @@ func html2BlockDOM(c *gin.Context) {
 	if !util.ParseJsonArgs(arg, ret, util.BindJsonArg("dom", &dom, true, false)) {
 		return
 	}
+	// 可选 notebook 参数：指定目标加密笔记本时资源写入 box 内并加密
+	boxID := ""
+	if notebook, ok := arg["notebook"].(string); ok && notebook != "" {
+		if model.IsEncryptedBox(notebook) {
+			boxID = notebook
+		}
+	}
+	if err := holdEncryptedBoxRequest(c, boxID); err != nil {
+		ret.Code = -1
+		ret.Msg = err.Error()
+		return
+	}
 	luteEngine := util.NewLute()
 	luteEngine.SetHTMLTag2TextMark(true)
 	luteEngine.SetHTML2MarkdownAttrs([]string{"alias", "memo", "bookmark", "custom-*"})
-	tree, _ := model.HTML2Tree(dom, luteEngine)
+	tree, _ := model.HTML2Tree(dom, luteEngine, boxID)
 	if nil == tree {
 		ret.Data = "Failed to convert"
 		return
@@ -171,17 +186,35 @@ func html2BlockDOM(c *gin.Context) {
 				logging.LogWarnf("skip copying asset [%s] due to sensitive path", localPath)
 				return ast.WalkContinue
 			}
+			if encryptedBoxID := model.EncryptedRawPathBoxID(localPath); encryptedBoxID != "" {
+				logging.LogWarnf("skip copying asset [%s] from encrypted notebook [%s]", localPath, encryptedBoxID)
+				return ast.WalkContinue
+			}
 
 			name := filepath.Base(localPath)
 			ext := filepath.Ext(name)
 			name = name[0 : len(name)-len(ext)]
 			name = name + "-" + ast.NewNodeID() + ext
-			targetPath := filepath.Join(util.DataDir, "assets", name)
-			if err := filelock.Copy(localPath, targetPath); err != nil {
-				logging.LogErrorf("copy asset from [%s] to [%s] failed: %s", localPath, targetPath, err)
+
+			data, readErr := os.ReadFile(localPath)
+			if readErr != nil {
+				logging.LogErrorf("read asset [%s] failed: %s", localPath, readErr)
 				return ast.WalkStop
 			}
-			n.Tokens = gulu.Str.ToBytes("assets/" + name)
+			assetsDir := filepath.Join(util.DataDir, "assets")
+			if boxID != "" {
+				assetsDir = filepath.Join(util.DataDir, boxID, "assets")
+			}
+			storedName, storeErr := model.StoreAssetForBox(boxID, assetsDir, name, data)
+			if storeErr != nil {
+				logging.LogErrorf("store asset [%s] failed: %s", localPath, storeErr)
+				return ast.WalkStop
+			}
+			assetURL := "assets/" + storedName
+			if boxID != "" {
+				assetURL += "?box=" + boxID
+			}
+			n.Tokens = gulu.Str.ToBytes(assetURL)
 			return ast.WalkContinue
 		})
 	}
@@ -212,6 +245,12 @@ func spinBlockDOM(c *gin.Context) {
 
 	var dom string
 	if !util.ParseJsonArgs(arg, ret, util.BindJsonArg("dom", &dom, true, false)) {
+		return
+	}
+	if len(dom) > maxSpinBlockDOMBytes {
+		// 限制输入大小，避免解析超大 DOM 导致资源消耗
+		ret.Code = http.StatusRequestEntityTooLarge
+		ret.Msg = "dom input exceeds the maximum permitted size"
 		return
 	}
 	luteEngine := model.NewLute()

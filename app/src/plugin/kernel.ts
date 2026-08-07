@@ -2,6 +2,9 @@ import {fetchSyncPost} from "../util/fetch";
 
 import type {EventBus} from "./EventBus";
 
+const KERNEL_PLUGIN_START_RETRY_INTERVAL = 100;
+const KERNEL_PLUGIN_START_RETRY_COUNT = 50;
+
 export class Kernel implements IKernelPlugin {
     public state: IKernelPluginState;
     public rpc: IKernelPluginRpc;
@@ -79,41 +82,39 @@ export class Kernel implements IKernelPlugin {
     }
 
     #createRpc(): IKernelPluginRpc {
-        const self = this;
-
         const call = new Proxy({} as Record<TJsonRpcMethod, (...args: TJsonRpcMethodParams) => Promise<any>>, {
-            get(_target, method: string) {
-                return (...args: TJsonRpcMethodParams) => self.#rpcCall(method, ...args);
+            get: (_target, method: string) => {
+                return (...args: TJsonRpcMethodParams) => this.#rpcCall(method, ...args);
             }
         });
 
         const notify = new Proxy({} as Record<TJsonRpcMethod, (...args: TJsonRpcMethodParams) => void>, {
-            get(_target, method: string) {
-                return (...args: TJsonRpcMethodParams) => self.#rpcNotify(method, ...args);
+            get: (_target, method: string) => {
+                return (...args: TJsonRpcMethodParams) => this.#rpcNotify(method, ...args);
             }
         });
 
         return {
             call,
             notify,
-            batch: self.#rpcBatchCall.bind(self),
+            batch: this.#rpcBatchCall.bind(this),
             bind: (method: TJsonRpcMethod, handler: TJsonRpcHandler<void>) => {
                 const handlers = (() => {
-                    let handlers = self.#handlers.get(method);
+                    let handlers = this.#handlers.get(method);
                     if (!handlers) {
                         handlers = new Set();
-                        self.#handlers.set(method, handlers);
+                        this.#handlers.set(method, handlers);
                     }
                     return handlers;
                 })();
                 handlers.add(handler);
             },
             unbind: (method: TJsonRpcMethod, handler: TJsonRpcHandler<void>) => {
-                const handlers = self.#handlers.get(method);
+                const handlers = this.#handlers.get(method);
                 if (handlers) {
                     handlers.delete(handler);
                     if (handlers.size === 0) {
-                        self.#handlers.delete(method);
+                        this.#handlers.delete(method);
                     }
                 }
             },
@@ -155,6 +156,26 @@ export class Kernel implements IKernelPlugin {
         return Lute.NewNodeID();
     }
 
+    async #fetchRpc(body: string): Promise<any> {
+        for (let retry = 0; ; retry++) {
+            const response = await fetch(this.#rpcCallUrl, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body,
+            });
+            if (response.status === 204) {
+                return;
+            }
+
+            const data = await response.json();
+            const code = data.error?.code;
+            if ((code !== -32001 && code !== -32002) || retry >= KERNEL_PLUGIN_START_RETRY_COUNT) {
+                return data;
+            }
+            await new Promise(resolve => window.setTimeout(resolve, KERNEL_PLUGIN_START_RETRY_INTERVAL));
+        }
+    }
+
     async #initState() {
         const response = await fetchSyncPost("/api/plugin/getLoadedPlugin", { name: this.#name });
         if (this.state.code === -1 && response.data?.stateCode != null) {
@@ -165,13 +186,7 @@ export class Kernel implements IKernelPlugin {
     async #rpcCall(method: TJsonRpcMethod, ...params: TJsonRpcMethodParams): Promise<any> {
         const id = this.#generateId();
 
-        const response = await fetch(this.#rpcCallUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
-        });
-
-        const data = await response.json();
+        const data = await this.#fetchRpc(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
         if (data.error) {
             throw new JsonRpcError(data.error);
         }
@@ -179,10 +194,8 @@ export class Kernel implements IKernelPlugin {
     }
 
     #rpcNotify(method: TJsonRpcMethod, ...params: TJsonRpcMethodParams): void {
-        fetch(this.#rpcCallUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ jsonrpc: "2.0", method, params }),
+        this.#fetchRpc(JSON.stringify({ jsonrpc: "2.0", method, params })).catch((error) => {
+            console.error(`Failed to send JSON-RPC notification for method ${method}:`, error);
         });
     }
 
@@ -198,14 +211,7 @@ export class Kernel implements IKernelPlugin {
             return request;
         });
 
-        const response = await fetch(this.#rpcCallUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(requests),
-        });
-
-        const data = await response.json();
-        return data;
+        return this.#fetchRpc(JSON.stringify(requests));
     }
 
     public async init() {

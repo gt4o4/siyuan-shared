@@ -13,7 +13,7 @@ import {onPageNumberChanged} from "./pdf/app";
 /// #endif
 import {fetchPost} from "../util/fetch";
 import {setStorageVal, updateHotkeyTip} from "../protyle/util/compatibility";
-import {App} from "../index";
+import type {App} from "../index";
 import {clearOBG} from "../layout/dock/util";
 import {getDisplayName} from "../util/pathName";
 
@@ -25,7 +25,7 @@ export class Asset extends Model {
     public pdfObject: any;
 
     constructor(options: { app: App, tab: Tab, path: string, page?: number | string }) {
-        super({app: options.app, id: options.tab.id});
+        super({app: options.app});
         if (window.siyuan.config.fileTree.openFilesUseCurrentTab) {
             options.tab.headElement.classList.add("item--unupdate");
         }
@@ -94,12 +94,14 @@ export class Asset extends Model {
 
     private render(isInit = true) {
         const type = this.path.substr(this.path.lastIndexOf(".")).toLowerCase().split("?")[0];
+        // 对资源路径进行 HTML 转义后再拼入 src 属性，避免路径中包含 " 等字符导致属性逃逸引发 XSS
+        const src = Lute.EscapeHTMLStr(this.path.startsWith("file") ? this.path : document.getElementById("baseURL").getAttribute("href") + "/" + this.path);
         if (Constants.SIYUAN_ASSETS_IMAGE.includes(type)) {
-            this.element.innerHTML = `<div class="asset"><img src="${this.path.startsWith("file") ? this.path : document.getElementById("baseURL").getAttribute("href") + "/" + this.path}"></div>`;
+            this.element.innerHTML = `<div class="asset"><img src="${src}"></div>`;
         } else if (Constants.SIYUAN_ASSETS_AUDIO.includes(type)) {
-            this.element.innerHTML = `<div class="asset"><audio controls="controls" src="${this.path.startsWith("file") ? this.path : document.getElementById("baseURL").getAttribute("href") + "/" + this.path}"></audio></div>`;
+            this.element.innerHTML = `<div class="asset"><audio controls="controls" src="${src}"></audio></div>`;
         } else if (Constants.SIYUAN_ASSETS_VIDEO.includes(type)) {
-            this.element.innerHTML = `<div class="asset"><video controls="controls" src="${this.path.startsWith("file") ? this.path : document.getElementById("baseURL").getAttribute("href") + "/" + this.path}"></video></div>`;
+            this.element.innerHTML = `<div class="asset"><video controls="controls" src="${src}"></video></div>`;
         } else if (type === ".pdf") {
             /// #if !MOBILE
             if (!isInit) {
@@ -145,7 +147,7 @@ export class Asset extends Model {
       </div>
       <div id="mainContainer">
         <div class="findbar b3-menu fn__hidden doorHanger" id="findbar">
-            <input id="findInput" class="toolbarField b3-text-field" placeholder="${window.siyuan.languages.search}">
+            <input id="findInput" class="toolbarField b3-text-field" placeholder="${window.siyuan.languages.searchPlaceholder}">
             <div class="fn__space"></div>
             <button id="findPreviousButton" class="toolbarButton findPrevious b3-tooltips b3-tooltips__n" aria-label="${window.siyuan.languages.previous}">
                 <svg><use xlink:href="#iconUp"></use></svg>
@@ -297,6 +299,12 @@ export class Asset extends Model {
                 <input type="number" id="pageNumber" class="toolbarField pageNumber b3-text-field" value="1" size="4" min="1" autocomplete="off">
                 <span id="numPages"></span>
                 <div class="fn__flex-1"></div>
+                <button id="pdfHistoryBack" class="toolbarButton b3-tooltips b3-tooltips__sw" aria-label="${window.siyuan.languages.goBack}" disabled>
+                  <svg><use xlink:href="#iconBack"></use></svg>
+                </button>
+                <button id="pdfHistoryForward" class="toolbarButton b3-tooltips b3-tooltips__sw" aria-label="${window.siyuan.languages.goForward}" disabled>
+                  <svg><use xlink:href="#iconForward"></use></svg>
+                </button>
                 <span id="scaleSelectContainer" class="dropdownToolbarButton">
                   <select id="scaleSelect" class="b3-select">
                     <option id="pageAutoOption" value="auto" selected="selected">${window.siyuan.languages.pageScaleAuto}</option>

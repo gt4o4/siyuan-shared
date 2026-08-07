@@ -1,5 +1,6 @@
 productName: "SiYuan"
 appId: "org.b3log.siyuan"
+publish: null
 asar: false
 compression: "normal"
 copyright: "© 2020-present Yunnan Liandi Technology Co., Ltd."
@@ -15,6 +16,8 @@ afterPack: "./scripts/afterPack.js"
 extraFiles:
   - from: "../LICENSE"
     to: "LICENSE"
+  - from: "../THIRD_PARTY_NOTICES.md"
+    to: "THIRD_PARTY_NOTICES.md"
 win:
   icon: "src/assets/icon.ico"
   requestedExecutionLevel: "asInvoker"
@@ -59,6 +62,9 @@ extraResources:
     filter: "!**/{.DS_Store,.git,.gitignore,.idea}"
   - from: "appearance/boot"
     to: "appearance/boot"
+    filter: "!**/{.DS_Store}"
+  - from: "appearance/covers"
+    to: "appearance/covers"
     filter: "!**/{.DS_Store}"
   - from: "appearance/icons"
     to: "appearance/icons"

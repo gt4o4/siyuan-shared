@@ -1,5 +1,5 @@
 import {fetchSyncPost} from "../util/fetch";
-import {App} from "../index";
+import type {App} from "../index";
 import {Plugin} from "./index";
 /// #if !MOBILE
 import {resizeTopBar, saveLayout} from "../layout/util";
@@ -26,6 +26,8 @@ if (window.require instanceof Function) {
 const runCode = (code: string, sourceURL: string) => {
     return window.eval("(function anonymous(require, module, exports){".concat(code, "\n})\n//# sourceURL=").concat(sourceURL, "\n"));
 };
+
+const pluginLoadPromises = new WeakMap<Plugin, Promise<void>>();
 
 export const loadPlugins = async (app: App, names?: string[], init = true) => {
     const response = await fetchSyncPost("/api/petal/loadPetals", {frontend: getFrontend()});
@@ -69,12 +71,16 @@ const loadPluginJS = async (app: App, item: IPluginData) => {
         i18n: item.i18n
     }) as Plugin;
     app.plugins.push(plugin);
-    try {
-        await plugin.onload();
-    } catch (e) {
-        console.error(`plugin ${item.name} onload error:`, e);
-    }
-    await plugin.kernel.init();
+    const loadPromise = (async () => {
+        try {
+            await plugin.onload();
+        } catch (e) {
+            console.error(`plugin ${item.name} onload error:`, e);
+        }
+        await plugin.kernel.init();
+    })();
+    pluginLoadPromises.set(plugin, loadPromise);
+    await loadPromise;
     return plugin;
 };
 
@@ -151,7 +157,7 @@ export const afterLoadPlugin = (plugin: Plugin) => {
             }
             if (isMobile()) {
                 if (!window.siyuan.storage[Constants.LOCAL_PLUGINTOPUNPIN].includes(element.id)) {
-                    document.querySelector("#menuAbout").after(element);
+                    document.getElementById("menuPluginTopBar")?.after(element);
                 }
             } else if (!isWindow()) {
                 if (window.siyuan.storage[Constants.LOCAL_PLUGINTOPUNPIN].includes(element.id)) {
@@ -178,8 +184,26 @@ export const afterLoadPlugin = (plugin: Plugin) => {
     addPluginDock(plugin);
 };
 
+export const afterLayoutReady = (app: App) => {
+    app.plugins.forEach((plugin) => {
+        const loadPromise = pluginLoadPromises.get(plugin);
+        if (loadPromise) {
+            loadPromise.then(() => {
+                afterLoadPlugin(plugin);
+            });
+        } else {
+            afterLoadPlugin(plugin);
+        }
+    });
+};
+
 export const addPluginDock = (plugin: Plugin) => {
-    /// #if !MOBILE
+    /// #if MOBILE
+    // 移动端只有存在插件 dock 时才显示插件入口图标
+    if (Object.keys(plugin.docks).length > 0) {
+        document.querySelector('#sidebar [data-type="sidebar-plugin-tab"]')?.classList.remove("fn__none");
+    }
+    /// #else
     if (isWindow() || !window.siyuan.layout.leftDock) {
         return;
     }

@@ -4,14 +4,14 @@ import {setPanelFocus} from "../util";
 import {getDockByType} from "../tabUtil";
 /// #endif
 import {fetchPost, fetchSyncPost} from "../../util/fetch";
-import {updateHotkeyAfterTip} from "../../protyle/util/compatibility";
+import {isInIOS, updateHotkeyAfterTip} from "../../protyle/util/compatibility";
 import {Model} from "../Model";
 import {needSubscribe} from "../../util/needSubscribe";
 import {MenuItem} from "../../menus/Menu";
 import {confirmDialog} from "../../dialog/confirmDialog";
 import {replaceFileName} from "../../editor/rename";
 import {getDisplayName, movePathTo, pathPosix} from "../../util/pathName";
-import {App} from "../../index";
+import type {App} from "../../index";
 import {getCloudURL} from "../../config/util/about";
 import {hasClosestByClassName} from "../../protyle/util/hasClosest";
 import {escapeHtml} from "../../util/escape";
@@ -25,7 +25,7 @@ export class Inbox extends Model {
     private data: { [key: string]: IInbox } = {};
 
     constructor(app: App, tab: Tab | Element) {
-        super({app, id: tab.id});
+        super({app});
         if (tab instanceof Element) {
             this.element = tab;
         } else {
@@ -360,7 +360,7 @@ ${data.shorthandContent}
         ${window.siyuan.languages.inboxTip}
     </li>
     <li class="b3-list--empty">
-        ${window.siyuan.config.system.container === "ios" ? window.siyuan.languages._kernel[122] : window.siyuan.languages._kernel[29].replaceAll("${accountServer}", getCloudURL(""))}
+        ${isInIOS() ? window.siyuan.languages._kernel[295] : window.siyuan.languages._kernel[29].replaceAll("${accountServer}", getCloudURL(""))}
     </li>
 </ul>`;
             loadingElement.classList.add("fn__none");

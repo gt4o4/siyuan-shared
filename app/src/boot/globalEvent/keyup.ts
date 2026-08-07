@@ -3,7 +3,7 @@ import {escapeHtml} from "../../util/escape";
 import {openCard} from "../../card/openCard";
 import {getDockByType} from "../../layout/tabUtil";
 import {getAllTabs} from "../../layout/getAll";
-import {App} from "../../index";
+import type {App} from "../../index";
 import {Constants} from "../../constants";
 import {matchHotKey} from "../../protyle/util/hotKey";
 import {isWindow} from "../../util/functions";
@@ -12,6 +12,7 @@ export const windowKeyUp = (app: App, event: KeyboardEvent) => {
     window.siyuan.ctrlIsPressed = false;
     window.siyuan.shiftIsPressed = false;
     window.siyuan.altIsPressed = false;
+    document.body.classList.remove("body--shift-pressed");
     const switchDialog = window.siyuan.dialogs.find(item => {
         if (item.element.getAttribute("data-key") === Constants.DIALOG_SWITCHTAB) {
             return true;

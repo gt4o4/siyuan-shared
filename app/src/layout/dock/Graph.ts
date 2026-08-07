@@ -10,9 +10,10 @@ import {fetchPost} from "../../util/fetch";
 import {openFileById} from "../../editor/util";
 import {updateHotkeyAfterTip} from "../../protyle/util/compatibility";
 import {openGlobalSearch} from "../../search/util";
-import {App} from "../../index";
+import type {App} from "../../index";
 import {checkFold} from "../../util/noRelyPCFunction";
 import {Editor} from "../../editor";
+import {getDocDisplayName, isEncryptedBox} from "../../util/pathName";
 
 declare const vis: any;
 
@@ -24,6 +25,7 @@ export class Graph extends Model {
     private network: any;
     public blockId: string; // "local" / "pin" 必填
     public rootId: string; // "local" 必填
+    public notebookId: string;
     public graphData: {
         nodes: { box: string, id: string, path: string, type: string, color: IObject }[],
         links: Record<string, unknown>[],
@@ -36,58 +38,20 @@ export class Graph extends Model {
         tab: Tab
         blockId?: string
         rootId?: string
+        notebookId?: string
         type: "local" | "pin" | "global"
     }) {
-        super({
-            app: options.app,
+        super({app: options.app});
+        this.connect({
             id: options.tab.id,
             type: "graph",
-            callback() {
-                if (this.type === "local") {
-                    fetchPost("/api/block/checkBlockExist", {id: this.blockId}, existResponse => {
-                        if (!existResponse.data) {
-                            this.parent.parent.removeTab(this.parent.id);
-                        }
-                    });
-                }
-            },
-            msgCallback(data) {
-                if (data) {
-                    switch (data.cmd) {
-                        case "mount":
-                            if (this.type === "global" && data.code !== 1) {
-                                this.searchGraph(false);
-                            }
-                            break;
-                        case "rename":
-                            if (this.graphData && data.data.box === this.graphData.box && this.rootId === data.data.id) {
-                                this.searchGraph(false);
-                                if (this.type === "local") {
-                                    this.parent.updateTitle(data.data.title);
-                                }
-                            }
-                            if (this.type === "global") {
-                                this.searchGraph(false);
-                            }
-                            break;
-                        case "closeBox":
-                        case "removeBox":
-                            if (this.type === "local" && this.graphData && this.graphData.box === data.data.box) {
-                                this.parent.parent.removeTab(this.parent.id);
-                            }
-                            break;
-                        case "removeDoc":
-                            if (this.type === "local" && data.data.ids.includes(this.rootId)) {
-                                this.parent.parent.removeTab(this.parent.id);
-                            }
-                            break;
-                    }
-                }
-            }
+            callback: this.handleCallback.bind(this),
+            msgCallback: this.handleMsgCallback.bind(this)
         });
         this.element = options.tab.panelElement;
         this.blockId = options.blockId;
         this.rootId = options.rootId;
+        this.notebookId = options.notebookId || "";
         this.type = options.type;
 
         this.element.classList.add("graph", "file-tree", this.type === "global" ? "sy__globalGraph" : "sy__graph", "dockPanel");
@@ -267,7 +231,7 @@ export class Graph extends Model {
         }
         this.element.innerHTML = `<div class="block__icons"> 
     <div class="block__logo fn__flex-1">${this.type === "global" ? window.siyuan.languages.globalGraph : window.siyuan.languages.graphView}</div>
-    <input class="b3-text-field search__label fn__size200 fn__none" placeholder="${window.siyuan.languages.search}" />
+    <input class="b3-text-field search__label fn__size200 fn__none" placeholder="${window.siyuan.languages.searchPlaceholder}" />
     <span data-type="search" class="block__icon ariaLabel" data-position="north" aria-label="${window.siyuan.languages.search}"><svg><use xlink:href='#iconFilter'></use></svg></span>
     <span class="fn__space"></span>
     <span data-type="refresh" class="block__icon ariaLabel" data-position="north" aria-label="${window.siyuan.languages.refresh}"><svg><use xlink:href='#iconRefresh'></use></svg></span>
@@ -327,11 +291,13 @@ export class Graph extends Model {
                         this.searchGraph(false, undefined, true);
                     } else if (dataType === "fullscreen") {
                         fullscreen(this.element, target);
-                        const minElement = this.element.querySelector('.block__icons .block__icon[data-type="min"]');
+                        const minElement = this.element.querySelector('.block__icons .block__icon[data-type="min"]') as HTMLElement;
                         if (this.element.className.includes("fullscreen")) {
+                            minElement.style.transition = "none";
                             minElement.classList.add("fn__none");
                             minElement.previousElementSibling.classList.add("fn__none");
                         } else {
+                            minElement.style.transition = "";
                             minElement.classList.remove("fn__none");
                             minElement.previousElementSibling.classList.remove("fn__none");
                         }
@@ -372,6 +338,50 @@ export class Graph extends Model {
             });
         });
         this.searchGraph(options.type !== "global");
+    }
+
+    private handleCallback() {
+        if (this.type === "local") {
+            fetchPost("/api/block/checkBlockExist", {id: this.blockId}, existResponse => {
+                if (!existResponse.data) {
+                    this.parent.parent.removeTab(this.parent.id);
+                }
+            });
+        }
+    }
+
+    private handleMsgCallback(data: IWebSocketData) {
+        if (data) {
+            switch (data.cmd) {
+                case "mount":
+                    if (this.type === "global" && data.code !== 1) {
+                        this.searchGraph(false);
+                    }
+                    break;
+                case "rename":
+                    if (this.graphData && data.data.box === this.graphData.box && this.rootId === data.data.id) {
+                        this.searchGraph(false);
+                        if (this.type === "local") {
+                            this.parent.updateTitle(getDocDisplayName(data.data.title, data.data.empty));
+                        }
+                    }
+                    if (this.type === "global") {
+                        this.searchGraph(false);
+                    }
+                    break;
+                case "closeBox":
+                case "removeBox":
+                    if (this.type === "local" && this.graphData && this.graphData.box === data.data.box) {
+                        this.parent.parent.removeTab(this.parent.id);
+                    }
+                    break;
+                case "removeDoc":
+                    if (this.type === "local" && data.data.ids.includes(this.rootId)) {
+                        this.parent.parent.removeTab(this.parent.id);
+                    }
+                    break;
+            }
+        }
     }
 
     private reset(conf: IGraphCommon & ({ dailyNote: boolean } | { minRefs: number, dailyNote: boolean })) {
@@ -464,6 +474,7 @@ export class Graph extends Model {
                 type: this.type, // 用于如下场景：当打开文档A的关系图、关系图、文档A后刷新，由于防止请求重复处理，文档A关系图无法渲染。
                 k: this.inputElement.value,
                 id: id || this.blockId,
+                notebook: isEncryptedBox(this.notebookId) ? this.notebookId : undefined,
                 conf: {
                     type,
                     d3,
@@ -471,6 +482,11 @@ export class Graph extends Model {
                 },
             }, response => {
                 element.classList.remove("fn__rotate");
+                if (response.code !== 0) {
+                    this.graphData = undefined;
+                    this.onGraph(false);
+                    return;
+                }
                 if (id) {
                     this.blockId = id;
                 }

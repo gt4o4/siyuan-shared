@@ -118,6 +118,9 @@ func StartFreeTrial() (err error) {
 		logging.LogErrorf("start free trial failed: %d", resp.StatusCode)
 		return ErrFailedToConnectCloudServer
 	}
+	if -2 == requestResult.Code { // 已经试用订阅过
+		return errors.New(Conf.Language(298))
+	}
 	if 0 != requestResult.Code {
 		return errors.New(requestResult.Msg)
 	}
@@ -274,7 +277,7 @@ func refreshCheckDownloadInstallPkg() {
 	defer logging.Recover()
 
 	time.Sleep(3 * time.Minute)
-	checkDownloadInstallPkg()
+	checkDownloadInstallPkg(true)
 }
 
 func refreshAnnouncement() {
@@ -328,6 +331,10 @@ func refreshAnnouncement() {
 }
 
 func RefreshUser(token string) {
+	previousUserID := ""
+	if previousUser := Conf.GetUser(); nil != previousUser {
+		previousUserID = previousUser.UserId
+	}
 	threeDaysAfter := util.CurrentTimeMillis() + 1000*60*60*24*3
 	if "" == token {
 		user := Conf.GetUser()
@@ -335,6 +342,9 @@ func RefreshUser(token string) {
 			user = loadUserFromConf()
 			if nil != user {
 				Conf.SetUser(user)
+				if previousUserID != user.UserId {
+					refreshLANSyncManager()
+				}
 			}
 		}
 		if nil == user {
@@ -389,6 +399,9 @@ Net:
 	data, _ := gulu.JSON.MarshalJSON(user)
 	Conf.UserData = util.AESEncrypt(string(data))
 	Conf.Save()
+	if previousUserID != user.UserId {
+		refreshLANSyncManager()
+	}
 
 	if elapsed := time.Since(start).Milliseconds(); 3000 < elapsed {
 		logging.LogInfof("get cloud user elapsed [%dms]", elapsed)
@@ -578,6 +591,10 @@ func getUser(token string) (*conf.User, error) {
 
 func UseActivationcode(code string) (err error) {
 	code = util.RemoveInvalid(code)
+	code = strings.TrimSpace(code)
+	if "" == code {
+		return errors.New(Conf.Language(294))
+	}
 	requestResult := gulu.Ret.NewResult()
 	request := httpclient.NewCloudRequest30s()
 	resp, err := request.
@@ -601,6 +618,12 @@ func UseActivationcode(code string) (err error) {
 
 func CheckActivationcode(code string) (retCode int, msg string) {
 	code = util.RemoveInvalid(code)
+	code = strings.TrimSpace(code)
+	if "" == code {
+		retCode = 1
+		msg = Conf.Language(294)
+		return
+	}
 	retCode = 1
 	requestResult := gulu.Ret.NewResult()
 	request := httpclient.NewCloudRequest30s()
@@ -627,9 +650,13 @@ func CheckActivationcode(code string) (retCode int, msg string) {
 }
 
 func Login(userName, password, captcha string, cloudRegion int) (ret *gulu.Result) {
+	previousCloudRegion := util.CurrentCloudRegion
 	Conf.CloudRegion = cloudRegion
 	Conf.Save()
 	util.CurrentCloudRegion = cloudRegion
+	if previousCloudRegion != cloudRegion {
+		refreshLANSyncManager()
+	}
 
 	result := map[string]any{}
 	request := httpclient.NewCloudRequest30s()
@@ -658,7 +685,7 @@ func Login(userName, password, captcha string, cloudRegion int) (ret *gulu.Resul
 		Data: map[string]any{
 			"userName":    result["userName"],
 			"token":       result["token"],
-			"needCaptcha": result["needCaptcha"],
+			"needCaptcha": result["needCaptcha"], // 值为 user id
 		},
 	}
 	if -1 == ret.Code {
@@ -683,7 +710,11 @@ func Login2fa(token, code string) (map[string]any, error) {
 }
 
 func LogoutUser() {
+	hadUser := nil != Conf.GetUser()
 	Conf.UserData = ""
 	Conf.SetUser(nil)
 	Conf.Save()
+	if hadUser {
+		refreshLANSyncManager()
+	}
 }

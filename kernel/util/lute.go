@@ -17,6 +17,7 @@
 package util
 
 import (
+	"html"
 	"strings"
 
 	"github.com/88250/lute"
@@ -34,17 +35,19 @@ var MarkdownSettings = &Markdown{
 	InlineMath:          true,
 	InlineStrikethrough: true,
 	InlineMark:          true,
+	CodeBlockMiddleDot:  new(true),
 }
 
 type Markdown struct {
-	InlineAsterisk      bool `json:"inlineAsterisk"`      // 是否启用行级 * 语法
-	InlineUnderscore    bool `json:"inlineUnderscore"`    // 是否启用行级 _ 语法
-	InlineSup           bool `json:"inlineSup"`           // 是否启用行级上标
-	InlineSub           bool `json:"inlineSub"`           // 是否启用行级下标
-	InlineTag           bool `json:"inlineTag"`           // 是否启用行级标签
-	InlineMath          bool `json:"inlineMath"`          // 是否启用行级公式
-	InlineStrikethrough bool `json:"inlineStrikethrough"` // 是否启用行级删除线
-	InlineMark          bool `json:"inlineMark"`          // 是否启用行级标记
+	InlineAsterisk      bool  `json:"inlineAsterisk"`      // 是否启用行级 * 语法
+	InlineUnderscore    bool  `json:"inlineUnderscore"`    // 是否启用行级 _ 语法
+	InlineSup           bool  `json:"inlineSup"`           // 是否启用行级上标
+	InlineSub           bool  `json:"inlineSub"`           // 是否启用行级下标
+	InlineTag           bool  `json:"inlineTag"`           // 是否启用行级标签
+	InlineMath          bool  `json:"inlineMath"`          // 是否启用行级公式
+	InlineStrikethrough bool  `json:"inlineStrikethrough"` // 是否启用行级删除线
+	InlineMark          bool  `json:"inlineMark"`          // 是否启用行级标记
+	CodeBlockMiddleDot  *bool `json:"codeBlockMiddleDot"`  // 是否启用中点代码块快捷输入
 }
 
 func NewLute() (ret *lute.Lute) {
@@ -84,6 +87,7 @@ func NewLute() (ret *lute.Lute) {
 	ret.SetDataTask(true)
 	ret.SetArbitraryTaskListItemMarker(true)
 	ret.SetExportNormalizeTaskListMarker(false) // 只有导出 Markdown 的场景才将其设置为 true
+	ret.SetEnsureListItemParagraph(true)        // 空列表项下创建子列表前补一个空段落
 	return
 }
 
@@ -112,6 +116,25 @@ func NewStdLute() (ret *lute.Lute) {
 	ret.SetGFMStrikethrough(MarkdownSettings.InlineStrikethrough)
 	ret.SetGFMStrikethrough1(false)
 	return
+}
+
+func ConvertIframeToLink(htmlStr string) string {
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(htmlStr))
+	if err != nil {
+		logging.LogErrorf("parse HTML for iframe conversion failed: %s", err)
+		return htmlStr
+	}
+
+	doc.Find("iframe").Each(func(i int, s *goquery.Selection) {
+		if src, exists := s.Attr("src"); exists && strings.TrimSpace(src) != "" {
+			escapedSrc := html.EscapeString(src)
+			s.AfterHtml(`<a href="` + escapedSrc + `" target="_blank">` + escapedSrc + `</a>`)
+		}
+		s.Remove()
+	})
+
+	ret, _ := doc.Find("body").Html()
+	return ret
 }
 
 func LinkTarget(htmlStr, linkBase string) (ret string) {

@@ -9,6 +9,15 @@ html {
   box-sizing: border-box;
 }
 
+// 声明当前配色方案，用于修正 iOS 深色模式下输入法候选词高亮项背景丢失等问题 https://github.com/siyuan-note/siyuan/issues/17894
+:root[data-theme-mode="dark"] {
+  color-scheme: dark;
+}
+
+:root[data-theme-mode="light"] {
+  color-scheme: light;
+}
+
 body {
   text-rendering: optimizeLegibility;
   margin: 0;
@@ -55,7 +64,7 @@ body {
   }
 
   &.body--win32 {
-    --b3-toolbar-left-mac: 0;
+    --b3-toolbar-left-mac: 8px;
     -webkit-font-smoothing: auto;
 
     .toolbar {
@@ -65,7 +74,6 @@ body {
     .fullscreen {
       & > .protyle-breadcrumb,
       & > .block__icons {
-        padding-left: 10px;
         padding-right: 126px;
       }
 
@@ -99,8 +107,8 @@ body {
     }
   }
 
-  &.body--fullscreen:not(.body--win32):not(.body--window) .toolbar {
-    padding-left: 5px;
+  &.body--fullscreen {
+    --b3-toolbar-left-mac: 5px;
   }
 
   &.body--maximize,
@@ -114,16 +122,29 @@ body {
     }
   }
 
+  &:not(.body--toolbar-hide):not(.body--window) {
+    .fullscreen > .protyle-breadcrumb,
+    .fullscreen > .block__icons {
+      min-height: 32px;
+    }
+  }
+
   &.body--toolbar-hide {
 
     #dockLeft, #dockRight {
-      padding-top: 42px;
+      height: calc(100% - 42px);
+      margin-top: 42px;
     }
 
     .toolbar {
       height: 42px;
       position: absolute;
       width: 100%;
+
+      & > :not(#drag) {
+        position: relative;
+        z-index: 7;
+      }
     }
 
     .layout__dockl:not(.layout--float),
@@ -140,7 +161,7 @@ body {
     }
 
     .layout__wnd--center .layout-tab-bar .item {
-      margin: 7px 4px 6px 4px;
+      margin: 6px 4px;
     }
 
     .toolbar #drag {
@@ -167,7 +188,8 @@ body {
       }
     }
 
-    .fullscreen > .protyle-breadcrumb, .fullscreen > .block__icons {
+    .fullscreen > .protyle-breadcrumb,
+    .fullscreen > .block__icons {
       padding-left: var(--b3-toolbar-left-mac);
     }
 
@@ -325,10 +347,6 @@ svg {
 
 line, circle {
   transition: fill .15s ease-in-out;
-}
-
-circle {
-  cursor: pointer;
 }
 
 blockquote {

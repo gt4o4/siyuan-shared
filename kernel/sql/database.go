@@ -18,8 +18,10 @@ package sql
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -43,6 +45,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/siyuan-note/eventbus"
 	"github.com/siyuan-note/logging"
+	"github.com/siyuan-note/siyuan/kernel/search"
 	"github.com/siyuan-note/siyuan/kernel/treenode"
 	"github.com/siyuan-note/siyuan/kernel/util"
 )
@@ -53,6 +56,18 @@ var (
 	assetContentDB *sql.DB
 
 	initDatabaseLock = sync.RWMutex{}
+
+	// encryptedDBs 维护已打开的加密笔记本独立 db 连接，按 boxID 索引。
+	// UnlockBox 时打开并注册，LockBox/Unmount 时关闭并移除。
+	encryptedDBs = &sync.Map{} // boxID -> *sql.DB
+
+	// IsEncryptedBoxFn 由 model 层注入，用于判断 boxID 是否为加密笔记本。
+	// sql 包不直接 import model（循环依赖），路由函数据此 fail-closed：
+	// 加密笔记本未解锁时绝不回退全局库，避免加密笔记本索引污染全局明文库。
+	IsEncryptedBoxFn func(boxID string) bool
+
+	// IsBoxUnlockedFn 由 model 层注入，用于在读取明文缓存前确认加密笔记本仍处于解锁状态。
+	IsBoxUnlockedFn func(boxID string) bool
 )
 
 func init() {
@@ -63,7 +78,13 @@ func init() {
 
 	sql.Register("sqlite3_extended", &sqlite3.SQLiteDriver{
 		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
-			return conn.RegisterFunc("regexp", regex, true)
+			if err := conn.RegisterFunc("regexp", regex, true); err != nil {
+				return err
+			}
+			normalizeSearchText := func(text string, caseSensitive, hanSensitive int) string {
+				return search.NormalizeSearchText(text, 0 != caseSensitive, 0 != hanSensitive)
+			}
+			return conn.RegisterFunc("search_normalize", normalizeSearchText, true)
 		},
 	})
 }
@@ -80,7 +101,7 @@ func initDatabase(forceRebuild bool) {
 	disableCache()
 	defer enableCache()
 
-	util.IncBootProgress(2, "Initializing database...")
+	util.IncBootProgress(2, util.BootL10n(301, "Initializing database..."))
 
 	if forceRebuild {
 		ClearQueue()
@@ -95,6 +116,17 @@ func initDatabase(forceRebuild bool) {
 	if !forceRebuild {
 		// 检查数据库结构版本，如果版本不一致的话说明改过表结构，需要重建
 		if util.DatabaseVer == getDatabaseVer() {
+			// 老库版本一致但缺少新加的列时，做幂等迁移（不升 DatabaseVer，避免全库重建丢失已嵌入向量）
+			migrateBlockEmbeddingsSchema()
+			if err := ensureBlocksDocHPathIndex(db); err != nil {
+				logging.LogFatalf(logging.ExitCodeUnavailableDatabase, "create document hpath index failed: %s", err)
+			}
+			if err := ensureRefsDefIndexes(db); err != nil {
+				logging.LogFatalf(logging.ExitCodeUnavailableDatabase, "create refs definition indexes failed: %s", err)
+			}
+			if err := cleanupInvalidRefs(db); err != nil {
+				logging.LogErrorf("cleanup invalid refs failed: %s", err)
+			}
 			recoverIndexQueue()
 			return
 		}
@@ -104,8 +136,13 @@ func initDatabase(forceRebuild bool) {
 
 	// 不存在库或者版本不一致都会走到这里
 
+	closeDatabase()
+	treenode.CloseDatabase()
+	util.RemoveDatabaseFile(util.DBPath)
+	initDBConnection()
 	initDBTables()
-	vacuum()
+	util.RemoveDatabaseFile(util.BlockTreeDBPath)
+	treenode.InitBlockTree(true)
 
 	logging.LogInfof("reinitialized database [%s]", util.DBPath)
 }
@@ -148,6 +185,10 @@ func initDBTables() {
 	_, err = db.Exec("CREATE INDEX idx_blocks_root_id_id_hash ON blocks(root_id, id, hash)")
 	if err != nil {
 		logging.LogFatalf(logging.ExitCodeUnavailableDatabase, "create index [idx_blocks_root_id_id_hash] failed: %s", err)
+	}
+
+	if err = ensureBlocksDocHPathIndex(db); err != nil {
+		logging.LogFatalf(logging.ExitCodeUnavailableDatabase, "create document hpath index failed: %s", err)
 	}
 
 	if err = initFTSBlocks(); err != nil {
@@ -215,6 +256,9 @@ func initDBTables() {
 	if err != nil {
 		logging.LogFatalf(logging.ExitCodeUnavailableDatabase, "create table [refs] failed: %s", err)
 	}
+	if err = ensureRefsDefIndexes(db); err != nil {
+		logging.LogFatalf(logging.ExitCodeUnavailableDatabase, "create refs definition indexes failed: %s", err)
+	}
 
 	_, err = db.Exec("DROP TABLE IF EXISTS file_annotation_refs")
 	if err != nil {
@@ -229,7 +273,7 @@ func initDBTables() {
 	if err != nil {
 		logging.LogFatalf(logging.ExitCodeUnavailableDatabase, "drop table [block_embeddings] failed: %s", err)
 	}
-	_, err = db.Exec("CREATE TABLE block_embeddings (id TEXT PRIMARY KEY, root_id TEXT, box TEXT, path TEXT, embedding BLOB, model TEXT, content_len INTEGER, updated TEXT)")
+	_, err = db.Exec("CREATE TABLE block_embeddings (id TEXT PRIMARY KEY, root_id TEXT, box TEXT, path TEXT, embedding BLOB, model TEXT, content_len INTEGER, updated TEXT, fail_count INTEGER NOT NULL DEFAULT 0, last_tried INTEGER NOT NULL DEFAULT 0, ignored_type INTEGER NOT NULL DEFAULT 0)")
 	if err != nil {
 		logging.LogFatalf(logging.ExitCodeUnavailableDatabase, "create table [block_embeddings] failed: %s", err)
 	}
@@ -244,16 +288,23 @@ func initFTSBlocks() (err error) {
 	if err != nil {
 		return
 	}
-	_, err = db.Exec("CREATE VIRTUAL TABLE blocks_fts USING fts5(id UNINDEXED, parent_id UNINDEXED, root_id UNINDEXED, hash UNINDEXED, box UNINDEXED, path UNINDEXED, hpath UNINDEXED, name, alias, memo, tag, content, fcontent, markdown UNINDEXED, length UNINDEXED, type UNINDEXED, subtype UNINDEXED, ial, sort UNINDEXED, created UNINDEXED, updated UNINDEXED, tokenize=\"siyuan\")")
-	if err != nil {
+	// 采用 external content 模式：blocks_fts 不再物理存储列值，仅维护倒排索引，
+	// 原文由 content 指向的 blocks 表提供，按 content_rowid（blocks 的隐式 rowid）回表取值。
+	// 因此 FTS 行的 rowid 必须与 blocks 行的 rowid 严格一致，所有写路径需显式传 rowid。
+	_, err = db.Exec("CREATE VIRTUAL TABLE blocks_fts USING fts5(id UNINDEXED, parent_id UNINDEXED, root_id UNINDEXED, hash UNINDEXED, box UNINDEXED, path UNINDEXED, hpath UNINDEXED, name, alias, memo, tag, content, fcontent, markdown UNINDEXED, length UNINDEXED, type UNINDEXED, subtype UNINDEXED, ial, sort UNINDEXED, created UNINDEXED, updated UNINDEXED, content='blocks', content_rowid='rowid', tokenize=\"" + ftsTokenize() + "\")")
+	return
+}
+
+func RebuildFTSIndex() (err error) {
+	if err = initFTSBlocks(); err != nil {
 		return
 	}
 
-	_, err = db.Exec("DROP TABLE IF EXISTS blocks_fts_case_insensitive")
-	if err != nil {
-		return
-	}
-	_, err = db.Exec("CREATE VIRTUAL TABLE blocks_fts_case_insensitive USING fts5(id UNINDEXED, parent_id UNINDEXED, root_id UNINDEXED, hash UNINDEXED, box UNINDEXED, path UNINDEXED, hpath UNINDEXED, name, alias, memo, tag, content, fcontent, markdown UNINDEXED, length UNINDEXED, type UNINDEXED, subtype UNINDEXED, ial, sort UNINDEXED, created UNINDEXED, updated UNINDEXED, tokenize=\"siyuan case_insensitive\")")
+	// external content 模式下使用 'rebuild' 命令重建索引：
+	// FTS5 会扫描 blocks 表，并用 blocks 的 rowid 作为 FTS rowid，保证两者对齐。
+	// 不能再用 INSERT...SELECT FROM blocks，否则 FTS 会自分配 rowid 导致与 blocks 脱钩。
+	stmt := "INSERT INTO blocks_fts(blocks_fts) VALUES('rebuild')"
+	_, err = db.Exec(stmt)
 	return
 }
 
@@ -263,9 +314,9 @@ func initDBConnection() {
 	util.LogDatabaseSize(util.DBPath)
 	dsn := util.DBPath + "?_journal_mode=WAL" +
 		"&_synchronous=OFF" +
-		"&_mmap_size=2684354560" +
+		"&_mmap_size=4294967296" +
 		"&_secure_delete=OFF" +
-		"&_cache_size=-20480" +
+		"&_cache_size=-128000" +
 		"&_page_size=32768" +
 		"&_busy_timeout=7000" +
 		"&_ignore_check_constraints=ON" +
@@ -315,9 +366,9 @@ func initHistoryDBConnection() {
 	util.LogDatabaseSize(util.HistoryDBPath)
 	dsn := util.HistoryDBPath + "?_journal_mode=WAL" +
 		"&_synchronous=OFF" +
-		"&_mmap_size=2684354560" +
+		"&_mmap_size=4294967296" +
 		"&_secure_delete=OFF" +
-		"&_cache_size=-20480" +
+		"&_cache_size=-128000" +
 		"&_page_size=32768" +
 		"&_busy_timeout=7000" +
 		"&_ignore_check_constraints=ON" +
@@ -389,9 +440,9 @@ func initAssetContentDBConnection() {
 	util.LogDatabaseSize(util.AssetContentDBPath)
 	dsn := util.AssetContentDBPath + "?_journal_mode=WAL" +
 		"&_synchronous=OFF" +
-		"&_mmap_size=2684354560" +
+		"&_mmap_size=4294967296" +
 		"&_secure_delete=OFF" +
-		"&_cache_size=-20480" +
+		"&_cache_size=-128000" +
 		"&_page_size=32768" +
 		"&_busy_timeout=7000" +
 		"&_ignore_check_constraints=ON" +
@@ -431,6 +482,7 @@ func initAssetContentDBTables() {
 
 var (
 	caseSensitive  bool
+	hanSensitive   bool
 	indexAssetPath bool
 )
 
@@ -448,6 +500,24 @@ func SetCaseSensitive(b bool) {
 	}
 
 	util.SearchCaseSensitive = b
+}
+
+func SetHanSensitive(b bool) {
+	hanSensitive = b
+	util.SearchHanSensitive = b
+}
+
+// ftsTokenize 返回 blocks FTS 表的 tokenize 参数。
+// 分词器参数在 CREATE VIRTUAL TABLE 时固化，切换区分大小写或区分繁简后需要重建索引。
+func ftsTokenize() string {
+	ret := "siyuan"
+	if !caseSensitive {
+		ret += " case_insensitive"
+	}
+	if !hanSensitive {
+		ret += " han_insensitive"
+	}
+	return ret
 }
 
 func SetIndexAssetPath(b bool) {
@@ -523,7 +593,7 @@ func buildRef(tree *parse.Tree, refNode *ast.Node) *Ref {
 
 	defBlockID, text, _ := treenode.GetBlockRef(refNode)
 	var defBlockParentID, defBlockRootID, defBlockPath string
-	defBlock := treenode.GetBlockTree(defBlockID)
+	defBlock := treenode.GetBlockTreeInBox(defBlockID, tree.Box)
 	if nil != defBlock {
 		defBlockParentID = defBlock.ParentID
 		defBlockRootID = defBlock.RootID
@@ -549,7 +619,7 @@ func buildRef(tree *parse.Tree, refNode *ast.Node) *Ref {
 func buildEmbedRef(tree *parse.Tree, embedNode *ast.Node) *Ref {
 	defBlockID := getEmbedRef(embedNode)
 	var defBlockParentID, defBlockRootID, defBlockPath string
-	defBlock := treenode.GetBlockTree(defBlockID)
+	defBlock := treenode.GetBlockTreeInBox(defBlockID, tree.Box)
 	if nil != defBlock {
 		defBlockParentID = defBlock.ParentID
 		defBlockRootID = defBlock.RootID
@@ -892,13 +962,13 @@ func buildBlockFromNode(n *ast.Node, tree *parse.Tree) (block *Block, attributes
 		if !treenode.IsNodeOCRed(n) {
 			util.PushNodeOCRQueue(n)
 		}
-		content = NodeStaticContent(n, nil, true, indexAssetPath, true)
+		content = nodeStaticContent(n, nil, true, indexAssetPath, true, true)
 
 		fc := treenode.FirstLeafBlock(n)
 		if !treenode.IsNodeOCRed(fc) {
 			util.PushNodeOCRQueue(fc)
 		}
-		fcontent = NodeStaticContent(fc, nil, true, false, true)
+		fcontent = nodeStaticContent(fc, nil, true, false, true, true)
 
 		parentID = n.Parent.ID
 		if h := treenode.HeadingParent(n); nil != h { // 如果在标题块下方，则将标题块作为父节点
@@ -910,7 +980,7 @@ func buildBlockFromNode(n *ast.Node, tree *parse.Tree) (block *Block, attributes
 		if !treenode.IsNodeOCRed(n) {
 			util.PushNodeOCRQueue(n)
 		}
-		content = NodeStaticContent(n, nil, true, indexAssetPath, true)
+		content = nodeStaticContent(n, nil, true, indexAssetPath, true, true)
 
 		parentID = n.Parent.ID
 		if h := treenode.HeadingParent(n); nil != h {
@@ -979,8 +1049,8 @@ func tagFromNode(node *ast.Node) (ret string) {
 
 	if ast.NodeDocument == node.Type {
 		tagIAL := html.UnescapeString(node.IALAttr("tags"))
-		tags := strings.Split(tagIAL, ",")
-		for _, t := range tags {
+		tags := strings.SplitSeq(tagIAL, ",")
+		for t := range tags {
 			t = strings.TrimSpace(t)
 			if "" == t {
 				continue
@@ -1062,45 +1132,36 @@ func deleteBlocksByIDs(tx *sql.Tx, ids []string) (err error) {
 		return
 	}
 
+	stmt = "DELETE FROM blocks_fts WHERE ROWID IN (" + strings.Join(rowIDs, ",") + ")"
+	if err = execStmtTx(tx, stmt); err != nil {
+		return
+	}
+
 	stmt = "DELETE FROM blocks WHERE ROWID IN (" + strings.Join(rowIDs, ",") + ")"
 	if err = execStmtTx(tx, stmt); err != nil {
 		return
 	}
 
-	if caseSensitive {
-		stmt = "DELETE FROM blocks_fts WHERE ROWID IN (" + strings.Join(rowIDs, ",") + ")"
-		if err = execStmtTx(tx, stmt); err != nil {
-			return
-		}
-	} else {
-		stmt = "DELETE FROM blocks_fts_case_insensitive WHERE ROWID IN (" + strings.Join(rowIDs, ",") + ")"
-		if err = execStmtTx(tx, stmt); err != nil {
-			return
-		}
-	}
-
+	// block_embeddings 表在加密 db 中不存在（加密笔记本不参与嵌入向量化），对该表不存在的错误容错
 	stmt = "DELETE FROM block_embeddings WHERE id IN (" + strings.Join(ftsIDs, ",") + ")"
-	if err = execStmtTx(tx, stmt); err != nil {
-		return
+	if _, embedErr := tx.Exec(stmt); embedErr != nil {
+		if !strings.Contains(embedErr.Error(), "no such table") {
+			err = embedErr // 非"表不存在"的真实错误照常返回
+		}
 	}
 	return
 }
 
 func deleteBlocksByBoxTx(tx *sql.Tx, box string) (err error) {
-	stmt := "DELETE FROM blocks WHERE box = ?"
+	// external content 模式下 FTS 行需按 rowid 删除，rowid 来自 blocks 表，
+	// 因此必须先删 FTS（此时 blocks 尚在），再删 blocks，否则子查询查不到 rowid。
+	stmt := "DELETE FROM blocks_fts WHERE rowid IN (SELECT rowid FROM blocks WHERE box = ?)"
 	if err = execStmtTx(tx, stmt, box); err != nil {
 		return
 	}
-	if caseSensitive {
-		stmt = "DELETE FROM blocks_fts WHERE box = ?"
-		if err = execStmtTx(tx, stmt, box); err != nil {
-			return
-		}
-	} else {
-		stmt = "DELETE FROM blocks_fts_case_insensitive WHERE box = ?"
-		if err = execStmtTx(tx, stmt, box); err != nil {
-			return
-		}
+	stmt = "DELETE FROM blocks WHERE box = ?"
+	if err = execStmtTx(tx, stmt, box); err != nil {
+		return
 	}
 	ClearCache()
 	return
@@ -1187,20 +1248,14 @@ func deleteFileAnnotationRefsByBoxTx(tx *sql.Tx, box string) (err error) {
 }
 
 func deleteByRootID(tx *sql.Tx, rootID string, context map[string]any) (err error) {
-	stmt := "DELETE FROM blocks WHERE root_id = ?"
+	// external content 模式下 FTS 行需按 rowid 删除，必须先删 FTS 再删 blocks。
+	stmt := "DELETE FROM blocks_fts WHERE rowid IN (SELECT rowid FROM blocks WHERE root_id = ?)"
 	if err = execStmtTx(tx, stmt, rootID); err != nil {
 		return
 	}
-	if caseSensitive {
-		stmt = "DELETE FROM blocks_fts WHERE root_id = ?"
-		if err = execStmtTx(tx, stmt, rootID); err != nil {
-			return
-		}
-	} else {
-		stmt = "DELETE FROM blocks_fts_case_insensitive WHERE root_id = ?"
-		if err = execStmtTx(tx, stmt, rootID); err != nil {
-			return
-		}
+	stmt = "DELETE FROM blocks WHERE root_id = ?"
+	if err = execStmtTx(tx, stmt, rootID); err != nil {
+		return
 	}
 	stmt = "DELETE FROM spans WHERE root_id = ?"
 	if err = execStmtTx(tx, stmt, rootID); err != nil {
@@ -1234,20 +1289,14 @@ func batchDeleteByRootIDs(tx *sql.Tx, rootIDs []string, context map[string]any) 
 
 	ids := strings.Join(rootIDs, "','")
 	ids = "('" + ids + "')"
-	stmt := "DELETE FROM blocks WHERE root_id IN " + ids
+	// external content 模式下 FTS 行需按 rowid 删除，必须先删 FTS 再删 blocks。
+	stmt := "DELETE FROM blocks_fts WHERE rowid IN (SELECT rowid FROM blocks WHERE root_id IN " + ids + ")"
 	if err = execStmtTx(tx, stmt); err != nil {
 		return
 	}
-	if caseSensitive {
-		stmt = "DELETE FROM blocks_fts WHERE root_id IN " + ids
-		if err = execStmtTx(tx, stmt); err != nil {
-			return
-		}
-	} else {
-		stmt = "DELETE FROM blocks_fts_case_insensitive WHERE root_id IN " + ids
-		if err = execStmtTx(tx, stmt); err != nil {
-			return
-		}
+	stmt = "DELETE FROM blocks WHERE root_id IN " + ids
+	if err = execStmtTx(tx, stmt); err != nil {
+		return
 	}
 	stmt = "DELETE FROM spans WHERE root_id IN " + ids
 	if err = execStmtTx(tx, stmt); err != nil {
@@ -1275,20 +1324,14 @@ func batchDeleteByRootIDs(tx *sql.Tx, rootIDs []string, context map[string]any) 
 }
 
 func batchDeleteByPathPrefix(tx *sql.Tx, boxID, pathPrefix string) (err error) {
-	stmt := "DELETE FROM blocks WHERE box = ? AND path LIKE ?"
+	// external content 模式下 FTS 行需按 rowid 删除，必须先删 FTS 再删 blocks。
+	stmt := "DELETE FROM blocks_fts WHERE rowid IN (SELECT rowid FROM blocks WHERE box = ? AND path LIKE ?)"
 	if err = execStmtTx(tx, stmt, boxID, pathPrefix+"%"); err != nil {
 		return
 	}
-	if caseSensitive {
-		stmt = "DELETE FROM blocks_fts WHERE box = ? AND path LIKE ?"
-		if err = execStmtTx(tx, stmt, boxID, pathPrefix+"%"); err != nil {
-			return
-		}
-	} else {
-		stmt = "DELETE FROM blocks_fts_case_insensitive WHERE box = ? AND path LIKE ?"
-		if err = execStmtTx(tx, stmt, boxID, pathPrefix+"%"); err != nil {
-			return
-		}
+	stmt = "DELETE FROM blocks WHERE box = ? AND path LIKE ?"
+	if err = execStmtTx(tx, stmt, boxID, pathPrefix+"%"); err != nil {
+		return
 	}
 	stmt = "DELETE FROM spans WHERE box = ? AND path LIKE ?"
 	if err = execStmtTx(tx, stmt, boxID, pathPrefix+"%"); err != nil {
@@ -1318,17 +1361,6 @@ func batchUpdatePath(tx *sql.Tx, tree *parse.Tree, context map[string]any) (err 
 	stmt := "UPDATE blocks SET box = ?, path = ?, hpath = ? WHERE root_id = ?"
 	if err = execStmtTx(tx, stmt, tree.Box, tree.Path, tree.HPath, tree.ID); err != nil {
 		return
-	}
-	if caseSensitive {
-		stmt = "UPDATE blocks_fts SET box = ?, path = ?, hpath = ? WHERE root_id = ?"
-		if err = execStmtTx(tx, stmt, tree.Box, tree.Path, tree.HPath, tree.ID); err != nil {
-			return
-		}
-	} else {
-		stmt = "UPDATE blocks_fts_case_insensitive SET box = ?, path = ?, hpath = ? WHERE root_id = ?"
-		if err = execStmtTx(tx, stmt, tree.Box, tree.Path, tree.HPath, tree.ID); err != nil {
-			return
-		}
 	}
 
 	stmt = "UPDATE spans SET box = ?, path = ? WHERE root_id = ?"
@@ -1368,26 +1400,37 @@ func batchUpdateHPath(tx *sql.Tx, tree *parse.Tree, context map[string]any) (err
 		return
 	}
 
-	if caseSensitive {
-		stmt = "UPDATE blocks_fts SET hpath = ? WHERE root_id = ?"
-		if err = execStmtTx(tx, stmt, tree.HPath, tree.ID); err != nil {
-			return
-		}
-	} else {
-		stmt = "UPDATE blocks_fts_case_insensitive SET hpath = ? WHERE root_id = ?"
-		if err = execStmtTx(tx, stmt, tree.HPath, tree.ID); err != nil {
-			return
-		}
-	}
-
 	ClearCache()
 	evtHash := fmt.Sprintf("%x", sha256.Sum256([]byte(tree.ID)))[:7]
 	eventbus.Publish(eventbus.EvtSQLUpdateBlocksHPaths, context, 1, evtHash)
 	return
 }
 
+func ensureBlocksDocHPathIndex(database *sql.DB) (err error) {
+	_, err = database.Exec("CREATE INDEX IF NOT EXISTS idx_blocks_doc_hpath ON blocks(hpath) WHERE type = 'd'")
+	return
+}
+
+func ensureRefsDefIndexes(database *sql.DB) (err error) {
+	if _, err = database.Exec("CREATE INDEX IF NOT EXISTS idx_refs_def_block_id ON refs(def_block_id)"); err != nil {
+		return
+	}
+	_, err = database.Exec("CREATE INDEX IF NOT EXISTS idx_refs_def_block_root_id ON refs(def_block_root_id)")
+	return
+}
+
+func cleanupInvalidRefs(database *sql.DB) (err error) {
+	_, err = database.Exec("DELETE FROM refs WHERE COALESCE(TRIM(def_block_id), '') = '' OR " +
+		"COALESCE(TRIM(block_id), '') = '' OR COALESCE(TRIM(root_id), '') = ''")
+	return
+}
+
 func CloseDatabase() {
 	closeIndexQueue()
+	// 退出时删除所有已打开的加密 db 文件：加密索引可由 box.Index() 全量重建，
+	// 文件无需持久化，删除可避免重启后残留旧索引数据导致下次解锁叠加重复行。
+	RemoveAllEncryptedDBFiles()
+	treenode.RemoveAllEncryptedBlockTreeDBFiles()
 	if err := db.Close(); err != nil {
 		logging.LogErrorf("close database failed: %s", err)
 	}
@@ -1438,7 +1481,64 @@ func query(query string, args ...any) (*sql.Rows, error) {
 	return db.Query(query, args...)
 }
 
-func Exec(stmt string) error {
+// queryRowForBox 按 box 路由查询单行。加密笔记本用独立 db，否则用全局 db。boxID 为空走全局。
+// 加密笔记本未解锁（db 未打开）时返回 nil——绝不回退全局库，避免加密笔记本查询命中全局明文库。
+func queryRowForBox(boxID, query string, args ...any) *sql.Row {
+	query = strings.TrimSpace(query)
+	if "" == query {
+		logging.LogErrorf("statement is empty")
+		return nil
+	}
+	if boxDB := GetEncryptedDB(boxID); boxDB != nil {
+		return boxDB.QueryRow(query, args...)
+	}
+	if IsEncryptedBoxFn != nil && IsEncryptedBoxFn(boxID) {
+		// 加密笔记本未解锁：fail-closed，不回退全局库
+		return nil
+	}
+	if nil == db {
+		return nil
+	}
+	return db.QueryRow(query, args...)
+}
+
+// queryForBox 按 box 路由查询多行。加密笔记本用独立 db，否则用全局 db。boxID 为空走全局。
+// 加密笔记本未解锁时返回错误——绝不回退全局库。
+func queryForBox(boxID, query string, args ...any) (*sql.Rows, error) {
+	query = strings.TrimSpace(query)
+	if "" == query {
+		return nil, errors.New("statement is empty")
+	}
+	if boxDB := GetEncryptedDB(boxID); boxDB != nil {
+		return boxDB.Query(query, args...)
+	}
+	if IsEncryptedBoxFn != nil && IsEncryptedBoxFn(boxID) {
+		return nil, errors.New("encrypted box db not opened for box " + boxID)
+	}
+	if nil == db {
+		return nil, errors.New("database is nil")
+	}
+	return db.Query(query, args...)
+}
+
+func queryForBoxContext(ctx context.Context, boxID, query string, args ...any) (*sql.Rows, error) {
+	query = strings.TrimSpace(query)
+	if "" == query {
+		return nil, errors.New("statement is empty")
+	}
+	if boxDB := GetEncryptedDB(boxID); boxDB != nil {
+		return boxDB.QueryContext(ctx, query, args...)
+	}
+	if IsEncryptedBoxFn != nil && IsEncryptedBoxFn(boxID) {
+		return nil, errors.New("encrypted box db not opened for box " + boxID)
+	}
+	if nil == db {
+		return nil, errors.New("database is nil")
+	}
+	return db.QueryContext(ctx, query, args...)
+}
+
+func Exec(stmt string, args ...any) error {
 	stmt = strings.TrimSpace(stmt)
 	if "" == stmt {
 		return errors.New("statement is empty")
@@ -1447,8 +1547,60 @@ func Exec(stmt string) error {
 	if nil == db {
 		return errors.New("database is nil")
 	}
-	_, err := db.Exec(stmt)
+	_, err := db.Exec(stmt, args...)
 	return err
+}
+
+// migrateBlockEmbeddingsSchema 为 block_embeddings 幂等补充失败重试与忽略类型相关的列。
+// 不升 DatabaseVer（避免全库重建丢失已嵌入向量）；列已存在时跳过，老行自动取默认值 0。
+func migrateBlockEmbeddingsSchema() {
+	if nil == db {
+		return
+	}
+
+	// PRAGMA table_info 返回每列的定义，name 字段即列名
+	rows, err := db.Query("PRAGMA table_info(block_embeddings)")
+	if err != nil {
+		logging.LogErrorf("check block_embeddings columns failed: %s", err)
+		return
+	}
+	defer rows.Close()
+
+	existing := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dfltValue any
+		if err = rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+			logging.LogErrorf("scan block_embeddings column info failed: %s", err)
+			return
+		}
+		existing[name] = true
+	}
+
+	// 表不存在（首次启动还没建）时 existing 为空，跳过；待 initDBTables 建表
+	if 0 == len(existing) {
+		return
+	}
+
+	addColumns := []string{
+		"ALTER TABLE block_embeddings ADD COLUMN fail_count INTEGER NOT NULL DEFAULT 0",
+		"ALTER TABLE block_embeddings ADD COLUMN last_tried INTEGER NOT NULL DEFAULT 0",
+		"ALTER TABLE block_embeddings ADD COLUMN ignored_type INTEGER NOT NULL DEFAULT 0",
+	}
+	// SQLite 的 ALTER TABLE ADD COLUMN 无法在单条语句里加多列，逐条执行；列已存在会报错，忽略
+	addColumn := func(name, ddl string) {
+		if existing[name] {
+			return
+		}
+		if _, err = db.Exec(ddl); err != nil {
+			logging.LogErrorf("add column [%s] failed: %s", name, err)
+		}
+	}
+	addColumn("fail_count", addColumns[0])
+	addColumn("last_tried", addColumns[1])
+	addColumn("ignored_type", addColumns[2])
 }
 
 func beginTx() (tx *sql.Tx, err error) {
@@ -1697,21 +1849,51 @@ func closeDatabase() {
 	return
 }
 
-func SQLTemplateFuncs(templateFuncMap *template.FuncMap) {
+func SQLTemplateFuncs(templateFuncMap *template.FuncMap, boxIDs ...string) {
+	boxID := ""
+	if len(boxIDs) > 0 {
+		boxID = boxIDs[0]
+	}
+	readonlyStmts := &sync.Map{}
+	isReadonlyStmt := func(stmt string) bool {
+		if _, ok := readonlyStmts.Load(stmt); ok {
+			return true
+		}
+		if CheckSingleStatement(stmt) != nil {
+			return false
+		}
+		if boxID == "" {
+			if CheckReadonlyStatement(stmt) != nil {
+				return false
+			}
+		} else if CheckReadonlyStatementInBox(stmt, boxID) != nil {
+			return false
+		}
+		readonlyStmts.Store(stmt, struct{}{})
+		return true
+	}
+
 	(*templateFuncMap)["queryBlocks"] = func(stmt string, args ...string) (retBlocks []*Block) {
 		for _, arg := range args {
 			stmt = strings.Replace(stmt, "?", arg, 1)
 		}
-		retBlocks = SelectBlocksRawStmt(stmt, 1, 512)
+		if !isReadonlyStmt(stmt) {
+			return
+		}
+		if boxID == "" {
+			retBlocks = SelectBlocksRawStmt(stmt, 1, 512)
+		} else {
+			retBlocks = SelectBlocksRawStmtInBox(stmt, 1, 512, boxID)
+		}
 		return
 	}
 	(*templateFuncMap)["getBlock"] = func(arg any) (retBlock *Block) {
 		switch v := arg.(type) {
 		case string:
-			retBlock = GetBlock(v)
+			retBlock = GetBlockInBox(v, boxID)
 		case map[string]any:
 			if id, ok := v["id"]; ok {
-				retBlock = GetBlock(id.(string))
+				retBlock = GetBlockInBox(id.(string), boxID)
 			}
 		}
 		return
@@ -1720,14 +1902,28 @@ func SQLTemplateFuncs(templateFuncMap *template.FuncMap) {
 		for _, arg := range args {
 			stmt = strings.Replace(stmt, "?", arg, 1)
 		}
-		retSpans = SelectSpansRawStmt(stmt, 512)
+		if !isReadonlyStmt(stmt) {
+			return
+		}
+		if boxID == "" {
+			retSpans = SelectSpansRawStmt(stmt, 512)
+		} else {
+			retSpans = SelectSpansRawStmtInBox(stmt, 512, boxID)
+		}
 		return
 	}
 	(*templateFuncMap)["querySQL"] = func(stmt string) (ret []map[string]any) {
-		if err := CheckSingleStatement(stmt); err != nil {
+		if !isReadonlyStmt(stmt) {
 			return
 		}
-		ret, _ = Query(stmt, 1024)
+		if boxID == "" {
+			ret, _ = Query(stmt, 1024)
+		} else {
+			ret, _ = QueryNoLimitInBox(stmt, boxID)
+			if len(ret) > 1024 {
+				ret = ret[:1024]
+			}
+		}
 		return
 	}
 }
@@ -1755,4 +1951,133 @@ func vacuum() {
 			logging.LogErrorf("vacuum asset content database failed: %s", err)
 		}
 	}
+}
+
+// OpenEncryptedDB 打开加密笔记本的独立 SQLCipher db 并注册到 encryptedDBs。
+// dek 是该 box 的 32 字节数据密钥；先用 HKDF 派生 content 子密钥（用途分离），DSN 用 raw key 格式 x'<hex>'。
+// 首次打开会建表（幂等 IF NOT EXISTS）。UnlockBox 时调用。
+func OpenEncryptedDB(boxID string, dek []byte) (err error) {
+	if _, loaded := encryptedDBs.Load(boxID); loaded {
+		return nil // 已打开
+	}
+	dbPath := util.EncryptedDBPath(boxID)
+	// 派生 content 子密钥，与 blocktree/assets/file/AV 用途分离
+	contentKey := util.DeriveSubKey(dek, "siyuan/sqlcipher/content")
+	// SQLCipher DSN：_key=x'<hex>' 让 go-sqlite3 执行 PRAGMA key；其余 PRAGMA 与全局 siyuan.db 对齐
+	dsn := dbPath + "?_journal_mode=WAL&_synchronous=OFF&_mmap_size=4294967296&_secure_delete=OFF" +
+		"&_cache_size=-128000&_page_size=32768&_busy_timeout=7000&_ignore_check_constraints=ON" +
+		"&_temp_store=MEMORY&_case_sensitive_like=OFF&_key=x'" + hex.EncodeToString(contentKey) + "'"
+	boxDB, err := sql.Open("sqlite3_extended", dsn)
+	if err != nil {
+		return err
+	}
+	boxDB.SetMaxOpenConns(20)
+	boxDB.SetMaxIdleConns(4)
+	if err = initEncryptedDBTables(boxDB); err != nil {
+		boxDB.Close()
+		return err
+	}
+	encryptedDBs.Store(boxID, boxDB)
+	return nil
+}
+
+// CloseEncryptedDB 仅关闭加密笔记本的 db 连接（不删文件）。UnlockBox 创建失败回滚时调用。
+// 关闭/锁定加密笔记本请用 RemoveEncryptedDBFile（关连接 + 删文件）。
+func CloseEncryptedDB(boxID string) {
+	if v, ok := encryptedDBs.LoadAndDelete(boxID); ok {
+		if boxDB, ok := v.(*sql.DB); ok {
+			boxDB.Close()
+		}
+	}
+}
+
+// GetEncryptedDB 返回加密笔记本的 db 句柄；未打开返回 nil。
+func GetEncryptedDB(boxID string) *sql.DB {
+	if v, ok := encryptedDBs.Load(boxID); ok {
+		if boxDB, ok := v.(*sql.DB); ok {
+			return boxDB
+		}
+	}
+	return nil
+}
+
+// GetEncryptedBoxIDs 返回所有已打开的加密 content db 对应的 boxID。
+func GetEncryptedBoxIDs() (ret []string) {
+	encryptedDBs.Range(func(key, value any) bool {
+		if boxID, ok := key.(string); ok {
+			ret = append(ret, boxID)
+		}
+		return true
+	})
+	return
+}
+
+// RemoveEncryptedDBFile 关闭连接并删除加密 db 文件（含 WAL/SHM）。删除笔记本、关闭加密笔记本时调用。
+func RemoveEncryptedDBFile(boxID string) {
+	CloseEncryptedDB(boxID)
+	dbPath := util.EncryptedDBPath(boxID)
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if err := os.Remove(dbPath + suffix); err != nil && !os.IsNotExist(err) {
+			logging.LogErrorf("remove encrypted db file [%s] failed: %s", dbPath+suffix, err)
+		}
+	}
+}
+
+// RemoveAllEncryptedDBFiles 关闭所有已打开的加密 content db 连接并删除其文件（含 WAL/SHM）。
+// 进程退出（CloseDatabase）时调用，避免重启后残留旧索引数据导致下次解锁叠加重复行。
+func RemoveAllEncryptedDBFiles() {
+	for _, boxID := range GetEncryptedBoxIDs() {
+		RemoveEncryptedDBFile(boxID)
+	}
+}
+
+// beginTxForBox 按 box 选 db 开事务。加密笔记本用其独立 db，否则用全局 db。
+// beginTxForBox 按 box 选 db 开事务。加密笔记本用其独立 db，否则用全局 db。
+// 加密笔记本未解锁时返回错误——绝不回退全局库，避免加密笔记本的索引写操作污染全局明文库。
+func beginTxForBox(box string) (tx *sql.Tx, err error) {
+	if boxDB := GetEncryptedDB(box); boxDB != nil {
+		if tx, err = boxDB.Begin(); err != nil {
+			logging.LogErrorf("begin tx (encrypted box %s) failed: %s\n  %s", box, err, logging.ShortStack())
+			return
+		}
+		return
+	}
+	if IsEncryptedBoxFn != nil && IsEncryptedBoxFn(box) {
+		// 加密笔记本未解锁：fail-closed，不回退全局库
+		return nil, errors.New("encrypted box db not opened for box " + box)
+	}
+	return beginTx()
+}
+
+// initEncryptedDBTables 在加密笔记本db 上建内容表（幂等）。结构与全局 siyuan.db 的内容表一致，
+// 但不含 stat 表（加密 db 不参与版本管理）。首次打开时调用。
+func initEncryptedDBTables(boxDB *sql.DB) (err error) {
+	tables := []string{
+		"CREATE TABLE IF NOT EXISTS blocks (id, parent_id, root_id, hash, box, path, hpath, name, alias, memo, tag, content, fcontent, markdown, length, type, subtype, ial, sort, created, updated)",
+		"CREATE TABLE IF NOT EXISTS spans (id, block_id, root_id, box, path, content, markdown, type, ial)",
+		"CREATE TABLE IF NOT EXISTS assets (id, block_id, root_id, box, docpath, path, name, title, hash)",
+		"CREATE TABLE IF NOT EXISTS attributes (id, name, value, type, block_id, root_id, box, path)",
+		"CREATE TABLE IF NOT EXISTS refs (id, def_block_id, def_block_parent_id, def_block_root_id, def_block_path, block_id, root_id, box, path, content, markdown, type)",
+		"CREATE TABLE IF NOT EXISTS file_annotation_refs (id, file_path, annotation_id, block_id, root_id, box, path, content, type)",
+	}
+	for _, stmt := range tables {
+		if _, err = boxDB.Exec(stmt); err != nil {
+			return
+		}
+	}
+	if err = ensureBlocksDocHPathIndex(boxDB); err != nil {
+		return
+	}
+	if err = ensureRefsDefIndexes(boxDB); err != nil {
+		return
+	}
+	if err = cleanupInvalidRefs(boxDB); err != nil {
+		return
+	}
+	// FTS5 external-content 虚拟表，tokenize 与全局保持一致（siyuan 分词器）
+	ftsStmt := "CREATE VIRTUAL TABLE IF NOT EXISTS blocks_fts USING fts5(id UNINDEXED, parent_id UNINDEXED, root_id UNINDEXED, hash UNINDEXED, box UNINDEXED, path UNINDEXED, hpath UNINDEXED, name, alias, memo, tag, content, fcontent, markdown UNINDEXED, length UNINDEXED, type UNINDEXED, subtype UNINDEXED, ial, sort UNINDEXED, created UNINDEXED, updated UNINDEXED, content='blocks', content_rowid='rowid', tokenize=\"" + ftsTokenize() + "\")"
+	if _, err = boxDB.Exec(ftsStmt); err != nil {
+		return
+	}
+	return
 }

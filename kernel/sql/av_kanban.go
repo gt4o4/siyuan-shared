@@ -12,7 +12,7 @@ import (
 	"github.com/siyuan-note/siyuan/kernel/util"
 )
 
-func RenderAttributeViewKanban(attrView *av.AttributeView, view *av.View, query string, depth *int, cachedAttrViews map[string]*av.AttributeView) (ret *av.Kanban) {
+func RenderAttributeViewKanban(attrView *av.AttributeView, view *av.View, query string, depth *int, cachedAttrViews map[string]*av.AttributeView, ignoreRows bool) (ret *av.Kanban) {
 	viewable := attrView.RenderedViewables[view.ID]
 	if nil != viewable {
 		ret = viewable.(*av.Kanban)
@@ -24,9 +24,13 @@ func RenderAttributeViewKanban(attrView *av.AttributeView, view *av.View, query 
 		CoverFrom:              view.Kanban.CoverFrom,
 		CoverFromAssetKeyID:    view.Kanban.CoverFromAssetKeyID,
 		CardAspectRatio:        view.Kanban.CardAspectRatio,
+		CardAspectRatioValue:   view.Kanban.CardAspectRatioValue,
 		CardSize:               view.Kanban.CardSize,
+		CardWidth:              view.Kanban.CardWidth,
+		CardLayout:             view.Kanban.CardLayout,
 		FitImage:               view.Kanban.FitImage,
 		DisplayFieldName:       view.Kanban.DisplayFieldName,
+		DisplayEmptyFields:     view.Kanban.DisplayEmptyFields,
 		FillColBackgroundColor: view.Kanban.FillColBackgroundColor,
 		Fields:                 []*av.KanbanField{},
 		Cards:                  []*av.KanbanCard{},
@@ -36,8 +40,10 @@ func RenderAttributeViewKanban(attrView *av.AttributeView, view *av.View, query 
 	for _, field := range view.Kanban.Fields {
 		key, getErr := attrView.GetKey(field.ID)
 		if nil != getErr {
-			// 找不到字段则在视图中删除
-			removeMissingField(attrView, view, field.ID)
+			// 找不到字段则在视图中删除（元数据查询场景不写盘）
+			if !ignoreRows {
+				removeMissingField(attrView, view, field.ID)
+			}
 			continue
 		}
 
@@ -53,6 +59,7 @@ func RenderAttributeViewKanban(attrView *av.AttributeView, view *av.View, query 
 				Calc:         field.Calc,
 				Options:      key.Options,
 				NumberFormat: key.NumberFormat,
+				DateFormat:   key.DateFormat,
 				Template:     key.Template,
 				Relation:     key.Relation,
 				Rollup:       key.Rollup,
@@ -60,7 +67,13 @@ func RenderAttributeViewKanban(attrView *av.AttributeView, view *av.View, query 
 				Created:      key.Created,
 				Updated:      key.Updated,
 			},
+			FullRow: field.FullRow,
 		})
+	}
+
+	// 菜单等只需要字段/视图元数据的场景，跳过全部卡片处理
+	if ignoreRows {
+		return
 	}
 
 	cardsValues := generateAttrViewItems(attrView, view) // 生成卡片
@@ -80,19 +93,24 @@ func RenderAttributeViewKanban(attrView *av.AttributeView, view *av.View, query 
 
 	// 生成卡片字段值
 	for cardID, cardValues := range cardsValues {
+		// 按字段 ID 建索引，避免后续字段循环里对每个字段做线性查找
+		kvByField := map[string]*av.KeyValues{}
+		for _, keyValues := range cardValues {
+			if _, ok := kvByField[keyValues.Key.ID]; !ok { // 同一字段存在多个值时只取第一个
+				kvByField[keyValues.Key.ID] = keyValues
+			}
+		}
+
 		var kanbanCard av.KanbanCard
 		for _, field := range ret.Fields {
 			var fieldValue *av.KanbanFieldValue
-			for _, keyValues := range cardValues {
-				if keyValues.Key.ID == field.ID {
-					fieldValue = &av.KanbanFieldValue{
-						BaseValue: &av.BaseValue{
-							ID:        keyValues.Values[0].ID,
-							Value:     keyValues.Values[0],
-							ValueType: field.Type,
-						},
-					}
-					break
+			if keyValues, ok := kvByField[field.ID]; ok {
+				fieldValue = &av.KanbanFieldValue{
+					BaseValue: &av.BaseValue{
+						ID:        keyValues.Values[0].ID,
+						Value:     keyValues.Values[0],
+						ValueType: field.Type,
+					},
 				}
 			}
 			if nil == fieldValue {
@@ -109,11 +127,14 @@ func RenderAttributeViewKanban(attrView *av.AttributeView, view *av.View, query 
 			if nil != field.Date {
 				filedDateIsTime = field.Date.FillSpecificTime
 			}
-			fillAttributeViewBaseValue(fieldValue.BaseValue, field.ID, cardID, field.NumberFormat, field.Template, filedDateIsTime)
+			fillAttributeViewBaseValue(fieldValue.BaseValue, field.ID, cardID, field.NumberFormat, field.DateFormat,
+				field.Template, filedDateIsTime)
 			kanbanCard.Values = append(kanbanCard.Values, fieldValue)
 		}
 
 		fillAttributeViewKanbanCardCover(attrView, view, cardValues, &kanbanCard, cardID, luteEngine, boundTrees)
+		kanbanCard.CoverPosition = attrView.GetCardCoverPosition(cardID,
+			av.CardCoverSource(view.Kanban.CoverFrom, view.Kanban.CoverFromAssetKeyID), kanbanCard.CoverURL)
 		ret.Cards = append(ret.Cards, &kanbanCard)
 	}
 

@@ -1,19 +1,17 @@
 import {Wnd} from "./Wnd";
 import {genUUID} from "../util/genID";
-import {Model} from "./Model";
-import {Editor} from "../editor";
+import type {Model} from "./Model";
 import {hasClosestByTag} from "../protyle/util/hasClosest";
 import {Constants} from "../constants";
-import {escapeHtml, escapeLessThans} from "../util/escape";
+import {escapeHtml, escapeAttr} from "../util/escape";
 import {unicode2Emoji} from "../emoji";
-import {fetchPost} from "../util/fetch";
-import {hideTooltip, showTooltip} from "../dialog/tooltip";
+import {hideTooltip} from "../dialog/tooltip";
 /// #if !BROWSER
 import {openNewWindow} from "../window/openNewWindow";
 import {ipcRenderer} from "electron";
 /// #endif
 import {layoutToJSON, saveLayout} from "./util";
-import {setTitle} from "../dialog/processSystem";
+import {setTitle} from "../util/processTitle";
 
 export class Tab {
     public parent: Wnd;
@@ -40,56 +38,32 @@ export class Tab {
             this.headElement.classList.add("item", "item--focus");
             let iconHTML = "";
             if (options.icon) {
-                iconHTML = `<svg class="item__graphic"><use xlink:href="#${options.icon}"></use></svg>`;
+                iconHTML = `<svg class="item__graphic"><use xlink:href="#${escapeAttr(escapeHtml(options.icon))}"></use></svg>`;
             } else if (options.docIcon) {
                 iconHTML = `<span class="item__icon">${unicode2Emoji(options.docIcon)}</span>`;
             }
             this.headElement.innerHTML = `${iconHTML}<span class="item__text">${escapeHtml(options.title)}</span>
 <span class="item__close"><svg><use xlink:href="#iconClose"></use></svg></span>`;
-            this.headElement.addEventListener("mouseenter", (event) => {
-                event.stopPropagation();
-                event.preventDefault();
-                const dragElement = Array.from(this.headElement.parentElement.childNodes).find((item: HTMLElement) => {
-                    if (item.style?.opacity === "0.38") {
-                        return true;
-                    }
-                });
-                if (dragElement) {
-                    hideTooltip();
-                    return;
-                }
-
-                let id = "";
-                if (this.model instanceof Editor && this.model.editor?.protyle?.block?.rootID) {
-                    id = (this.model as Editor).editor.protyle.block.rootID;
-                } else if (!this.model) {
-                    const initData = JSON.parse(this.headElement.getAttribute("data-initdata") || "{}");
-                    if (initData && initData.instance === "Editor") {
-                        id = initData.blockId;
-                    }
-                }
-                if (id) {
-                    fetchPost("/api/filetree/getFullHPathByID", {
-                        id
-                    }, (response) => {
-                        if (!this.headElement.getAttribute("aria-label")) {
-                            showTooltip(escapeLessThans(response.data), this.headElement);
-                        }
-                        this.headElement.setAttribute("aria-label", escapeLessThans(response.data));
-                    });
-                } else {
-                    this.headElement.setAttribute("aria-label", escapeLessThans(this.title));
-                }
-            });
             this.headElement.addEventListener("dragstart", (event: DragEvent & { target: HTMLElement }) => {
                 window.getSelection().removeAllRanges();
                 hideTooltip();
                 const tabElement = hasClosestByTag(event.target, "LI");
                 if (tabElement) {
                     event.dataTransfer.setData("text/html", tabElement.outerHTML);
-                    const modeJSON = {id: this.id};
+                    const modeJSON = {id: this.id} as ILayoutJSON & {id: string};
                     layoutToJSON(this, modeJSON);
                     event.dataTransfer.setData(Constants.SIYUAN_DROP_TAB, JSON.stringify(modeJSON));
+                    const editorJSON = Array.isArray(modeJSON.children) ? undefined : modeJSON.children;
+                    delete tabElement.dataset.dragDocumentId;
+                    if (editorJSON?.instance === "Editor" && editorJSON.rootId) {
+                        event.dataTransfer.setData(Constants.SIYUAN_DROP_DOCUMENT_TAB, JSON.stringify({
+                            rootId: editorJSON.rootId,
+                            tabId: this.id,
+                            title: this.title,
+                        }));
+                        tabElement.dataset.dragDocumentId = editorJSON.rootId;
+                        window.siyuan.dragTitle = this.title;
+                    }
                     event.dataTransfer.dropEffect = "move";
                     tabElement.style.opacity = "0.38";
                     window.siyuan.dragElement = this.headElement;
@@ -102,6 +76,7 @@ export class Tab {
                 const tabElement = hasClosestByTag(event.target, "LI");
                 if (tabElement) {
                     tabElement.style.opacity = "1";
+                    delete tabElement.dataset.dragDocumentId;
                 }
                 /// #if !BROWSER
                 // 拖拽到屏幕外
@@ -123,16 +98,7 @@ export class Tab {
                 window.siyuan.dragElement = undefined;
                 if (event.dataTransfer.dropEffect === "none") {
                     // 按 esc 取消的时候应该还原在 dragover 时交换的 tab
-                    this.parent.children.forEach((item, index) => {
-                        const currentElement = this.headElement.parentElement.children[index];
-                        if (item.headElement !== currentElement) {
-                            if (index === 0) {
-                                this.headElement.parentElement.firstElementChild.before(item.headElement);
-                            } else {
-                                this.headElement.parentElement.children[index - 1].after(item.headElement);
-                            }
-                        }
-                    });
+                    this.restoreHeadElementOrder();
                 }
                 /// #if !BROWSER
                 ipcRenderer.send(Constants.SIYUAN_SEND_WINDOWS, {cmd: "resetTabsStyle", data: "addRegionStyle"});
@@ -144,6 +110,23 @@ export class Tab {
         this.panelElement.classList.add("fn__flex-1");
         this.panelElement.innerHTML = options.panel || "";
         this.panelElement.setAttribute("data-id", this.id);
+    }
+
+    public restoreHeadElementOrder() {
+        const headersElement = this.headElement?.parentElement;
+        if (!headersElement) {
+            return;
+        }
+        this.parent.children.forEach((item, index) => {
+            const currentElement = headersElement.children[index];
+            if (item.headElement !== currentElement) {
+                if (index === 0) {
+                    headersElement.firstElementChild.before(item.headElement);
+                } else {
+                    headersElement.children[index - 1].after(item.headElement);
+                }
+            }
+        });
     }
 
     public updateTitle(title: string) {

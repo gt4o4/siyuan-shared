@@ -38,19 +38,25 @@ import (
 	"github.com/siyuan-note/filelock"
 	"github.com/siyuan-note/httpclient"
 	"github.com/siyuan-note/logging"
+	"golang.org/x/mod/semver"
 )
 
 // var Mode = "dev"
 var Mode = "prod"
 
-const (
-	Ver       = "3.6.5"
-	IsInsider = false
-)
+const Ver = "3.8.0-alpha.4"
+
+// IsReleaseVer 判断是否为正式版（不含 alpha、beta、rc 等预发布标识）。
+func IsReleaseVer(ver string) bool {
+	v := "v" + strings.TrimPrefix(ver, "v")
+	return semver.IsValid(v) && semver.Prerelease(v) == ""
+}
 
 var (
 	RunInContainer             = false // 是否运行在容器中
 	SiYuanAccessAuthCodeBypass = false // 是否跳过空锁屏密码检查
+	AttachUI                   = false // 是否绑定桌面 UI 进程生命周期（Electron 拉起时为 true，手动 serve 为 false）
+	EnablePprof                = false // 是否注册未鉴权的调试端点，仅调试时显式开启，切勿在对外开放的实例上使用
 )
 
 func initEnvVars() {
@@ -66,6 +72,8 @@ var (
 	bootDetails  string           // 启动细节描述
 	HttpServer   *http.Server     // HTTP 伺服器实例
 	HttpServing  = false          // 是否 HTTP 伺服已经可用
+
+	SafeMode = false // 是否以安全模式启动：禁用代码片段、插件、自定义主题与图标
 )
 
 // If a commandline parameter is empty, fallback to the env var.
@@ -75,8 +83,7 @@ var (
 // the commandline parameter itself.
 func coalesceToEnvVar(fromCLI *string, envVarName string) *string {
 	if fromCLI == nil || "" == *fromCLI {
-		ret := os.Getenv(envVarName)
-		return &ret
+		return new(os.Getenv(envVarName))
 	}
 	return fromCLI
 }
@@ -111,74 +118,71 @@ func InitWorkspace(workspacePath, wdPath string) {
 }
 
 func Boot() {
-	IncBootProgress(3, "Booting kernel...")
+	IncBootProgress(3, BootL10n(299, "Booting kernel..."))
 
+	// 由标准库 flag 解析 os.Args，再走统一的 BootWithFlags。
 	workspacePath := flag.String("workspace", "", "dir path of the workspace, default to ~/SiYuan/")
 	wdPath := flag.String("wd", WorkingDir, "working directory of SiYuan")
 	port := flag.String("port", "0", "port of the HTTP server")
 	readOnly := flag.String("readonly", "false", "read-only mode")
 	accessAuthCode := flag.String("accessAuthCode", "", "access auth code")
 	ssl := flag.Bool("ssl", false, "for https and wss")
-	lang := flag.String("lang", "", "ar_SA/de_DE/en_US/es_ES/fr_FR/he_IL/hi_IN/id_ID/it_IT/ja_JP/ko_KR/nl_NL/pl_PL/pt_BR/ru_RU/sk_SK/th_TH/tr_TR/uk_UA/zh_CHT/zh_CN")
+	attachUI := flag.Bool("attach-ui", false, "attach kernel lifecycle to desktop UI process (used by Electron)")
+	lang := flag.String("lang", "", "ar/de/en/es/fr/he/hi/id/it/ja/ko/nl/pl/pt-BR/ru/sk/th/tr/uk/zh-CN/zh-TW")
 	mode := flag.String("mode", "prod", "dev/prod")
+	enablePprof := flag.Bool("enable-pprof", false, "enable unauthenticated /debug/pprof/ endpoints (dev only, never on a network-exposed instance)")
+	safeMode := flag.Bool("safe-mode", false, "boot in safe mode")
 	flag.Parse()
 
+	BootWithFlags(*workspacePath, *wdPath, *port, *readOnly, *accessAuthCode, *lang, *mode, *ssl, *attachUI, *safeMode, *enablePprof)
+}
+
+// BootWithFlags 接收已解析好的启动参数，完成环境变量回退、全局变量赋值、工作空间初始化与加锁等启动收尾工作。Boot()（标准库 flag 解析）和 serve 子命令（cobra 解析）都走这个统一入口。
+func BootWithFlags(workspacePath, wdPath, port, readOnly, accessAuthCode, lang, mode string, ssl, attachUI, safeMode, enablePprof bool) {
+	SafeMode = safeMode
+	EnablePprof = enablePprof
 	// Fallback to env vars if commandline args are not set
 	// valid only for CLI args that default to "", as the
 	// others have explicit (sane) defaults
-	workspacePath = coalesceToEnvVar(workspacePath, "SIYUAN_WORKSPACE_PATH")
-	accessAuthCode = coalesceToEnvVar(accessAuthCode, "SIYUAN_ACCESS_AUTH_CODE")
-	lang = coalesceToEnvVar(lang, "SIYUAN_LANG")
+	workspacePath = *coalesceToEnvVar(&workspacePath, "SIYUAN_WORKSPACE_PATH")
+	accessAuthCode = *coalesceToEnvVar(&accessAuthCode, "SIYUAN_ACCESS_AUTH_CODE")
+	lang = *coalesceToEnvVar(&lang, "SIYUAN_LANG")
 
-	if "" != *lang {
-		Lang = *lang
+	if "" != lang {
+		Lang = LangToBCP47(lang) // 兼容历史下划线值，如 zh_CN → zh-CN
 	}
-	Mode = *mode
-	ServerPort = *port
-	ReadOnly, _ = strconv.ParseBool(*readOnly)
-	AccessAuthCode = *accessAuthCode
+	Mode = mode
+	ServerPort = port
+	ReadOnly, _ = strconv.ParseBool(readOnly)
+	AttachUI = attachUI
+	AccessAuthCode = accessAuthCode
 	AccessAuthCode = RemoveInvalid(AccessAuthCode)
 	AccessAuthCode = strings.TrimSpace(AccessAuthCode)
 	Container = ContainerStd
 	if RunInContainer {
 		Container = ContainerDocker
-		if "" == AccessAuthCode { // Still empty?
-			interruptBoot := true
-
-			// Set the env `SIYUAN_ACCESS_AUTH_CODE_BYPASS=true` to skip checking empty access auth code https://github.com/siyuan-note/siyuan/issues/9709
-			if SiYuanAccessAuthCodeBypass {
-				interruptBoot = false
-				fmt.Println("bypass access auth code check since the env [SIYUAN_ACCESS_AUTH_CODE_BYPASS] is set to [true]")
-			}
-
-			if interruptBoot {
-				// The access authorization code command line parameter must be set when deploying via Docker https://github.com/siyuan-note/siyuan/issues/9328
-				fmt.Printf("the access authorization code command line parameter (--accessAuthCode) must be set when deploying via Docker\n")
-				fmt.Printf("or you can set the SIYUAN_ACCESS_AUTH_CODE env var")
-				os.Exit(logging.ExitCodeSecurityRisk)
-			}
-		}
 	}
 	if ContainerStd != Container {
 		ServerPort = FixedPort
 	}
 
-	msStoreFilePath := filepath.Join(WorkingDir, "ms-store")
-	ISMicrosoftStore = gulu.File.IsExist(msStoreFilePath)
-
 	UserAgent = UserAgent + " " + Container + "/" + runtime.GOOS
 	httpclient.SetUserAgent(UserAgent)
 
-	InitWorkspace(*workspacePath, *wdPath)
+	InitWorkspace(workspacePath, wdPath)
 
-	SSL = *ssl
+	// 必须在 InitWorkspace 之后：此时 WorkingDir 才被 --wd 参数修正为真实工作目录（如 app\resources），否则会用进程 CWD 误判微软商店版标记文件
+	msStoreFilePath := filepath.Join(WorkingDir, "ms-store")
+	ISMicrosoftStore = gulu.File.IsExist(msStoreFilePath)
+
+	SSL = ssl
 	logging.SetLogPath(LogPath)
 
 	// 工作空间仅允许被一个内核进程伺服
 	tryLockWorkspace()
 
 	bootBanner := figure.NewColorFigure("SiYuan", "isometric3", "green", true)
-	logging.LogInfof("\n" + bootBanner.String())
+	logging.LogInfo("\n" + bootBanner.String())
 	logBootInfo()
 }
 
@@ -195,6 +199,21 @@ func SetBootDetails(details string) {
 		return
 	}
 	setBootDetails(details)
+}
+
+// BootL10n 返回启动进度文案的本地化字符串。
+//
+// 按当前界面语言（util.Lang，来自 conf.json）查 util.Langs 中 _kernel 块的整数键，
+// 依次回退到英文、再回退到调用方传入的 fallback 英文文案。
+// 这样在首启 InitConf() 尚未加载完语言文件时也能显示原文，不会出现空串。
+func BootL10n(num int, fallback string) string {
+	if s := Langs[Lang][num]; "" != s {
+		return s
+	}
+	if s := Langs["en"][num]; "" != s {
+		return s
+	}
+	return fallback
 }
 
 func IncBootProgress(progress int32, details string) {
@@ -222,8 +241,10 @@ func GetBootProgress() int32 {
 }
 
 func SetBooted() {
-	setBootDetails("Finishing boot...")
+	// 先置进度为 100 再写 details，保证前端轮询/SSE 读到 progress>=100 时一定满足跳转条件，
+	// 避免 "先写 details 后写 progress" 造成的 "Finishing boot... 但进度未满" 竞态窗口
 	bootProgress.Store(100)
+	setBootDetails(BootL10n(300, "Finishing boot..."))
 	logging.LogInfof("kernel booted")
 }
 
@@ -294,6 +315,10 @@ func initWorkspaceDir(workspaceArg string) {
 		WorkspaceDir = workspaceArg
 	}
 
+	// 归一化路径分隔符，使 WorkspaceDir 与 filepath.Join(WorkspaceDir, ...) 派生出的目录（HistoryDir/DataDir 等）保持一致
+	// 否则 Windows 上用正斜杠启动（--workspace="D:/foo"）时，strings.TrimPrefix(path, util.WorkspaceDir) 会因分隔符不同而失败 https://github.com/siyuan-note/siyuan/issues/17862
+	WorkspaceDir = filepath.Clean(WorkspaceDir)
+
 	if !gulu.File.IsDir(WorkspaceDir) {
 		logging.LogWarnf("use the default workspace [%s] since the specified workspace [%s] is not a dir", defaultWorkspaceDir, WorkspaceDir)
 		if err := os.MkdirAll(defaultWorkspaceDir, 0755); err != nil && !os.IsExist(err) {
@@ -323,6 +348,9 @@ func initWorkspaceDir(workspaceArg string) {
 		os.Exit(logging.ExitCodeInitWorkspaceErr)
 	}
 	os.RemoveAll(filepath.Join(TempDir, "repo"))
+	// export 目录只保存临时文件，启动时统一清理；插件不得依赖其中的文件跨进程存续。
+	os.RemoveAll(filepath.Join(TempDir, "export"))
+	os.RemoveAll(filepath.Join(TempDir, "clipboard"))
 	os.Setenv("TMPDIR", osTmpDir)
 	os.Setenv("TEMP", osTmpDir)
 	os.Setenv("TMP", osTmpDir)
@@ -341,7 +369,7 @@ func DeduplicateWorkspacePaths(paths []string) []string {
 	seen := map[string]bool{}
 	var result []string
 	for _, p := range paths {
-		key := strings.ToLower(p)
+		key := strings.ToLower(filepath.Clean(p)) // 归一化后再去重，使 D:/foo、D:\foo、D:\foo\ 等被识别为同一工作空间 https://github.com/siyuan-note/siyuan/issues/17862
 		if seen[key] {
 			continue
 		}
@@ -372,14 +400,14 @@ func ReadWorkspacePaths() (ret []string, err error) {
 	data, err := os.ReadFile(workspaceConf)
 	if err != nil {
 		msg := fmt.Sprintf("read workspace conf [%s] failed: %s", workspaceConf, err)
-		logging.LogErrorf(msg)
+		logging.LogError(msg)
 		err = errors.New(msg)
 		return
 	}
 
 	if err = gulu.JSON.UnmarshalJSON(data, &ret); err != nil {
 		msg := fmt.Sprintf("unmarshal workspace conf [%s] failed: %s", workspaceConf, err)
-		logging.LogErrorf(msg)
+		logging.LogError(msg)
 		err = errors.New(msg)
 		return
 	}
@@ -394,6 +422,7 @@ func ReadWorkspacePaths() (ret []string, err error) {
 		}
 
 		d = strings.TrimRight(d, " \t\n") // 去掉工作空间路径尾部空格 https://github.com/siyuan-note/siyuan/issues/6353
+		d = filepath.Clean(d)             // 归一化路径分隔符，清理历史持久化的斜杠差异（如 D:/foo 与 D:\foo） https://github.com/siyuan-note/siyuan/issues/17862
 		if gulu.File.IsDir(d) {
 			tmp = append(tmp, d)
 		} else {
@@ -411,14 +440,14 @@ func WriteWorkspacePaths(workspacePaths []string) (err error) {
 	data, err := gulu.JSON.MarshalJSON(workspacePaths)
 	if err != nil {
 		msg := fmt.Sprintf("marshal workspace conf [%s] failed: %s", workspaceConf, err)
-		logging.LogErrorf(msg)
+		logging.LogError(msg)
 		err = errors.New(msg)
 		return
 	}
 
 	if err = filelock.WriteFile(workspaceConf, data); err != nil {
 		msg := fmt.Sprintf("write workspace conf [%s] failed: %s", workspaceConf, err)
-		logging.LogErrorf(msg)
+		logging.LogError(msg)
 		err = errors.New(msg)
 		return
 	}
@@ -555,6 +584,17 @@ func GetDataAssetsAbsPath() (ret string) {
 		}
 	}
 	return
+}
+
+// EncryptedDBPath 返回加密笔记本的独立 SQLCipher db 文件路径。
+// 与 siyuan.db 同放 temp 目录，文件名带 boxID 区分多个加密笔记本。db 是可重建的索引，非原始内容。
+func EncryptedDBPath(boxID string) string {
+	return filepath.Join(TempDir, "siyuan-encrypted-"+boxID+".db")
+}
+
+// EncryptedBlockTreeDBPath 返回加密笔记本的独立 SQLCipher blocktree db 文件路径。
+func EncryptedBlockTreeDBPath(boxID string) string {
+	return filepath.Join(TempDir, "siyuan-encrypted-"+boxID+"-blocktree.db")
 }
 
 func tryLockWorkspace() {

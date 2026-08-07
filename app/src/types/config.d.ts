@@ -25,6 +25,7 @@ declare namespace Config {
          * Access authorization code
          */
         accessAuthCode: TAccessAuthCode;
+        oidc: IOIDC;
         account: IAccount;
         ai: IAI;
         api: IAPI;
@@ -59,10 +60,13 @@ declare namespace Config {
          * Log level
          */
         logLevel: TLogLevel;
-        /**
-         * Whether to open the user guide after startup
-         */
-        openHelp: boolean;
+        onboarding: {
+            state: "pending" | "notebook-created" | "completed";
+            newUser: boolean;
+            dismissed: boolean;
+            notebookID: string;
+            documentID: string;
+        };
         /**
          * Publish service
          * 发布服务
@@ -73,7 +77,17 @@ declare namespace Config {
          * 全局只读
          */
         readonly: boolean;
+        /**
+         * Encrypted notebook global settings
+         * 加密笔记本全局设置
+         */
+        notebookCrypto: INotebookCrypto;
         repo: IRepo;
+        /**
+         * Global secrets store, referenced via {{secrets.NAME}} placeholders.
+         * 全局密钥库，通过 {{secrets.NAME}} 占位符引用
+         */
+        secrets: ISecrets;
         search: ISearch;
         /**
          * Whether to display the changelog for this release version
@@ -89,12 +103,35 @@ declare namespace Config {
          * Community user data (Encrypted)
          */
         userData: string;
+        /**
+         * Global variables store, referenced via {{vars.NAME}} placeholders.
+         * 全局变量库，通过 {{vars.NAME}} 占位符引用
+         */
+        variables: IVariables;
     }
 
     /**
      * Access authorization code
      */
     export type TAccessAuthCode = "" | "*******";
+
+    export interface IOIDCClaimRule {
+        claim: string;
+        operator: "equals" | "contains";
+        values: string[];
+    }
+
+    export interface IOIDC {
+        enabled: boolean;
+        provider: "custom" | "google" | "microsoft" | "github";
+        issuerURL: string;
+        clientID: string;
+        clientSecret: string;
+        scopes: string[];
+        redirectURL: string;
+        allowAll: boolean;
+        claimRules: IOIDCClaimRule[];
+    }
 
     /**
      * Account configuration
@@ -114,69 +151,118 @@ declare namespace Config {
      * Artificial Intelligence (AI) related configuration
      */
     export interface IAI {
-        openAI: IOpenAI;
+        providers: IProvider[];
+        editing: IEditing;
+        agent: IAgent;
+        imageGeneration: IImageGeneration;
+        mcp: IMCP;
+        embedding: IEmbedding;
+        rerank: IRerank;
     }
 
     /**
-     * Open AI related configuration
+     * AI agent global settings
      */
-    export interface IOpenAI {
-        /**
-         * API base URL
-         */
-        apiBaseURL: string;
-        /**
-         * API key
-         */
+    export interface IAgent {
+        modelId: string;
+        sessionTimeout: number;
+        streamIdleTimeout: number;
+        confirmTimeout: number;
+        maxRetries: number;
+        temperature: number;
+        maxCompletionTokens: number;
+        maxToolCallRounds: number;
+    }
+
+    /**
+     * AI in-editor chat scenario behavior settings (mirrors IAgent)
+     */
+    export interface IEditing {
+        modelId: string;
+        maxHistoryMessages: number;
+        temperature: number;
+        maxCompletionTokens: number;
+    }
+
+    export interface IImageGeneration {
+        modelId: string;
+        requestTimeout: number;
+        size: string;
+        quality: string;
+        outputFormat: "png" | "jpeg" | "webp";
+    }
+
+    /**
+     * Embedding model configuration
+     */
+    export interface IEmbedding {
+        id: string;
+        enabled: boolean;
+        baseURL: string;
         apiKey: string;
-        /**
-         * The maximum number of contexts passed when requesting the API
-         */
-        apiMaxContexts: number;
-        /**
-         * Maximum number of tokens (0 means no limit)
-         */
-        apiMaxTokens: number;
-        /**
-         * The model name called by the API
-         */
-        apiModel: TOpenAIAPIModel;
-        /**
-         * API Provider
-         * OpenAI, Azure
-         */
-        apiProvider: TOpenAAPIProvider;
-        /**
-         * API request proxy address
-         */
-        apiProxy: string;
-        /**
-         * Parameter `temperature` that controls the randomness of the generated text
-         */
-        apiTemperature: number;
-        /**
-         * API request timeout (unit: seconds)
-         */
-        apiTimeout: number;
-        /**
-         * API request additional user agent field
-         */
-        apiUserAgent: string;
-        /**
-         * API version number
-         */
-        apiVersion: string;
+        name: string;
+        timeout: number;
+        dimensions: number;
     }
 
     /**
-     * The model name called by the API
+     * Rerank model configuration (semantic search result re-ranking)
      */
-    export type TOpenAIAPIModel = "gpt-4" | "gpt-4-32k" | "gpt-3.5-turbo" | "gpt-3.5-turbo-16k";
+    export interface IRerank {
+        id: string;
+        enabled: boolean;
+        endpoint: string;
+        apiKey: string;
+        name: string;
+        timeout: number;
+        candidateCount: number;
+    }
 
     /**
-     * API Provider
+     * AI provider configuration
      */
-    export type TOpenAAPIProvider = "OpenAI" | "Azure";
+    export interface IProvider {
+        id: string;
+        enabled: boolean;
+        displayName?: string;
+        baseURL: string;
+        protocol?: string;
+        apiKey: string;
+        requestTimeout: number;
+        models: IModel[];
+    }
+
+    /**
+     * AI model configuration. Behavior params (maxTokens/temperature/maxContexts)
+     * live on IEditing; Model holds identity and provider metadata.
+     */
+    export interface IModel {
+        id: string;
+        enabled: boolean;
+        name: string;
+        displayName?: string;
+        contextLength?: number;
+    }
+
+    /**
+     * MCP (Model Context Protocol) configuration
+     */
+    export interface IMCP {
+        servers: IMCPServer[];
+    }
+
+    export interface IMCPServer {
+        id: string;
+        enabled: boolean;
+        name: string;
+        url: string;
+        type: string;
+        command: string;
+        args?: string[];
+        headers?: Record<string, string>;
+        timeout: number;
+        trustToolAnnotations: boolean;
+    }
 
     /**
      * SiYuan API related configuration
@@ -207,10 +293,6 @@ declare namespace Config {
          */
         codeBlockThemeLight: string;
         /**
-         * List of installed dark themes
-         */
-        darkThemes: string[];
-        /**
          * Whether to hide toolbar
          */
         hideToolbar: boolean;
@@ -237,7 +319,11 @@ declare namespace Config {
         /**
          * List of installed light themes
          */
-        lightThemes: string[];
+        lightThemes: IAppearanceTheme[];
+        /**
+         * List of installed dark themes
+         */
+        darkThemes: IAppearanceTheme[];
         /**
          * The current theme mode
          * - `0`: Light theme
@@ -265,6 +351,30 @@ declare namespace Config {
          */
         themeVer: string;
         statusBar: IAppearanceStatusBar;
+        notifications: IAppearanceNotifications;
+        entryVisibility: IEntryVisibility;
+    }
+
+    export interface IAppearanceTheme {
+        label: string;
+        name: string;
+        frontends?: string[];
+    }
+
+    export type TEntryVisibilityBase = "simple" | "full";
+
+    export interface IEntryVisibilityProfile {
+        id: string;
+        name: string;
+        base: TEntryVisibilityBase;
+        entries: Record<string, boolean>;
+        orders: Record<string, string[]>;
+    }
+
+    export interface IEntryVisibility {
+        version: number;
+        active: string;
+        profiles: IEntryVisibilityProfile[];
     }
 
     export interface IAppearanceStatusBar {
@@ -275,33 +385,44 @@ declare namespace Config {
     }
 
     /**
+     * 外观通知开关配置。Appearance.Notifications 为 undefined 时表示旧配置尚未迁移，整体按默认启用处理。
+     */
+    export interface IAppearanceNotifications {
+        docTreeMaxList: boolean;
+        tagMaxList: boolean;
+        workspaceNotSSD: boolean;
+        browserCompatibility: boolean;
+        selectAllTip?: boolean;
+    }
+
+    /**
      * The language used by the current user
      *
      * User interface language
      * Same as {@link IAppearance.lang}
      */
     export type TLang =
-        "en_US"
-        | "ar_SA"
-        | "de_DE"
-        | "es_ES"
-        | "fr_FR"
-        | "he_IL"
-        | "hi_IN"
-        | "id_ID"
-        | "it_IT"
-        | "ja_JP"
-        | "ko_KR"
-        | "pl_PL"
-        | "pt_BR"
-        | "ru_RU"
-        | "sk_SK"
-        | "tr_TR"
-        | "uk_UA"
-        | "th_TH"
-        | "nl_NL"
-        | "zh_CN"
-        | "zh_CHT";
+        "en"
+        | "ar"
+        | "de"
+        | "es"
+        | "fr"
+        | "he"
+        | "hi"
+        | "id"
+        | "it"
+        | "ja"
+        | "ko"
+        | "pl"
+        | "pt-BR"
+        | "ru"
+        | "sk"
+        | "tr"
+        | "uk"
+        | "th"
+        | "nl"
+        | "zh-CN"
+        | "zh-TW";
 
     /**
      * SiYuan bazaar related configuration
@@ -353,6 +474,10 @@ declare namespace Config {
          * Whether to enable the inline mark
          */
         inlineMark: boolean;
+        /**
+         * Whether to enable the middle dot code block shortcut
+         */
+        codeBlockMiddleDot: boolean;
     }
 
     /**
@@ -366,7 +491,7 @@ declare namespace Config {
         allowSVGScript: boolean;
 
         /**
-         * Whether to allow to execute javascript in the HTML block
+         * 是否允许在 HTML 内容中执行 JavaScript
          */
         allowHTMLBLockScript: boolean;
 
@@ -387,6 +512,10 @@ declare namespace Config {
          * Whether the backlink contains children
          */
         backlinkContainChildren: boolean;
+        /**
+         * Whether to show backlinks at the bottom of the document
+         */
+        backlinkShowBottom: boolean;
         /**
          * Backlink sort mode
          */
@@ -425,6 +554,30 @@ declare namespace Config {
          */
         displayNetImgMark: boolean;
         /**
+         * Whether to show database attributes at the top of the document
+         */
+        databaseAttrShow: boolean;
+        /**
+         * Behavior when clicking a database badge
+         * - `0`: Focus the block and expand the database panel
+         * - `1`: Open the block attribute panel
+         */
+        databaseAttrClickMode: number;
+        /**
+         * Default state of database attributes
+         * - `0`: Expanded
+         * - `1`: Collapsed
+         */
+        databaseAttrViewMode: number;
+        /**
+         * Whether to hide empty database attributes
+         */
+        databaseAttrHideEmpty: boolean;
+        /**
+         * Whether to use tabs for database attributes
+         */
+        databaseAttrUseTabs: boolean;
+        /**
          * The number of blocks loaded each time they are dynamically loaded
          */
         dynamicLoadBlocks: number;
@@ -432,6 +585,14 @@ declare namespace Config {
          * Whether the embedded block displays breadcrumbs
          */
         embedBlockBreadcrumb: boolean;
+        /**
+         * Whether to display automatic heading numbers
+         */
+        headingNumber: boolean;
+        /**
+         * The automatic heading numbering format preset
+         */
+        headingNumberFormat: string;
         /**
          * Heading embed mode for embedded blocks
          * - `0`: Show title with blocks below (default)
@@ -463,6 +624,10 @@ declare namespace Config {
          * The font weight used in the editor, 0 means not set
          */
         fontWeight: number;
+        /**
+         * Label shown in Settings for the selected editor font (e.g. PostScript name + subfamily). May be empty; falls back to fontFamily in UI when empty.
+         */
+        fontFamilyDisplay: string;
         /**
          * The font size used in the editor
          */
@@ -661,13 +826,30 @@ declare namespace Config {
          */
         alwaysSelectOpenedFile: boolean;
         /**
+         * Whether clicking a document icon expands or collapses its child documents
+         */
+        docIconClickExpand: boolean;
+        /**
+         * Whether clicking a parent document title expands or collapses its child documents
+         */
+        parentDocClickExpand: boolean;
+        /**
+         * Whether to enable top-level notebook documents
+         */
+        boxDocEnabled: boolean;
+        /**
          * Whether to close all tabs when starting
          */
         closeTabsOnStart: boolean;
+        tabStartupMode: 0 | 1 | 2;
         /**
          * The storage path of the new document
          */
         docCreateSavePath: string;
+        /**
+         * The content template path of the new document
+         */
+        docCreateTemplatePath: string;
         /**
          * The maximum number of documents listed
          */
@@ -742,6 +924,14 @@ declare namespace Config {
      * Flashcard related configuration
      */
     export interface IFlashCard {
+        /**
+         * Whether to enable blockquote card making
+         */
+        blockquote: boolean;
+        /**
+         * Whether to enable callout card making
+         */
+        callout: boolean;
         /**
          * Whether to enable deck card making
          */
@@ -950,17 +1140,21 @@ declare namespace Config {
         attr: IKey;
         backlinks: IKey;
         collapse: IKey;
+        foldChildHeadings: IKey;
+        foldSiblingHeadings: IKey;
         foldRecursive: IKey;
         copyBlockEmbed: IKey;
         copyBlockRef: IKey;
         copyHPath: IKey;
         copyID: IKey;
         copyPlainText: IKey;
+        copyRichText: IKey;
         copyProtocol: IKey;
         copyProtocolInMd: IKey;
         copyText: IKey;
         duplicate: IKey;
         exitFocus: IKey;
+        focusBreadcrumb: IKey;
         expand: IKey;
         expandDown: IKey;
         expandUp: IKey;
@@ -1132,6 +1326,9 @@ declare namespace Config {
         recentClosed: IKey;
         move: IKey;
         selectOpen1: IKey;
+        switchLeftDock: IKey;
+        switchRightDock: IKey;
+        switchBottomDock: IKey;
         toggleDock: IKey;
         splitLR: IKey;
         splitMoveR: IKey;
@@ -1308,6 +1505,10 @@ declare namespace Config {
          */
         embedBlock: boolean;
         /**
+         * Whether to distinguish between Simplified and Traditional Chinese characters when searching
+         */
+        hanSensitive: boolean;
+        /**
          * Whether to search heading blocks
          */
         heading: boolean;
@@ -1404,6 +1605,55 @@ declare namespace Config {
     }
 
     /**
+     * A named secret. The value is AES-encrypted at rest on the kernel side.
+     */
+    export interface ISecret {
+        name: string;
+        value: string;
+    }
+
+    /**
+     * Global secrets store. Referenced via {{secrets.NAME}} placeholders by the
+     * agent http_request tool and MCP server headers.
+     */
+    export interface ISecrets {
+        items: ISecret[];
+    }
+
+    /**
+     * A named variable. The value is stored in plain text (non-sensitive data).
+     */
+    export interface IVariable {
+        name: string;
+        value: string;
+    }
+
+    /**
+     * Global variables store. Referenced via {{vars.NAME}} placeholders by the
+     * agent http_request tool and MCP server headers.
+     */
+    /**
+     * Encrypted notebook global settings
+     * 加密笔记本全局设置
+     */
+    export interface INotebookCrypto {
+        /**
+         * Whether encrypted notebook feature is enabled
+         * 加密笔记本功能是否已启用
+         */
+        enabled: boolean;
+        /**
+         * Auto-lock after idle minutes, 0 = disabled
+         * 自动锁定闲置分钟数，0 表示禁用
+         */
+        autoLockMinutes: number;
+    }
+
+    export interface IVariables {
+        items: IVariable[];
+    }
+
+    /**
      * SiYuan workspace content statistics
      */
     export interface IStat {
@@ -1480,7 +1730,7 @@ declare namespace Config {
          * - `3`: Network storage service using WebDAV protocol
          * - `4`: Local file system
          */
-        provider: number;
+        provider: 0 | 2 | 3 | 4;
         s3: ISyncS3;
         /**
          * The prompt information of the last synchronization
@@ -1492,6 +1742,18 @@ declare namespace Config {
         synced: number;
         webdav: ISyncWebDAV;
         local: ISyncLocal;
+        lan: ISyncLAN;
+    }
+
+    export interface ISyncLAN {
+        /**
+         * Whether to enable LAN sync acceleration
+         */
+        enabled: boolean;
+        /**
+         * Maximum number of concurrent peer requests
+         */
+        maxConcurrentReqs: number;
     }
 
     /**
@@ -1625,6 +1887,10 @@ declare namespace Config {
          */
         downloadInstallPkg: boolean;
         /**
+         * 更新通道
+         */
+        updateChannel: TUpdateChannel;
+        /**
          * The absolute path of the user's home directory for the current operating system user
          */
         homeDir: string;
@@ -1632,10 +1898,6 @@ declare namespace Config {
          * The UUID of the current session
          */
         id: string;
-        /**
-         * Whether the current version is an internal test version
-         */
-        isInsider: boolean;
         /**
          * Whether the current version is a Microsoft Store version
          */
@@ -1678,6 +1940,10 @@ declare namespace Config {
          */
         osPlatform: string;
         /**
+         * Whether the current boot is in safe mode (disables code snippets, plugins, custom theme and icon)
+         */
+        safeMode: boolean;
+        /**
          * The absolute path of the workspace directory
          */
         workspaceDir: string;
@@ -1696,6 +1962,8 @@ declare namespace Config {
      * - `std`: Desktop Electron environment
      */
     export type TSystemContainer = "docker" | "android" | "ios" | "harmony" | "std";
+
+    export type TUpdateChannel = "stable" | "beta" | "alpha";
 
     /**
      * SiYuan Network proxy configuration
@@ -1991,6 +2259,10 @@ declare namespace Config {
          */
         rootId: string;
         /**
+         * (Backlink) Notebook ID
+         */
+        notebookId?: string;
+        /**
          * (Backlink) Tab type
          * - `pin`: Pinned panel
          * - `local`: The panel of the current document
@@ -2046,6 +2318,10 @@ declare namespace Config {
          */
         blockId: string;
         /**
+         * 数据库行预览块 ID
+         */
+        databaseRowId?: string;
+        /**
          * Object name
          */
         instance: "Editor";
@@ -2085,6 +2361,10 @@ declare namespace Config {
          */
         blockId: string;
         /**
+         * (Graph) Notebook ID
+         */
+        notebookId?: string;
+        /**
          * Object name
          */
         instance: "Graph";
@@ -2118,6 +2398,10 @@ declare namespace Config {
          * (Outline) Block ID
          */
         blockId: string;
+        /**
+         * (Outline) Notebook ID
+         */
+        notebookId?: string;
         /**
          * Object name
          */
@@ -2168,6 +2452,10 @@ declare namespace Config {
      */
     export interface IUILayoutTabSearchConfig {
         /**
+         * Whether the search contains encrypted notebook data that must not be persisted
+         */
+        sensitive?: boolean;
+        /**
          * 搜索传入的查询内容
          */
         query?: string;
@@ -2196,6 +2484,7 @@ declare namespace Config {
          * - `1`: Query syntax
          * - `2`: SQL
          * - `3`: Regular expression
+         * - `4`: Fuzzy search
          * @default 0
          */
         method?: number;

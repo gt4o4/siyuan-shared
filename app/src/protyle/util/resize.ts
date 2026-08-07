@@ -56,14 +56,9 @@ export const resize = (protyle: IProtyle) => {
         if (protyle.scroll && protyle.scroll.element.parentElement.getAttribute("style")) {
             protyle.scroll.element.parentElement.setAttribute("style", `--b3-dynamicscroll-width:${Math.min(protyle.contentElement.clientHeight - 49, 200)}px`);
         }
-        if (!protyle.disabled) {
-            const contentRect = protyle.contentElement.getBoundingClientRect();
-            protyle.wysiwyg.element.querySelectorAll(".av").forEach((item: HTMLElement) => {
-                if (item.querySelector(".av__scroll")) {
-                    stickyRow(item, contentRect, "all");
-                }
-            });
-        }
+        protyle.wysiwyg.element.querySelectorAll(".av").forEach((item: HTMLElement) => {
+            stickyRow(item, protyle.contentElement, "all");
+        });
         if (abs.width > MIN_ABS || isNaN(abs.width)) {
             if (typeof window.echarts !== "undefined") {
                 protyle.wysiwyg.element.querySelectorAll('[data-subtype="echarts"], [data-subtype="mindmap"]').forEach((chartItem: HTMLElement) => {

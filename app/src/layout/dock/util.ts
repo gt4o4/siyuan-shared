@@ -5,16 +5,20 @@ import {Outline} from "./Outline";
 import {fixWndFlex1, getInstanceById, getWndByLayout} from "../util";
 import {getDockByType, resizeTabs, setTabPosition} from "../tabUtil";
 import {Backlink} from "./Backlink";
-import {App} from "../../index";
+import type {App} from "../../index";
 import {Wnd} from "../Wnd";
 import {fetchSyncPost} from "../../util/fetch";
 import {Files} from "./Files";
 import {Editor} from "../../editor";
+import {Constants} from "../../constants";
+import {getDocDisplayName, isEncryptedBox} from "../../util/pathName";
+import {showMessage} from "../../dialog/message";
 
 export const openBacklink = async (options: {
     app: App,
     blockId: string,
     rootId?: string,
+    notebookId?: string,
     title?: string,
     useBlockId?: boolean,
 }) => {
@@ -36,19 +40,25 @@ export const openBacklink = async (options: {
         wnd = getWndByLayout(window.siyuan.layout.centerLayout);
     }
     if (!options.rootId) {
-        const response = await fetchSyncPost("/api/block/getDocInfo", {id: options.blockId});
+        const response = await fetchSyncPost("/api/block/getDocInfo", {
+            id: options.blockId,
+            notebook: isEncryptedBox(options.notebookId) ? options.notebookId : undefined,
+        });
         if (response.code === -1) {
             return;
         }
         options.rootId = response.data.rootID;
         options.useBlockId = response.data.rootID !== response.data.id;
-        options.title = response.data.name || window.siyuan.languages.untitled;
+        options.title = getDocDisplayName(response.data.name, response.data.ial[Constants.CUSTOM_SY_TITLE_EMPTY] === "true");
     } else if (!options.title) {
-        const response = await fetchSyncPost("/api/block/getDocInfo", {id: options.blockId});
+        const response = await fetchSyncPost("/api/block/getDocInfo", {
+            id: options.blockId,
+            notebook: isEncryptedBox(options.notebookId) ? options.notebookId : undefined,
+        });
         if (response.code === -1) {
             return;
         }
-        options.title = response.data.name || window.siyuan.languages.untitled;
+        options.title = getDocDisplayName(response.data.name, response.data.ial[Constants.CUSTOM_SY_TITLE_EMPTY] === "true");
     }
     const newWnd = wnd.split("lr");
     newWnd.addTab(new Tab({
@@ -62,6 +72,7 @@ export const openBacklink = async (options: {
                 // 通过搜索打开的包含上下文，但不是缩放，因此需要传 rootID https://ld246.com/article/1666786639708
                 blockId: options.useBlockId ? options.blockId : options.rootId,
                 rootId: options.rootId,
+                notebookId: options.notebookId,
             }));
         }
     }));
@@ -71,9 +82,14 @@ export const openGraph = async (options: {
     app: App,
     blockId: string,
     rootId?: string,
+    notebookId?: string,
     title?: string,
     useBlockId?: boolean,
 }) => {
+    if (isEncryptedBox(options.notebookId)) {
+        showMessage(window.siyuan.languages._kernel[313]);
+        return;
+    }
     const graph = getAllModels().graph.find(item => {
         if (item.blockId === options.blockId && item.type === "local") {
             item.parent.parent.removeTab(item.parent.id);
@@ -98,13 +114,13 @@ export const openGraph = async (options: {
         }
         options.rootId = response.data.rootID;
         options.useBlockId = response.data.rootID !== response.data.id;
-        options.title = response.data.name || window.siyuan.languages.untitled;
+        options.title = getDocDisplayName(response.data.name, response.data.ial[Constants.CUSTOM_SY_TITLE_EMPTY] === "true");
     } else if (!options.title) {
         const response = await fetchSyncPost("/api/block/getDocInfo", {id: options.blockId});
         if (response.code === -1) {
             return;
         }
-        options.title = response.data.name || window.siyuan.languages.untitled;
+        options.title = getDocDisplayName(response.data.name, response.data.ial[Constants.CUSTOM_SY_TITLE_EMPTY] === "true");
     }
     const newWnd = wnd.split("lr");
     newWnd.addTab(new Tab({
@@ -117,6 +133,7 @@ export const openGraph = async (options: {
                 tab,
                 blockId: options.blockId,
                 rootId: options.rootId,
+                notebookId: options.notebookId,
             }));
         }
     }));
@@ -125,6 +142,7 @@ export const openGraph = async (options: {
 export const openOutline = async (options: {
     app: App,
     rootId: string,
+    notebookId?: string,
     isPreview: boolean,
     title: string
 }) => {
@@ -148,8 +166,11 @@ export const openOutline = async (options: {
     const newWnd = wnd.split("lr", false);
 
     if (!options.title) {
-        const response = await fetchSyncPost("/api/block/getDocInfo", {id: options.rootId});
-        options.title = response.data.name || window.siyuan.languages.untitled;
+        const response = await fetchSyncPost("/api/block/getDocInfo", {
+            id: options.rootId,
+            notebook: isEncryptedBox(options.notebookId) ? options.notebookId : undefined,
+        });
+        options.title = getDocDisplayName(response.data.name, response.data.ial[Constants.CUSTOM_SY_TITLE_EMPTY] === "true");
     }
     newWnd.element.style.width = "200px";
     newWnd.element.classList.remove("fn__flex-1");
@@ -163,6 +184,7 @@ export const openOutline = async (options: {
                 type: "local",
                 tab,
                 blockId: options.rootId,
+                notebookId: options.notebookId,
                 isPreview: options.isPreview,
             }));
         }
@@ -228,7 +250,7 @@ export const clearOBG = () => {
         }
     });
     models.backlink.forEach(item => {
-        if (item.type === "local") {
+        if (item.type !== "pin") {
             return;
         }
         if ("" === item.blockId) {

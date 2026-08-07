@@ -4,7 +4,8 @@ import {Dialog} from "../dialog";
 import {fetchPost, fetchSyncPost} from "../util/fetch";
 import {focusByRange} from "../protyle/util/selection";
 import {genSearch, updateConfig} from "./util";
-import {App} from "../index";
+import type {App} from "../index";
+import {cancelSearchRequest} from "./request";
 
 export const openSearch = async (options: {
     app: App,
@@ -24,6 +25,9 @@ export const openSearch = async (options: {
                 notebook: options.notebookId,
                 path: options.searchPath.endsWith(".sy") ? options.searchPath : options.searchPath + ".sy"
             });
+            if (response.code !== 0 || typeof response.data !== "string") {
+                return;
+            }
             hPath = pathPosix().join(hPath, response.data);
             idPath[0] = pathPosix().join(idPath[0], options.searchPath);
         }
@@ -41,12 +45,13 @@ export const openSearch = async (options: {
         k: options.key || localData.k,
         r: localData.r,
         hasReplace: options.hotkey === Constants.DIALOG_REPLACE,
-        method: localData.method,
+        method: localData.method === 4 && !window.siyuan.config.ai.embedding.enabled ? 0 : localData.method,
         hPath,
         idPath,
         group: localData.group,
         sort: localData.sort,
         types: Object.assign({}, localData.types),
+        subTypes: Object.assign({}, localData.subTypes),
         replaceTypes: Object.assign({}, localData.replaceTypes),
         page: options.key ? 1 : localData.page
     };
@@ -73,6 +78,9 @@ export const openSearch = async (options: {
                 cloneData.hasReplace = false;
                 const toPath = item.editors.edit.protyle.path;
                 fetchPost("/api/filetree/getHPathsByPaths", {paths: [toPath]}, (response) => {
+                    if (!Array.isArray(response.data) || typeof response.data[0] !== "string") {
+                        return;
+                    }
                     cloneData.idPath = [pathPosix().join(item.editors.edit.protyle.notebookId, toPath)];
                     cloneData.hPath = response.data[0];
                     item.data.idPath = cloneData.idPath;
@@ -99,6 +107,7 @@ export const openSearch = async (options: {
             if (range && !options) {
                 focusByRange(range);
             }
+            cancelSearchRequest(dialog.element.querySelector(".b3-dialog__body"));
             dialog.editors.edit.destroy();
             dialog.editors.unRefEdit.destroy();
         },

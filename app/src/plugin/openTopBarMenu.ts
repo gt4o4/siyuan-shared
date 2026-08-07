@@ -1,4 +1,4 @@
-import {App} from "../index";
+import type {App} from "../index";
 import {Menu} from "./Menu";
 import {isHuawei, setStorageVal} from "../protyle/util/compatibility";
 /// #if !MOBILE
@@ -16,7 +16,7 @@ export const openTopBarMenu = (app: App, target?: Element) => {
         label: window.siyuan.languages.manage,
         ignore: isHuawei() || window.siyuan.config.readonly,
         click() {
-            openSetting(app).element.querySelector('.config__side [data-name="bazaar"]').dispatchEvent(new CustomEvent("click"));
+            openSetting(app, "bazaar");
         }
     });
     menu.addSeparator({id: "separator_1", ignore: isHuawei() || window.siyuan.config.readonly});

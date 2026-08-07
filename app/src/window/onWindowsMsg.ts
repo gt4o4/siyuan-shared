@@ -1,8 +1,7 @@
 import {getInstanceById} from "../layout/util";
 import {Tab} from "../layout/Tab";
-import {isWindow} from "../util/functions";
 import {lockScreen} from "../dialog/processSystem";
-import {App} from "../index";
+import type {App} from "../index";
 
 const closeTab = (ipcData: IWebSocketData) => {
     const tab = getInstanceById(ipcData.data);
@@ -24,9 +23,9 @@ export const onWindowsMsg = (ipcData: IWebSocketData, app: App) => {
                 document.querySelectorAll(".layout-tab-bar li[data-clone='true']").forEach(tabItem => {
                     tabItem.remove();
                 });
-            } else if (isWindow()) {
+            } else {
                 document.querySelectorAll(".layout-tab-bar--readonly .fn__flex-1").forEach((item: HTMLElement) => {
-                    if (item.getBoundingClientRect().top <= 0) {
+                    if (item.getBoundingClientRect().top <= 6) {
                         if (ipcData.data === "addRegionStyle") {
                             (item.style as CSSStyleDeclarationElectron).WebkitAppRegion = "drag";
                         } else if (ipcData.data === "removeRegionStyle") {

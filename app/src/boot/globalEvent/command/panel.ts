@@ -1,14 +1,14 @@
 import {Dialog} from "../../../dialog";
-import {App} from "../../../index";
+import type {App} from "../../../index";
 import {upDownHint} from "../../../util/upDownHint";
 import {updateHotkeyTip} from "../../../protyle/util/compatibility";
 import {isMobile} from "../../../util/functions";
 import {Constants} from "../../../constants";
-import {Editor} from "../../../editor";
 /// #if MOBILE
 import {getCurrentEditor} from "../../../mobile/editor";
 import {popSearch} from "../../../mobile/menu/search";
 /// #else
+import {Editor} from "../../../editor";
 import {getActiveTab, getDockByType} from "../../../layout/tabUtil";
 import {Custom} from "../../../layout/dock/Custom";
 import {getAllModels} from "../../../layout/getAll";
@@ -24,8 +24,15 @@ import {getDisplayName, getNotebookName, getTopPaths, movePathTo, moveToPath, pa
 import {hintMoveBlock} from "../../../protyle/hint/extend";
 import {fetchSyncPost} from "../../../util/fetch";
 import {focusByRange} from "../../../protyle/util/selection";
+import {matchHotKey} from "../../../protyle/util/hotKey";
 
 export const commandPanel = (app: App) => {
+    const openCommandPanelDialog = window.siyuan.dialogs.find(item =>
+        item.element.getAttribute("data-key") === Constants.DIALOG_COMMANDPANEL);
+    if (openCommandPanelDialog) {
+        openCommandPanelDialog.destroy();
+        return;
+    }
     const range = getSelection().rangeCount > 0 ? getSelection().getRangeAt(0) : undefined;
     const dialog = new Dialog({
         width: isMobile() ? "92vw" : "80vw",
@@ -65,8 +72,8 @@ export const commandPanel = (app: App) => {
             "goForward", "goToEditTabNext", "goToEditTabPrev", "goToTab1", "goToTab2", "goToTab3", "goToTab4",
             "goToTab5", "goToTab6", "goToTab7", "goToTab8", "goToTab9", "goToTabNext", "goToTabPrev", "lockScreen",
             "mainMenu", "move", "newFile", "recentDocs", "replace", "riffCard", "search", "selectOpen1", "syncNow",
-            "splitLR", "splitMoveB", "splitMoveR", "splitTB", "tabToWindow", "stickSearch", "toggleDock", "unsplitAll",
-            "unsplit", "recentClosed"];
+            "splitLR", "splitMoveB", "splitMoveR", "splitTB", "switchLeftDock", "switchRightDock", "switchBottomDock",
+            "tabToWindow", "stickSearch", "toggleDock", "unsplitAll", "unsplit", "recentClosed"];
         /// #if !BROWSER
         keys.push("toggleWin");
         /// #endif
@@ -107,18 +114,7 @@ export const commandPanel = (app: App) => {
         });
     });
 
-    if (listElement.childElementCount === 0) {
-        const liElement = document.createElement("li");
-        liElement.classList.add("b3-list-item", "b3-list-item--focus");
-        liElement.innerHTML = `<span class="b3-list-item__text" style="-webkit-line-clamp: inherit;">${window.siyuan.languages._kernel[122]}</span>`;
-        liElement.addEventListener("click", () => {
-            dialog.destroy();
-        });
-        listElement.insertAdjacentElement("beforeend", liElement);
-    } else {
-        listElement.firstElementChild.classList.add("b3-list-item--focus");
-    }
-
+    listElement.firstElementChild.classList.add("b3-list-item--focus");
     const inputElement = dialog.element.querySelector(".b3-text-field") as HTMLInputElement;
     inputElement.focus();
     listElement.addEventListener("click", (event: KeyboardEvent) => {
@@ -136,6 +132,11 @@ export const commandPanel = (app: App) => {
     inputElement.addEventListener("keydown", (event: KeyboardEvent) => {
         event.stopPropagation();
         if (event.isComposing) {
+            return;
+        }
+        if (!event.repeat && matchHotKey(window.siyuan.config.keymap.general.commandPanel.custom, event)) {
+            dialog.destroy();
+            event.preventDefault();
             return;
         }
         upDownHint(listElement, event);
@@ -202,8 +203,8 @@ export const execByCommand = async (options: {
     let protyle = options.protyle;
     /// #if MOBILE
     if (!protyle) {
-        protyle = getCurrentEditor().protyle;
-        options.previousRange = protyle.toolbar.range;
+        protyle = getCurrentEditor()?.protyle;
+        options.previousRange = protyle?.toolbar.range;
     }
     /// #endif
     const range: Range = options.previousRange || (getSelection().rangeCount > 0 ? getSelection().getRangeAt(0) : document.createRange());
@@ -224,10 +225,11 @@ export const execByCommand = async (options: {
                 }
             });
         }
+        /// #if !MOBILE
         const activeTab = getActiveTab();
         if (!protyle && activeTab) {
             if (activeTab.model instanceof Editor) {
-                protyle = activeTab.model.editor.protyle;
+                protyle = activeTab.model.getCurrentProtyle(range);
             } else if (activeTab.model instanceof Search) {
                 if (activeTab.model.element.querySelector("#searchUnRefPanel").classList.contains("fn__none")) {
                     protyle = activeTab.model.editors.edit.protyle;
@@ -244,7 +246,9 @@ export const execByCommand = async (options: {
                     });
                 }
             }
-        } else if (!protyle) {
+        }
+        /// #endif
+        if (!protyle) {
             if (!protyle && range) {
                 window.siyuan.blockPanels.find(item => {
                     item.editors.find(editorItem => {
@@ -258,6 +262,7 @@ export const execByCommand = async (options: {
                     }
                 });
             }
+            /// #if !MOBILE
             const models = getAllModels();
             if (!protyle) {
                 models.backlink.find(item => {
@@ -285,6 +290,7 @@ export const execByCommand = async (options: {
                     }
                 });
             }
+            /// #endif
         }
     }
 
@@ -343,6 +349,9 @@ export const execByCommand = async (options: {
                     notebook: protyle.notebookId,
                     path: protyle.path.endsWith(".sy") ? protyle.path : protyle.path + ".sy"
                 });
+                if (response.code !== 0 || typeof response.data !== "string") {
+                    return;
+                }
                 popSearch(options.app, {
                     page: 1,
                     hasReplace: true,
@@ -391,6 +400,9 @@ export const execByCommand = async (options: {
                     notebook: protyle.notebookId,
                     path: protyle.path.endsWith(".sy") ? protyle.path : protyle.path + ".sy"
                 });
+                if (response.code !== 0 || typeof response.data !== "string") {
+                    return;
+                }
                 popSearch(options.app, {
                     page: 1,
                     hasReplace: false,
@@ -450,7 +462,8 @@ export const execByCommand = async (options: {
                         paths: [protyle.path],
                         range,
                         flashcard: false,
-                        rootIDs: [protyle.block.rootID]
+                        rootIDs: [protyle.block.rootID],
+                        sourceNotebookIds: [protyle.notebookId]
                     });
                 } else if (nodeElement && range && protyle.element.contains(range.startContainer)) {
                     let selectElements = Array.from(protyle.wysiwyg.element.querySelectorAll(".protyle-wysiwyg--select"));
@@ -462,11 +475,14 @@ export const execByCommand = async (options: {
                             hintMoveBlock(toPath[0], selectElements, protyle);
                         },
                         flashcard: false,
-                        rootIDs: [protyle.block.rootID]
+                        rootIDs: [protyle.block.rootID],
+                        sourceNotebookIds: [protyle.notebookId]
                     });
                 }
             } else {
                 const paths = getTopPaths(fileLiElements);
+                const sourceNotebookIds = fileLiElements.map((item) =>
+                    item.getAttribute("data-notebook-id") || item.closest("ul[data-url]")?.getAttribute("data-url") || "");
                 const rootIDs: string[] = [];
                 fileLiElements.forEach(item => {
                     rootIDs.push(item.getAttribute("data-node-id"));
@@ -477,7 +493,8 @@ export const execByCommand = async (options: {
                     },
                     paths,
                     rootIDs,
-                    flashcard: false
+                    flashcard: false,
+                    sourceNotebookIds
                 });
             }
             break;

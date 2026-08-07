@@ -24,7 +24,9 @@ import (
 	"github.com/siyuan-note/siyuan/kernel/util"
 )
 
-const CurrentSpec = 4
+const CurrentSpec = 7
+
+const MaxFilterNestingDepth = 3
 
 func UpgradeSpec(av *AttributeView) {
 	if CurrentSpec <= av.Spec {
@@ -35,6 +37,73 @@ func UpgradeSpec(av *AttributeView) {
 	upgradeSpec2(av)
 	upgradeSpec3(av)
 	upgradeSpec4(av)
+	upgradeSpec5(av)
+	upgradeSpec6(av)
+	upgradeSpec7(av)
+}
+
+func CheckSpec(av *AttributeView) (err error) {
+	if CurrentSpec < av.Spec {
+		logging.LogErrorf("attribute view [%s] spec [%d] is newer than current [%d]", av.ID, av.Spec, CurrentSpec)
+		err = ErrSpecTooNew
+		return
+	}
+	return
+}
+
+// upgradeSpec7 移除数据库级当前视图，当前视图由数据库块属性或调用上下文决定。
+// https://github.com/siyuan-note/siyuan/issues/18539
+func upgradeSpec7(av *AttributeView) {
+	if 7 <= av.Spec {
+		return
+	}
+
+	av.Spec = 7
+}
+
+// upgradeSpec6 将卡片和看板的预设尺寸转换为可连续调节的实际宽度和宽高比。
+func upgradeSpec6(av *AttributeView) {
+	if 6 <= av.Spec {
+		return
+	}
+
+	for _, view := range av.Views {
+		if nil != view.Gallery {
+			view.Gallery.CardWidth = CardWidthBySize(view.Gallery.CardSize)
+			view.Gallery.CardAspectRatioValue = CardAspectRatioValueByPreset(view.Gallery.CardAspectRatio)
+		}
+		if nil != view.Kanban {
+			view.Kanban.CardWidth = CardWidthBySize(view.Kanban.CardSize)
+			view.Kanban.CardAspectRatioValue = CardAspectRatioValueByPreset(view.Kanban.CardAspectRatio)
+		}
+	}
+
+	av.Spec = 6
+}
+
+// upgradeSpec5 将旧的扁平过滤规则数组包装为单个隐式 AND 根组，支持递归嵌套分组。
+// 原有叶子条件一条不丢，整体作为根组的子节点保留。
+func upgradeSpec5(av *AttributeView) {
+	if 5 <= av.Spec {
+		return
+	}
+
+	for _, view := range av.Views {
+		if 1 == len(view.Filters) && nil != view.Filters[0] && view.Filters[0].IsGroup() {
+			continue // 已经是根组形式，无需包装
+		}
+		// 收集非 nil 的原有条件
+		var children []*ViewFilter
+		for _, f := range view.Filters {
+			if nil != f {
+				children = append(children, f)
+			}
+		}
+		// 包装成 AND 根组，原条件作为子节点（空时即为空根组）
+		view.Filters = []*ViewFilter{{Combination: FilterCombinationAnd, Filters: children}}
+	}
+
+	av.Spec = 5
 }
 
 func upgradeSpec4(av *AttributeView) {

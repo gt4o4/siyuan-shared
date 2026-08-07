@@ -1,13 +1,17 @@
-import {App} from "../index";
+import type {App} from "../index";
 import {Plugin} from "./index";
 /// #if !MOBILE
 import {getAllModels} from "../layout/getAll";
 import {resizeTopBar} from "../layout/util";
 import {setTabPosition} from "../layout/tabUtil";
 /// #endif
+/// #if !BROWSER
+import {ipcRenderer} from "electron";
+/// #endif
 import {Constants} from "../constants";
 import {setStorageVal} from "../protyle/util/compatibility";
 import {getAllEditor} from "../layout/getAll";
+import {unregisterAction} from "../layout/dock/agent/frontendActions";
 
 export const uninstall = (app: App, name: string, isReload: boolean) => {
     app.plugins.find((plugin: Plugin, index) => {
@@ -17,7 +21,11 @@ export const uninstall = (app: App, name: string, isReload: boolean) => {
             } catch (e) {
                 console.error(`plugin ${plugin.name} onunload error:`, e);
             }
-            plugin.kernel.destroy();
+            try {
+                plugin.kernel.destroy();
+            } catch (e) {
+                console.error(`plugin ${plugin.name} kernel destroy error:`, e);
+            }
             if (!isReload) {
                 try {
                     plugin.uninstall();
@@ -49,6 +57,8 @@ export const uninstall = (app: App, name: string, isReload: boolean) => {
                 plugin.topBarIcons.splice(i, 1);
                 i--;
             }
+            // rm agent actions
+            plugin.agentActions.forEach(name => unregisterAction(name));
             /// #if !MOBILE
             // rm statusBar
             plugin.statusBarIcons.forEach(item => {
@@ -77,6 +87,12 @@ export const uninstall = (app: App, name: string, isReload: boolean) => {
             });
             // rm plugin
             app.plugins.splice(index, 1);
+            /// #if MOBILE
+            // 移动端卸载插件后，若无任何插件 dock 则隐藏插件入口图标
+            if (app.plugins.every(p => Object.keys(p.docks).length === 0)) {
+                document.querySelector('#sidebar [data-type="sidebar-plugin-tab"]')?.classList.add("fn__none");
+            }
+            /// #endif
             // rm icons
             document.querySelector(`svg[data-name="${plugin.name}"]`)?.remove();
             // rm protyle toolbar
@@ -85,6 +101,16 @@ export const uninstall = (app: App, name: string, isReload: boolean) => {
             });
             // rm style
             document.getElementById("pluginsStyle" + name)?.remove();
+            /// #if !BROWSER
+            plugin.commands.forEach(command => {
+                if (command.globalCallback && command.customHotkey) {
+                    ipcRenderer.send(Constants.SIYUAN_CMD, {
+                        cmd: "unregisterGlobalShortcut",
+                        accelerator: command.customHotkey
+                    });
+                }
+            });
+            /// #endif
             return true;
         }
     });

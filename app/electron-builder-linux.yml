@@ -1,5 +1,6 @@
 productName: "SiYuan"
 appId: "org.b3log.siyuan"
+publish: null
 asar: false
 compression: "normal"
 copyright: "© 2020-present Yunnan Liandi Technology Co., Ltd."
@@ -15,10 +16,13 @@ afterPack: "./scripts/afterPack.js"
 extraFiles:
   - from: "../LICENSE"
     to: "LICENSE"
+  - from: "../THIRD_PARTY_NOTICES.md"
+    to: "THIRD_PARTY_NOTICES.md"
 
 linux:
   icon: "src/assets/icon/"
   category: "Utility"
+  syncDesktopName: true
   executableName: "siyuan"
   desktop: {
     entry: {
@@ -34,6 +38,12 @@ linux:
     - target: "deb"
     - target: "rpm"
 
+rpm:
+  # 避免与包含相同 Electron 二进制文件的 RPM 包产生 build-id 链接冲突
+  fpm:
+    - "--rpm-rpmbuild-define"
+    - "_build_id_links none"
+
 extraResources:
   - from: "changelogs"
     to: "changelogs"
@@ -44,6 +54,9 @@ extraResources:
     filter: "!**/{.DS_Store,.git,.gitignore,.idea}"
   - from: "appearance/boot"
     to: "appearance/boot"
+    filter: "!**/{.DS_Store}"
+  - from: "appearance/covers"
+    to: "appearance/covers"
     filter: "!**/{.DS_Store}"
   - from: "appearance/icons"
     to: "appearance/icons"

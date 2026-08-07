@@ -18,15 +18,19 @@ package proxy
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"strconv"
+	"time"
 
 	"github.com/siyuan-note/logging"
 	"github.com/siyuan-note/siyuan/kernel/model"
 	"github.com/siyuan-note/siyuan/kernel/util"
+	"github.com/soheilhy/cmux"
 )
 
 type PublishServiceTransport struct{}
@@ -35,9 +39,13 @@ var (
 	Host = "0.0.0.0"
 	Port = "0"
 
-	listener  net.Listener
-	server    *http.Server
-	transport = PublishServiceTransport{}
+	listener            net.Listener
+	httpServer          *http.Server
+	httpsServer         *http.Server
+	transport           = PublishServiceTransport{}
+	publishRoundTripper = &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
 )
 
 func InitPublishService() (uint16, error) {
@@ -88,35 +96,64 @@ func initPublishListener() (err error) {
 }
 
 func closePublishListener() {
-	if server == nil {
+	if listener == nil {
 		return
 	}
 
-	// 关闭所有发布服务的 WebSocket 连接
 	util.ClosePublishServiceSessions()
 
-	if err := server.Shutdown(context.Background()); err != nil {
-		logging.LogErrorf("shutdown server failed: %s", err)
+	// 先关闭监听器，停止接收新连接
+	if err := listener.Close(); err != nil {
+		logging.LogErrorf("close publish listener failed: %s", err)
 	}
 
-	if err := server.Close(); err != nil {
-		logging.LogErrorf("close server failed: %s", err)
+	// 再关闭已建立的活跃连接（含 HTTP/2 长连接），否则浏览器会复用旧连接
+	// 继续访问到已关闭发布服务的工作空间内核。HTTP 与 HTTPS 各自独立，需分别关闭。
+	for _, srv := range []*http.Server{httpServer, httpsServer} {
+		if srv == nil {
+			continue
+		}
+
+		// Shutdown 优雅关闭：等待活跃请求处理完毕（最多 5 秒），并触发 keep-alive/HTTP2 连接断开
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := srv.Shutdown(ctx); err != nil {
+			logging.LogErrorf("shutdown publish server failed: %s", err)
+		}
+		cancel()
+
+		// Close 强制关闭所有残留连接，确保端口和连接彻底释放
+		if err := srv.Close(); err != nil {
+			logging.LogErrorf("close publish server failed: %s", err)
+		}
 	}
-	server, listener = nil, nil
+	httpServer, httpsServer, listener = nil, nil, nil
 }
 
 func startPublishReverseProxyService() {
 	logging.LogInfof("publish service [%s:%s] is running", Host, Port)
 
-	server = &http.Server{
-		Handler: &httputil.ReverseProxy{
-			Rewrite:   rewrite,
-			Transport: transport,
-		},
+	handler := &httputil.ReverseProxy{
+		Rewrite:   rewrite,
+		Transport: transport,
 	}
 
-	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		logging.LogErrorf("boot publish service failed: %s", err)
+	certPath, keyPath, certErr := util.GetOrCreateTLSCert()
+	if certErr == nil && "" != certPath {
+		// 提前创建 HTTP/HTTPS 各自的 *http.Server 并传入，这样在服务运行期间就能持有它们的引用，
+		// closePublishListener 调用其 Shutdown/Close 时才能关闭已建立的活跃连接（含 HTTP/2 长连接），
+		// 避免切换工作空间后旧连接仍被旧内核接管。
+		httpServer = &http.Server{Handler: handler}
+		httpsServer = &http.Server{Handler: handler}
+		if _, _, serveErr := util.ServeMultiplexed(listener, handler, certPath, keyPath, httpServer, httpsServer); serveErr != nil {
+			if !errors.Is(serveErr, cmux.ErrListenerClosed) && !errors.Is(serveErr, http.ErrServerClosed) {
+				logging.LogErrorf("publish service failed: %s", serveErr)
+			}
+		}
+	} else {
+		httpServer = &http.Server{Handler: handler}
+		if err := httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logging.LogErrorf("boot publish service failed: %s", err)
+		}
 	}
 
 	logging.LogInfof("publish service [%s:%s] is stopped", Host, Port)
@@ -126,6 +163,28 @@ func rewrite(r *httputil.ProxyRequest) {
 	r.SetURL(util.ServerURL)
 	r.SetXForwarded()
 	// r.Out.Host = r.In.Host // if desired
+}
+
+// publishAuthRejectResponse 构造发布服务认证拒绝响应，retryAfter 大于 0 时附加 Retry-After 头。
+func publishAuthRejectResponse(request *http.Request, statusCode, retryAfter int) *http.Response {
+	header := http.Header{
+		model.BasicAuthHeaderKey: {model.BasicAuthHeaderValue},
+	}
+	if 0 < retryAfter {
+		header.Set("Retry-After", strconv.Itoa(retryAfter))
+	}
+	return &http.Response{
+		StatusCode:    statusCode,
+		Status:        http.StatusText(statusCode),
+		Proto:         request.Proto,
+		ProtoMajor:    request.ProtoMajor,
+		ProtoMinor:    request.ProtoMinor,
+		Request:       request,
+		Header:        header,
+		Body:          http.NoBody,
+		Close:         false,
+		ContentLength: -1,
+	}
 }
 
 func (PublishServiceTransport) RoundTrip(request *http.Request) (response *http.Response, err error) {
@@ -140,7 +199,7 @@ func (PublishServiceTransport) RoundTrip(request *http.Request) (response *http.
 				if account := model.GetBasicAuthAccount(username); account != nil {
 					// Valid account
 					request.Header.Set(model.XAuthTokenKey, account.Token)
-					response, err = http.DefaultTransport.RoundTrip(request)
+					response, err = publishRoundTripper.RoundTrip(request)
 					return
 				}
 
@@ -151,27 +210,29 @@ func (PublishServiceTransport) RoundTrip(request *http.Request) (response *http.
 
 		// Basic Auth
 		username, password, ok := request.BasicAuth()
-		account := model.GetBasicAuthAccount(username)
-		if !ok ||
-			account == nil ||
-			account.Username == "" || // 匿名用户
-			account.Password != password {
-
-			return &http.Response{
-				StatusCode: http.StatusUnauthorized,
-				Status:     http.StatusText(http.StatusUnauthorized),
-				Proto:      request.Proto,
-				ProtoMajor: request.ProtoMajor,
-				ProtoMinor: request.ProtoMinor,
-				Request:    request,
-				Header: http.Header{
-					model.BasicAuthHeaderKey: {model.BasicAuthHeaderValue},
-				},
-				Body:          http.NoBody,
-				Close:         false,
-				ContentLength: -1,
-			}, nil
+		if !ok || "" == username {
+			// 未提供凭据，返回 401 提示输入，不计入失败次数
+			return publishAuthRejectResponse(request, http.StatusUnauthorized, 0), nil
 		}
+
+		// 按来源 IP 与账户名限流，防止暴力破解 https://github.com/siyuan-note/siyuan/security/advisories/GHSA-phg7-xcr4-q5wg
+		ip := util.GetRemoteAddr(request)
+		throttleKey := ip + ":" + username
+		if retryAfter := util.AuthThrottleCheck(throttleKey); 0 < retryAfter {
+			// 锁定期间持续记录失败，以延长锁定时间
+			util.AuthThrottleFail(throttleKey)
+			logging.LogWarnf("publish service auth throttled [ip=%s, username=%s]", ip, username)
+			return publishAuthRejectResponse(request, http.StatusTooManyRequests, retryAfter), nil
+		}
+
+		account := model.GetBasicAuthAccount(username)
+		if account == nil ||
+			"" == account.Username || // 匿名用户
+			!util.AuthCodeEquals(account.Password, password) { // 恒定时间比较，避免时序侧信道 https://github.com/siyuan-note/siyuan/security/advisories/GHSA-phg7-xcr4-q5wg
+			util.AuthThrottleFail(throttleKey)
+			return publishAuthRejectResponse(request, http.StatusUnauthorized, 0), nil
+		}
+		util.AuthThrottleReset(throttleKey)
 
 		// set session cookie
 		sessionID := model.GetNewSessionID()
@@ -185,12 +246,12 @@ func (PublishServiceTransport) RoundTrip(request *http.Request) (response *http.
 
 		// set JWT
 		request.Header.Set(model.XAuthTokenKey, account.Token)
-		response, err = http.DefaultTransport.RoundTrip(request)
+		response, err = publishRoundTripper.RoundTrip(request)
 		response.Header.Add("Set-Cookie", cookie.String())
 		return
 	}
 
 	request.Header.Set(model.XAuthTokenKey, model.GetBasicAuthAccount("").Token)
-	response, err = http.DefaultTransport.RoundTrip(request)
+	response, err = publishRoundTripper.RoundTrip(request)
 	return
 }

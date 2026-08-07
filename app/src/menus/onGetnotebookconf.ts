@@ -16,6 +16,7 @@ declare interface INotebookConf {
         dailyNoteSavePath: string
         refCreateSaveBox: string;
         docCreateSaveBox: string;
+        docCreateTemplatePath: string;
         dailyNoteTemplatePath: string
     }
 }
@@ -26,7 +27,7 @@ export const genNotebookOption = (id: string, notebookId?: string, noCurrent?: b
         html = `<option value="">${window.siyuan.languages.currentNotebook}</option>`;
     }
     const helpIds: string[] = [];
-    Object.keys(Constants.HELP_PATH).forEach((key: "zh_CN") => {
+    Object.keys(Constants.HELP_PATH).forEach((key: "zh-CN") => {
         helpIds.push(Constants.HELP_PATH[key]);
     });
     let firstNotebookId = "";
@@ -47,32 +48,37 @@ export const genNotebookOption = (id: string, notebookId?: string, noCurrent?: b
 };
 
 export const onGetnotebookconf = (data: INotebookConf) => {
-    const titleHTML = `<div class="fn__flex">${escapeHtml(data.name)}
+    const titleHTML = `<div class="fn__flex">
+<div class="fn__ellipsis" style="white-space: nowrap">${escapeHtml(data.name)}</div>
 <div class="fn__space"></div>
 <button class="b3-button b3-button--small fn__flex-center">${window.siyuan.languages.copy} ID</button></div>`;
-    const contentHTML = `<div class="b3-dialog__content" style="background-color: var(--b3-theme-background);">
-<div class="b3-label config__item">
-    ${window.siyuan.languages.fileTree12}
+    const contentHTML = `<div class="b3-dialog__content">
+<div class="b3-label config-item config-item--save-path">
+    <div class="config-name">${window.siyuan.languages.fileTree12}</div>
     <div class="b3-label__text">${window.siyuan.languages.fileTree13}</div>
     <span class="fn__hr"></span>
-    <div class="fn__flex">
-        <select style="min-width: 200px" class="b3-select" id="docCreateSaveBox">${genNotebookOption(data.conf.docCreateSaveBox, data.box)}</select>
+    <div class="fn__flex config-wrap">
+        <select class="b3-select fn__size200" id="docCreateSaveBox">${genNotebookOption(data.conf.docCreateSaveBox, data.box)}</select>
         <div class="fn__space"></div>
         <input class="b3-text-field fn__flex-1" id="docCreateSavePath" value="">
     </div>
+    <div class="fn__hr"></div>
+    <div class="b3-label__text">${window.siyuan.languages.docCreateTemplatePathInheritTip}</div>
+    <div class="fn__hr"></div>
+    <input class="b3-text-field fn__flex-center fn__block" id="docCreateTemplatePath" value="${data.conf.docCreateTemplatePath}">
 </div>
-<div class="b3-label config__item">
-    ${window.siyuan.languages.fileTree5}
+<div class="b3-label config-item config-item--save-path">
+    <div class="config-name">${window.siyuan.languages.fileTree5}</div>
     <div class="b3-label__text">${window.siyuan.languages.fileTree6}</div>
     <span class="fn__hr"></span>
-    <div class="fn__flex">
-        <select style="min-width: 200px" class="b3-select" id="refCreateSaveBox">${genNotebookOption(data.conf.refCreateSaveBox, data.box)}</select>
+    <div class="fn__flex config-wrap">
+        <select class="b3-select fn__size200" id="refCreateSaveBox">${genNotebookOption(data.conf.refCreateSaveBox, data.box)}</select>
         <div class="fn__space"></div>
         <input class="b3-text-field fn__flex-1" id="refCreateSavePath" value="">
     </div>
 </div>
-<div class="b3-label">
-    ${window.siyuan.languages.fileTree11}
+<div class="b3-label config-item">
+    <div class="config-name">${window.siyuan.languages.fileTree11}</div>
     <div class="b3-label__text">${window.siyuan.languages.fileTree14}</div>
     <div class="fn__hr"></div>
     <input class="b3-text-field fn__flex-center fn__block" id="dailyNoteSavePath" value="">
@@ -110,6 +116,8 @@ const bindSettingEvent = (contentElement: Element, data: INotebookConf) => {
     dailyNoteSavePathElement.value = data.conf.dailyNoteSavePath;
     const docCreateSavePathElement = contentElement.querySelector("#docCreateSavePath") as HTMLInputElement;
     docCreateSavePathElement.value = data.conf.docCreateSavePath;
+    const docCreateTemplatePathElement = contentElement.querySelector("#docCreateTemplatePath") as HTMLInputElement;
+    docCreateTemplatePathElement.value = data.conf.docCreateTemplatePath;
     const refCreateSavePathElement = contentElement.querySelector("#refCreateSavePath") as HTMLInputElement;
     refCreateSavePathElement.value = data.conf.refCreateSavePath;
     const dailyNoteTemplatePathElement = contentElement.querySelector("#dailyNoteTemplatePath") as HTMLInputElement;
@@ -123,6 +131,7 @@ const bindSettingEvent = (contentElement: Element, data: INotebookConf) => {
                     refCreateSaveBox: (contentElement.querySelector("#refCreateSaveBox") as HTMLInputElement).value,
                     docCreateSaveBox: (contentElement.querySelector("#docCreateSaveBox") as HTMLInputElement).value,
                     docCreateSavePath: docCreateSavePathElement.value,
+                    docCreateTemplatePath: docCreateTemplatePathElement.value,
                     dailyNoteSavePath: dailyNoteSavePathElement.value,
                     dailyNoteTemplatePath: dailyNoteTemplatePathElement.value,
                 }

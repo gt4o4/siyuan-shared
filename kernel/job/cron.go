@@ -39,18 +39,21 @@ func StartCron() {
 	go every(util.SQLFlushInterval, sql.FlushTxJob)
 	go every(util.SQLFlushInterval, sql.FlushHistoryTxJob)
 	go every(util.SQLFlushInterval, sql.FlushAssetContentTxJob)
-	go every(50*time.Microsecond, model.PollPushQueue)
 	go every(10*time.Minute, model.IndexEmbedBlockJob)
 	go every(10*time.Minute, model.CacheVirtualBlockRefJob)
 	go every(30*time.Second, model.OCRAssetsJob)
 	go every(30*time.Second, model.FlushAssetsTextsJob)
 	go every(30*time.Second, model.HookDesktopUIProcJob)
 	go every(24*time.Hour, model.AutoPurgeRepoJob)
+	go every(1*time.Minute, model.AutoFixIndex)
 	go every(30*time.Minute, model.AutoCheckMicrosoftDefenderJob)
 	go every(24*time.Hour, model.ClearOutdatedHistoryDirJob)
+	go every(1*time.Minute, model.AutoLockIdleEncryptedBoxesJob)
 	if util.IsMobileContainer() {
-		go every(7*time.Second, model.AutoConsumeShorthandsJob)
+		go every(3*time.Second, model.AutoConsumeShorthandsJob)
 	}
+
+	model.StartPushQueueConsumer()
 }
 
 func every(interval time.Duration, f func(), name ...string) {

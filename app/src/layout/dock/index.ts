@@ -14,15 +14,16 @@ import {getDockByType, resizeTabs, setTabPosition} from "../tabUtil";
 import {Inbox} from "./Inbox";
 import {Protyle} from "../../protyle";
 import {Backlink} from "./Backlink";
+import {AgentChat} from "./agent/AgentChat";
 import {adjustDockPadding, resetFloatDockSize} from "./util";
 import {hasClosestByAttribute, hasClosestByClassName} from "../../protyle/util/hasClosest";
-import {App} from "../../index";
+import type {App} from "../../index";
 import {Plugin} from "../../plugin";
 import {Custom} from "./Custom";
 import {clearBeforeResizeTop, recordBeforeResizeTop} from "../../protyle/util/resize";
 import {Constants} from "../../constants";
 
-const TYPES = ["file", "outline", "inbox", "bookmark", "tag", "graph", "globalGraph", "backlink"];
+const TYPES = ["file", "outline", "inbox", "bookmark", "tag", "graph", "globalGraph", "backlink", "agentChat"];
 
 export class Dock {
     public elements: HTMLElement[];
@@ -33,6 +34,8 @@ export class Dock {
     public pin = true;
     public data: { [key in TDock | string]?: Model | boolean };
     private hideResizeTimeout: number;
+    private showDockTimeout = 0;
+    private hideDockTimeout = 0;
 
     constructor(options: {
         app: App,
@@ -118,7 +121,8 @@ export class Dock {
                 moveItem.id = "dockMoveItem";
                 documentSelf.onmousemove = (moveEvent: MouseEvent) => {
                     if (window.siyuan.config.readonly ||
-                        Math.abs(moveEvent.clientY - event.clientY) < 5 && Math.abs(moveEvent.clientX - event.clientX) < 5) {
+                        Math.abs(moveEvent.clientY - event.clientY) < Constants.SIZE_DRAG_THRESHOLD &&
+                        Math.abs(moveEvent.clientX - event.clientX) < Constants.SIZE_DRAG_THRESHOLD) {
                         return;
                     }
                     moveEvent.preventDefault();
@@ -223,6 +227,9 @@ export class Dock {
             });
         }
 
+        this.layout.element.addEventListener("mouseenter", () => {
+            this.showDockByHover();
+        });
         this.layout.element.addEventListener("mouseleave", (event: MouseEvent & { toElement: HTMLElement }) => {
             if (event.buttons !== 0 || this.pin || event.toElement?.classList.contains("b3-menu") ||
                 event.toElement?.classList.contains("tooltip")) {
@@ -237,7 +244,7 @@ export class Dock {
             if (this.position === "Bottom" && event.clientY > window.innerHeight - 73) {
                 return;
             }
-            this.hideDock();
+            this.hideDockByHover();
         });
 
         this.layout.element.querySelector(".layout__dockresize").addEventListener("mousedown", (event: MouseEvent) => {
@@ -305,15 +312,16 @@ export class Dock {
     }
 
     public togglePin() {
+        this.clearDockHoverTimeout();
         this.pin = !this.pin;
         const hasActive = this.elements[0].querySelector(".dock__item--active") ||
             this.elements[1].querySelector(".dock__item--active");
+        this.resetDockPosition(hasActive ? true : false);
+        this.layout.element.style.opacity = "";
         if (!this.pin) {
-            this.resetDockPosition(hasActive ? true : false);
             this.resizeElement.classList.add("fn__none");
             this.hideDock(true);
         } else {
-            this.layout.element.style.opacity = "";
             this.layout.element.style.transform = "";
             this.layout.element.style.zIndex = "";
             if (hasActive) {
@@ -327,15 +335,47 @@ export class Dock {
 
     private resetDockPosition(show: boolean) {
         if (this.position === "Left") {
-            this.layout.element.setAttribute("style", `margin-right: var(--b3-layout-space);width:${this.layout.element.clientWidth}px;opacity:${show ? 1 : 0};`);
+            this.layout.element.setAttribute("style", `${show ? "margin-right: var(--b3-layout-space);" : ""}width:${this.layout.element.clientWidth}px;opacity:${show ? 1 : 0};min-height:8px;`);
         } else if (this.position === "Right") {
-            this.layout.element.setAttribute("style", `margin-left: var(--b3-layout-space);width:${this.layout.element.clientWidth}px;opacity:${show ? 1 : 0};`);
+            this.layout.element.setAttribute("style", `${show ? "margin-left: var(--b3-layout-space);" : ""}width:${this.layout.element.clientWidth}px;opacity:${show ? 1 : 0};min-height:8px;`);
         } else {
-            this.layout.element.setAttribute("style", `margin-top: var(--b3-layout-space);height:${this.layout.element.clientHeight}px;opacity:${show ? 1 : 0};`);
+            this.layout.element.setAttribute("style", `${show ? "margin-top: var(--b3-layout-space);" : ""}height:${this.layout.element.clientHeight}px;opacity:${show ? 1 : 0};`);
         }
     }
 
+    public showDockByHover() {
+        window.clearTimeout(this.hideDockTimeout);
+        this.hideDockTimeout = 0;
+        if (this.showDockTimeout || this.pin || this.layout.element.style.opacity === "1") {
+            return;
+        }
+        this.showDockTimeout = window.setTimeout(() => {
+            this.showDockTimeout = 0;
+            this.showDock();
+        }, Constants.TIMEOUT_DOCK_TOGGLE);
+    }
+
+    public hideDockByHover() {
+        window.clearTimeout(this.showDockTimeout);
+        this.showDockTimeout = 0;
+        if (this.hideDockTimeout || this.pin || this.layout.element.style.opacity === "0") {
+            return;
+        }
+        this.hideDockTimeout = window.setTimeout(() => {
+            this.hideDockTimeout = 0;
+            this.hideDock();
+        }, Constants.TIMEOUT_DOCK_TOGGLE);
+    }
+
+    public clearDockHoverTimeout() {
+        window.clearTimeout(this.showDockTimeout);
+        window.clearTimeout(this.hideDockTimeout);
+        this.showDockTimeout = 0;
+        this.hideDockTimeout = 0;
+    }
+
     public showDock(reset = false) {
+        this.clearDockHoverTimeout();
         if (!reset && (this.pin || this.layout.element.style.opacity === "1") ||
             (!this.elements[0].querySelector(".dock__item--active") && !this.elements[1].querySelector(".dock__item--active"))
         ) {
@@ -364,20 +404,20 @@ export class Dock {
         if (!reset) {
             this.layout.element.style.opacity = "1";
         }
-        this.layout.element.style.transform = "";
         this.layout.element.style.zIndex = (++window.siyuan.zIndex).toString();
         if (this.position === "Left") {
-            this.layout.element.style.left = `${this.elements[0].clientWidth}px`;
+            this.layout.element.style.transform = `translateX(${this.elements[0].clientWidth}px)`;
         } else if (this.position === "Right") {
-            this.layout.element.style.right = `${this.elements[0].clientWidth}px`;
+            this.layout.element.style.transform = `translateX(-${this.elements[0].clientWidth}px)`;
         } else if (this.position === "Bottom") {
-            this.layout.element.style.bottom = `${document.getElementById("status").offsetHeight}px`;
+            this.layout.element.style.transform = `translateY(-${document.getElementById("status").offsetHeight}px)`;
             this.layout.element.style.left = this.elements[0].clientWidth + "px";
             this.layout.element.style.right = this.elements[1].clientWidth + "px";
         }
     }
 
     public hideDock(reset = false) {
+        this.clearDockHoverTimeout();
         if (!reset && (this.layout.element.style.opacity === "0" || this.pin)) {
             return;
         }
@@ -387,7 +427,9 @@ export class Dock {
             return;
         }
         // https://github.com/siyuan-note/siyuan/issues/7504
-        if (document.activeElement && this.layout.element.contains(document.activeElement) && document.activeElement.classList.contains("b3-text-field")) {
+        if (document.activeElement && this.layout.element.contains(document.activeElement) &&
+            (document.activeElement.classList.contains("b3-text-field") ||
+                (document.activeElement as HTMLElement).getAttribute("contenteditable") === "true")) {
             return;
         }
         const dialogElement = document.querySelector(".b3-dialog") as HTMLElement;
@@ -401,13 +443,10 @@ export class Dock {
         }
         if (this.position === "Left") {
             this.layout.element.style.transform = `translateX(-${this.layout.element.clientWidth + 8}px)`;
-            this.layout.element.style.left = "";
         } else if (this.position === "Right") {
             this.layout.element.style.transform = `translateX(${this.layout.element.clientWidth + 8}px)`;
-            this.layout.element.style.right = "";
         } else if (this.position === "Bottom") {
             this.layout.element.style.transform = `translateY(${this.layout.element.clientHeight + 8}px)`;
-            this.layout.element.style.bottom = "";
         }
         if (reset) {
             return;
@@ -538,6 +577,7 @@ export class Dock {
                                     type: "pin",
                                     tab,
                                     blockId: editor?.protyle?.block?.rootID,
+                                    notebookId: editor?.protyle?.notebookId,
                                     isPreview: editor?.protyle?.preview ? !editor.protyle.preview.element.classList.contains("fn__none") : false
                                 });
                                 if (editor?.protyle?.block?.rootID) {
@@ -554,6 +594,7 @@ export class Dock {
                                     app: this.app,
                                     tab,
                                     blockId: editor?.protyle?.block?.rootID,
+                                    notebookId: editor?.protyle?.notebookId,
                                     type: "pin"
                                 }));
                             }
@@ -578,6 +619,7 @@ export class Dock {
                                     type: "pin",
                                     tab,
                                     blockId: editor?.protyle?.block?.rootID,
+                                    notebookId: editor?.protyle?.notebookId,
                                 }));
                             }
                         });
@@ -586,6 +628,17 @@ export class Dock {
                         tab = new Tab({
                             callback: (tab: Tab) => {
                                 tab.addModel(new Inbox(this.app, tab));
+                            }
+                        });
+                        break;
+                    case "agentChat":
+                        tab = new Tab({
+                            callback: (tab: Tab) => {
+                                tab.addModel(new AgentChat(this.app, {
+                                    element: tab.panelElement,
+                                    close: () => this.toggleModel("agentChat", false, true),
+                                    focus: () => setPanelFocus(tab.panelElement),
+                                }));
                             }
                         });
                         break;
@@ -654,6 +707,7 @@ export class Dock {
             if (isSaveLayout) {
                 this.saveLocalPlugin(type, {show: true});
             }
+            this.showDock();
         }
 
         // dock 中两个面板的显示关系
@@ -710,7 +764,6 @@ export class Dock {
             anotherWnd.element.style.width = "";
         }
         resizeTabs(isSaveLayout);
-        this.showDock();
         if (target.classList.contains("dock__item--active") && !removeDock && (type === "graph" || type === "globalGraph")) {
             const graph = this.data[type] as Graph;
             graph.onGraph(false);
@@ -718,17 +771,41 @@ export class Dock {
 
         // 等待 dock 面板动画结束
         if (this.pin) {
-            setTimeout(() => {
+            let rafId: number;
+            const updateTabPos = () => {
+                setTabPosition(true);
+                rafId = requestAnimationFrame(updateTabPos);
+            };
+            rafId = requestAnimationFrame(updateTabPos);
+
+            const onTransitionEnd = (event: TransitionEvent) => {
+                if (event.propertyName !== "width") return;
+                cancelAnimationFrame(rafId);
+                this.layout.element.removeEventListener("transitionend", onTransitionEnd);
+                setTabPosition();
+            };
+            this.layout.element.addEventListener("transitionend", onTransitionEnd);
+            window.setTimeout(() => {
+                cancelAnimationFrame(rafId);
+                this.layout.element.removeEventListener("transitionend", onTransitionEnd);
                 setTabPosition();
             }, Constants.TIMEOUT_TRANSITION);
         }
     }
 
     public add(index: number, sourceElement: Element, previousType?: string) {
-        sourceElement.setAttribute("data-height", "");
-        sourceElement.setAttribute("data-width", "");
         const type = sourceElement.getAttribute("data-type") as TDock;
         const sourceDock = getDockByType(type);
+        // 仅在左右轴与下轴之间跨轴移动时清除尺寸：左右侧之间或下侧内部移动，原有尺寸维度仍然有效
+        const size: Partial<Config.IUILayoutDockPanelSize> = {};
+        if ((sourceDock.position === "Left" || sourceDock.position === "Right") && this.position === "Bottom") {
+            sourceElement.setAttribute("data-width", "");
+            size.width = null;
+        }
+        if (sourceDock.position === "Bottom" && (this.position === "Left" || this.position === "Right")) {
+            sourceElement.setAttribute("data-height", "");
+            size.height = null;
+        }
         if (sourceDock.elements[0].parentElement.querySelectorAll(".dock__item").length === 1) {
             sourceDock.elements[0].parentElement.classList.add("fn__none");
         }
@@ -745,6 +822,7 @@ export class Dock {
         delete sourceDock.data[type];
         // 目标处理
         sourceElement.setAttribute("data-index", index.toString());
+        sourceElement.setAttribute("data-position", this.getTooltipPosition(index));
         if (previousType) {
             this.elements[index].parentElement.querySelector(`[data-type="${previousType}"]`).after(sourceElement);
         } else {
@@ -785,10 +863,7 @@ export class Dock {
         this.saveLocalPlugin(type, {
             index: sortIndex,
             position,
-            size: {
-                height: null,
-                width: null,
-            }
+            size
         });
         adjustDockPadding();
         this.adjustSplit();
@@ -854,6 +929,7 @@ export class Dock {
 
     public genButton(data: Config.IUILayoutDockTab[], index: number, tabIndex?: number) {
         let html = "";
+        const tooltipPosition = this.getTooltipPosition(index);
         data.forEach(item => {
             if (typeof tabIndex === "undefined" && !TYPES.includes(item.type)) {
                 return;
@@ -864,7 +940,7 @@ export class Dock {
             } else if (item.type === "tags") {
                 item.icon = "iconTag";
             }
-            html += `<span data-height="${item.size.height}" data-width="${item.size.width}" data-type="${item.type}" data-index="${index}" data-hotkey="${item.hotkey || ""}" data-hotkeylangid="${item.hotkeyLangId || ""}" data-title="${item.title}" class="dock__item${item.show ? " dock__item--active" : ""} ariaLabel" aria-label="<span style='white-space:pre'>${item.title} ${item.hotkey ? updateHotkeyTip(item.hotkey) : ""}${window.siyuan.languages.dockTip}</span>">
+            html += `<span data-height="${item.size.height}" data-width="${item.size.width}" data-type="${item.type}" data-index="${index}" data-hotkey="${item.hotkey || ""}" data-hotkeylangid="${item.hotkeyLangId || ""}" data-title="${item.title}" data-position="${tooltipPosition}" class="dock__item${item.show ? " dock__item--active" : ""} ariaLabel" aria-label="<span style='white-space:pre'>${item.title} ${item.hotkey ? updateHotkeyTip(item.hotkey) : ""}${window.siyuan.languages.dockTip}</span>">
     <svg><use xlink:href="#${item.icon}"></use></svg>
 </span>`;
             this.data[item.type] = true;
@@ -894,6 +970,13 @@ export class Dock {
         this.adjustSplit();
     }
 
+    private getTooltipPosition(index: number) {
+        if (this.position === "Left" || (this.position === "Bottom" && index === 0)) {
+            return "8east";
+        }
+        return "8west";
+    }
+
     private adjustSplit() {
         if (this.position !== "Bottom") {
             if (this.elements[0].innerHTML && this.elements[1].innerHTML) {
@@ -906,7 +989,7 @@ export class Dock {
 
     private saveLocalPlugin(dockType: TDock | string, options: {
         position?: TPluginDockPosition,
-        size?: Config.IUILayoutDockPanelSize,
+        size?: Partial<Config.IUILayoutDockPanelSize>,
         index?: number,
         show?: boolean
     }) {
@@ -915,8 +998,14 @@ export class Dock {
                 if (!window.siyuan.storage[Constants.LOCAL_PLUGIN_DOCKS][pluginItem.name][dockType]) {
                     window.siyuan.storage[Constants.LOCAL_PLUGIN_DOCKS][pluginItem.name][dockType] = pluginItem.docks[dockType].config;
                 }
-                Object.keys(options).forEach((item: "position") => {
-                    window.siyuan.storage[Constants.LOCAL_PLUGIN_DOCKS][pluginItem.name][dockType][item] = options[item];
+                const dockConfig = window.siyuan.storage[Constants.LOCAL_PLUGIN_DOCKS][pluginItem.name][dockType];
+                Object.keys(options).forEach((item: "position" | "size" | "index" | "show") => {
+                    // size 需按字段合并，否则会整体覆盖、丢失用户已拖动的尺寸
+                    if (item === "size") {
+                        Object.assign(dockConfig.size, options.size);
+                    } else {
+                        dockConfig[item] = options[item];
+                    }
                 });
                 setStorageVal(Constants.LOCAL_PLUGIN_DOCKS, window.siyuan.storage[Constants.LOCAL_PLUGIN_DOCKS]);
                 return true;

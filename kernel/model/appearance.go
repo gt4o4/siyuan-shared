@@ -32,7 +32,7 @@ import (
 )
 
 func InitAppearance() {
-	util.SetBootDetails("Initializing appearance...")
+	util.SetBootDetails(Conf.Language(302))
 	if err := os.Mkdir(util.AppearancePath, 0755); err != nil && !os.IsExist(err) {
 		logging.LogErrorf("create appearance folder [%s] failed: %s", util.AppearancePath, err)
 		util.ReportFileSysFatalError(err)
@@ -165,7 +165,7 @@ func LoadThemes() {
 			modes = *themeConf.Modes
 		}
 		for _, mode := range modes {
-			t := &conf.AppearanceTheme{Name: name}
+			t := &conf.AppearanceTheme{Name: name, Frontends: themeConf.Frontends}
 			if isBuiltInTheme(name) {
 				t.Label = name + Conf.Language(281)
 			} else {

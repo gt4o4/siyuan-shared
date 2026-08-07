@@ -50,19 +50,41 @@ func SyncDataDownload() {
 		return
 	}
 
-	util.BroadcastByType("main", "syncing", 0, Conf.Language(81), nil)
-	if !isProviderOnline(true) { // 这个操作比较耗时，所以要先推送 syncing 事件后再判断网络，这样才能给用户更即时的反馈
-		util.BroadcastByType("main", "syncing", 2, Conf.Language(28), nil)
+	scope := lanSyncScope()
+	latestID := getSyncCloudLatestID()
+	if "" != latestID {
+		_, _ = syncRemoteRequests.do(scope, latestID, func() error {
+			lockSync()
+			defer unlockSync()
+			if syncRemoteRequests.isCompleted(scope, latestID) {
+				return nil
+			}
+			err := syncDataDownloadLocked()
+			if nil == err {
+				completeCurrentSyncRemoteRequest(scope)
+			}
+			return err
+		})
 		return
 	}
 
-	lockSync()
-	defer unlockSync()
+	unlock, ok := lockSyncRequest(&syncDownloadRequests)
+	if !ok {
+		return
+	}
+	defer unlock()
+	if err := syncDataDownloadLocked(); nil == err {
+		completeCurrentSyncRemoteRequest(scope)
+	}
+}
+
+func syncDataDownloadLocked() (err error) {
+	util.BroadcastByType("main", "syncing", 0, Conf.Language(81), nil)
 
 	now := util.CurrentTimeMillis()
 	Conf.Sync.Synced = now
 
-	err := syncRepoDownload()
+	err = syncRepoDownloadWithDNSRetry()
 	code := 1
 	if err != nil {
 		code = 2
@@ -71,6 +93,40 @@ func SyncDataDownload() {
 	if 1 == code {
 		consumeShorthands()
 	}
+	return
+}
+
+func getSyncCloudLatestID() (ret string) {
+	// 同步感知消息不包含云端提交 ID，需要先读取最新索引，以便和局域网提交提示使用同一个去重键。
+	repo, err := newSyncRepository()
+	if nil != err {
+		logging.LogWarnf("create repo before perceived sync failed: %s", err)
+		return
+	}
+	latest, err := repo.GetCloudLatest(map[string]interface{}{})
+	if nil != err {
+		logging.LogWarnf("get cloud latest before perceived sync failed: %s", err)
+		return
+	}
+	if nil != latest {
+		ret = latest.ID
+	}
+	return
+}
+
+func completeCurrentSyncRemoteRequest(scope string) {
+	// 完整同步可能在合并本地变更后生成新的最新索引，同时记录实际结果可覆盖两类通知到达顺序相反的情况。
+	repo, err := newRepository()
+	if nil != err {
+		logging.LogWarnf("create repo after remote sync failed: %s", err)
+		return
+	}
+	latest, err := repo.Latest()
+	if nil != err {
+		logging.LogWarnf("get local latest after remote sync failed: %s", err)
+		return
+	}
+	syncRemoteRequests.complete(scope, latest.ID)
 }
 
 func SyncDataUpload() {
@@ -80,19 +136,17 @@ func SyncDataUpload() {
 		return
 	}
 
-	util.BroadcastByType("main", "syncing", 0, Conf.Language(81), nil)
-	if !isProviderOnline(true) { // 这个操作比较耗时，所以要先推送 syncing 事件后再判断网络，这样才能给用户更即时的反馈
-		util.BroadcastByType("main", "syncing", 2, Conf.Language(28), nil)
+	unlock, ok := lockSyncRequest(&syncUploadRequests)
+	if !ok {
 		return
 	}
-
-	lockSync()
-	defer unlockSync()
+	defer unlock()
+	util.BroadcastByType("main", "syncing", 0, Conf.Language(81), nil)
 
 	now := util.CurrentTimeMillis()
 	Conf.Sync.Synced = now
 
-	err := syncRepoUpload()
+	err := syncRepoUploadWithDNSRetry()
 	code := 1
 	if err != nil {
 		code = 2
@@ -102,9 +156,10 @@ func SyncDataUpload() {
 }
 
 var (
-	syncSameCount    = atomic.Int32{}
-	autoSyncErrCount = 0
-	fixSyncInterval  = 5 * time.Minute
+	syncSameCount     = atomic.Int32{}
+	syncDataChangeGen = atomic.Uint64{}
+	autoSyncErrCount  = 0
+	fixSyncInterval   = 5 * time.Minute
 
 	syncPlanTimeLock = sync.Mutex{}
 	syncPlanTime     = time.Now().Add(fixSyncInterval)
@@ -126,6 +181,7 @@ func SyncDataJob() {
 
 func BootSyncData() {
 	defer logging.Recover()
+	refreshLANSyncManager()
 
 	if Conf.Sync.Perception {
 		connectSyncWebSocket()
@@ -135,33 +191,56 @@ func BootSyncData() {
 		return
 	}
 
-	if !isProviderOnline(false) {
-		BootSyncSucc = 1
-		util.PushErrMsg(Conf.Language(76), 7000)
-		return
-	}
-
 	lockSync()
 	defer unlockSync()
 
-	util.IncBootProgress(3, "Syncing data from the cloud...")
+	util.IncBootProgress(3, Conf.Language(307))
 	BootSyncSucc = 0
 	logging.LogInfof("sync before boot")
 
 	now := util.CurrentTimeMillis()
 	Conf.Sync.Synced = now
 	util.BroadcastByType("main", "syncing", 0, Conf.Language(81), nil)
-	err := bootSyncRepo()
+	err := bootSyncRepoWithDNSRetry()
 	code := 1
 	if err != nil {
 		code = 2
 	}
 	util.BroadcastByType("main", "syncing", code, Conf.Sync.Stat, nil)
+	if 1 == code {
+		// 启动同步成功后消费本地速记临时文件，避免移动端开启云同步时需手动触发同步才能刷新闪念速记
+		consumeShorthands()
+	}
 	return
 }
 
 func SyncData(byHand bool) {
 	syncData(false, byHand)
+}
+
+// SyncDataBeforeEnableEncryptedNotebook 在启用加密笔记本前执行一次完整同步。
+// 未启用数据同步时直接返回；已启用数据同步时，任何同步失败都会阻止继续创建新的密钥体系。
+func SyncDataBeforeEnableEncryptedNotebook() error {
+	if !Conf.Sync.Enabled {
+		return nil
+	}
+	if !cloud.IsValidCloudDirName(Conf.Sync.CloudName) {
+		return errors.New(Conf.Language(123))
+	}
+	if !checkSync(false, false, true) {
+		return errors.New(Conf.Language(53))
+	}
+
+	// 不复用请求合并状态，确保调用返回前确实完成了一次由当前启用操作发起的完整同步。
+	lockSync()
+	defer unlockSync()
+	if err := syncDataLocked(false, true); err != nil {
+		if Conf.Sync.Stat != "" {
+			return errors.New(Conf.Sync.Stat)
+		}
+		return err
+	}
+	return nil
 }
 
 func lockSync() {
@@ -174,6 +253,27 @@ func unlockSync() {
 	syncLock.Unlock()
 }
 
+type syncRequestState struct {
+	requested atomic.Uint64
+	completed atomic.Uint64
+}
+
+func lockSyncRequest(state *syncRequestState) (unlock func(), ok bool) {
+	request := state.requested.Add(1)
+	lockSync()
+	if state.completed.Load() >= request {
+		unlockSync()
+		return nil, false
+	}
+
+	runRequests := state.requested.Load()
+	unlock = func() {
+		state.completed.Store(runRequests)
+		unlockSync()
+	}
+	return unlock, true
+}
+
 func syncData(exit, byHand bool) {
 	defer logging.Recover()
 
@@ -181,15 +281,22 @@ func syncData(exit, byHand bool) {
 		return
 	}
 
-	lockSync()
-	defer unlockSync()
-
-	util.BroadcastByType("main", "syncing", 0, Conf.Language(81), nil)
-	if !exit && !isProviderOnline(byHand) { // 这个操作比较耗时，所以要先推送 syncing 事件后再判断网络，这样才能给用户更即时的反馈
-		util.BroadcastByType("main", "syncing", 2, Conf.Language(28), nil)
+	requests := &syncAutoRequests
+	if byHand {
+		requests = &syncManualRequests
+	} else if exit {
+		requests = &syncExitRequests
+	}
+	unlock, ok := lockSyncRequest(requests)
+	if !ok {
 		return
 	}
+	defer unlock()
+	_ = syncDataLocked(exit, byHand)
+}
 
+func syncDataLocked(exit, byHand bool) error {
+	util.BroadcastByType("main", "syncing", 0, Conf.Language(81), nil)
 	if exit {
 		ExitSyncSucc = 0
 		logging.LogInfof("sync before exit")
@@ -202,7 +309,7 @@ func syncData(exit, byHand bool) {
 	now := util.CurrentTimeMillis()
 	Conf.Sync.Synced = now
 
-	dataChanged, err := syncRepo(exit, byHand)
+	dataChanged, err := syncRepoWithDNSRetry(exit, byHand)
 	code := 1
 	if err != nil {
 		code = 2
@@ -228,7 +335,7 @@ func syncData(exit, byHand bool) {
 			logging.LogErrorf("write websocket message failed: %v", writeErr)
 		}
 	}
-	return
+	return err
 }
 
 func checkSync(boot, exit, byHand bool) bool {
@@ -283,7 +390,7 @@ func incReindex(upserts, removes []string) (upsertRootIDs, removeRootIDs []strin
 	upsertRootIDs = []string{}
 	removeRootIDs = []string{}
 
-	util.IncBootProgress(3, "Sync reindexing...")
+	util.IncBootProgress(3, Conf.Language(308))
 	removeRootIDs = removeIndexes(removes) // 先执行 remove，否则移动文档时 upsert 会被忽略，导致未被索引
 	upsertRootIDs = upsertIndexes(upserts)
 
@@ -311,15 +418,18 @@ func removeIndexes(removeFilePaths []string) (removeRootIDs []string) {
 		util.PushStatusBar(msg)
 
 		cache.RemoveTreeData(rootID)
-		sql.RemoveTreeQueue(rootID)
-		bts := treenode.GetBlockTreesByRootID(rootID)
+		block := treenode.GetBlockTree(rootID)
+		boxID := ""
+		if nil != block {
+			boxID = block.BoxID
+			cache.RemoveDocIAL(block.Path)
+		}
+		sql.RemoveTreeQueue(boxID, rootID)
+		bts := treenode.GetBlockTreesByRootIDInBox(rootID, boxID)
 		for _, b := range bts {
 			cache.RemoveBlockIAL(b.ID)
 		}
-		if block := treenode.GetBlockTree(rootID); nil != block {
-			cache.RemoveDocIAL(block.Path)
-		}
-		treenode.RemoveBlockTreesByRootID(rootID)
+		treenode.RemoveBlockTreesByRootID(boxID, rootID)
 	}
 
 	if 1 > len(removeRootIDs) {
@@ -332,40 +442,53 @@ func upsertIndexes(upsertFilePaths []string) (upsertRootIDs []string) {
 	luteEngine := util.NewLute()
 	bootProgressPart := int32(10 / float64(len(upsertFilePaths)))
 	for _, upsertFile := range upsertFilePaths {
-		if !strings.HasSuffix(upsertFile, ".sy") {
-			continue
+		rootID, indexed := func() (string, bool) {
+			if !strings.HasSuffix(upsertFile, ".sy") {
+				return "", false
+			}
+
+			upsertFile = filepath.ToSlash(upsertFile)
+			upsertFile = strings.TrimPrefix(upsertFile, "/")
+
+			box, _, found := strings.Cut(upsertFile, "/")
+			if !found {
+				// .sy 直接出现在 data 文件夹下，没有出现在笔记本文件夹下的情况
+				return "", false
+			}
+			if IsEncryptedBox(box) {
+				if !isBoxUnlockedForAccess(box) || !isEncryptedBoxMounted(box) {
+					return "", false
+				}
+				if acquireErr := AcquireEncryptedBoxOperation(box); acquireErr != nil {
+					return "", false
+				}
+				defer ReleaseEncryptedBoxOperation(box)
+			}
+
+			p := strings.TrimPrefix(upsertFile, box)
+			msg := fmt.Sprintf(Conf.Language(40), util.GetTreeID(p))
+			util.IncBootProgress(bootProgressPart, msg)
+			util.PushStatusBar(msg)
+
+			rootID := util.GetTreeID(p)
+			cache.RemoveTreeData(rootID)
+			tree, err0 := filesys.LoadTree(box, p, luteEngine)
+			if nil != err0 {
+				return "", false
+			}
+			treenode.UpsertBlockTree(tree)
+			sql.UpsertTreeQueue(tree)
+
+			bts := treenode.GetBlockTreesByRootIDInBox(rootID, tree.Box)
+			for _, b := range bts {
+				cache.RemoveBlockIAL(b.ID)
+			}
+			cache.RemoveDocIAL(tree.Path)
+			return rootID, true
+		}()
+		if indexed {
+			upsertRootIDs = append(upsertRootIDs, rootID)
 		}
-
-		upsertFile = filepath.ToSlash(upsertFile)
-		upsertFile = strings.TrimPrefix(upsertFile, "/")
-
-		box, _, found := strings.Cut(upsertFile, "/")
-		if !found {
-			// .sy 直接出现在 data 文件夹下，没有出现在笔记本文件夹下的情况
-			continue
-		}
-
-		p := strings.TrimPrefix(upsertFile, box)
-		msg := fmt.Sprintf(Conf.Language(40), util.GetTreeID(p))
-		util.IncBootProgress(bootProgressPart, msg)
-		util.PushStatusBar(msg)
-
-		rootID := util.GetTreeID(p)
-		cache.RemoveTreeData(rootID)
-		tree, err0 := filesys.LoadTree(box, p, luteEngine)
-		if nil != err0 {
-			continue
-		}
-		treenode.UpsertBlockTree(tree)
-		sql.UpsertTreeQueue(tree)
-
-		bts := treenode.GetBlockTreesByRootID(rootID)
-		for _, b := range bts {
-			cache.RemoveBlockIAL(b.ID)
-		}
-		cache.RemoveDocIAL(tree.Path)
-
-		upsertRootIDs = append(upsertRootIDs, rootID)
 	}
 
 	if 1 > len(upsertRootIDs) {
@@ -386,6 +509,7 @@ func SetCloudSyncDir(name string) {
 
 	Conf.Sync.CloudName = name
 	Conf.Save()
+	refreshLANSyncManager()
 }
 
 func SetSyncGenerateConflictDoc(b bool) {
@@ -396,6 +520,7 @@ func SetSyncGenerateConflictDoc(b bool) {
 func SetSyncEnable(b bool) {
 	Conf.Sync.Enabled = b
 	Conf.Save()
+	refreshLANSyncManager()
 }
 
 func SetSyncInterval(interval int) {
@@ -435,6 +560,7 @@ func SetSyncMode(mode int) {
 func SetSyncProvider(provider int) (err error) {
 	Conf.Sync.Provider = provider
 	Conf.Save()
+	refreshLANSyncManager()
 	return
 }
 
@@ -450,6 +576,7 @@ func SetSyncProviderS3(s3 *conf.S3) (err error) {
 
 	Conf.Sync.S3 = s3
 	Conf.Save()
+	refreshLANSyncManager()
 	return
 }
 
@@ -470,6 +597,7 @@ func SetSyncProviderWebDAV(webdav *conf.WebDAV) (err error) {
 
 	Conf.Sync.WebDAV = webdav
 	Conf.Save()
+	refreshLANSyncManager()
 	return
 }
 
@@ -480,26 +608,26 @@ func SetSyncProviderLocal(local *conf.Local) (err error) {
 	absPath, err := filepath.Abs(local.Endpoint)
 	if nil != err {
 		msg := fmt.Sprintf("get endpoint [%s] abs path failed: %s", local.Endpoint, err)
-		logging.LogErrorf(msg)
+		logging.LogError(msg)
 		err = fmt.Errorf(Conf.Language(77), msg)
 		return
 	}
 	if !gulu.File.IsExist(absPath) {
 		msg := fmt.Sprintf("endpoint [%s] not exist", local.Endpoint)
-		logging.LogErrorf(msg)
+		logging.LogError(msg)
 		err = fmt.Errorf(Conf.Language(77), msg)
 		return
 	}
 	if util.IsAbsPathInWorkspace(absPath) || filepath.Clean(absPath) == filepath.Clean(util.WorkspaceDir) {
 		msg := fmt.Sprintf("endpoint [%s] is in workspace", local.Endpoint)
-		logging.LogErrorf(msg)
+		logging.LogError(msg)
 		err = fmt.Errorf(Conf.Language(77), msg)
 		return
 	}
 
 	if gulu.File.IsSubPath(absPath, util.WorkspaceDir) {
 		msg := fmt.Sprintf("endpoint [%s] is parent of workspace", local.Endpoint)
-		logging.LogErrorf(msg)
+		logging.LogError(msg)
 		err = fmt.Errorf(Conf.Language(77), msg)
 		return
 	}
@@ -509,12 +637,18 @@ func SetSyncProviderLocal(local *conf.Local) (err error) {
 
 	Conf.Sync.Local = local
 	Conf.Save()
+	refreshLANSyncManager()
 	return
 }
 
 var (
-	syncLock  = sync.Mutex{}
-	isSyncing = atomic.Bool{}
+	syncLock             = sync.Mutex{}
+	isSyncing            = atomic.Bool{}
+	syncAutoRequests     = syncRequestState{}
+	syncManualRequests   = syncRequestState{}
+	syncExitRequests     = syncRequestState{}
+	syncUploadRequests   = syncRequestState{}
+	syncDownloadRequests = syncRequestState{}
 )
 
 func CreateCloudSyncDir(name string) (err error) {
@@ -660,7 +794,7 @@ func formatRepoErrorMsg(err error) string {
 			msg = fmt.Sprintf(Conf.Language(85), err)
 		} else if strings.Contains(msgLowerCase, "cipher: message authentication failed") {
 			msg = Conf.Language(135)
-		} else if strings.Contains(msgLowerCase, "no such host") || strings.Contains(msgLowerCase, "connection failed") || strings.Contains(msgLowerCase, "hostname resolution") || strings.Contains(msgLowerCase, "No address associated with hostname") {
+		} else if isDNSError(msgLowerCase) {
 			msg = Conf.Language(24)
 		} else if strings.Contains(msgLowerCase, "net/http: request canceled while waiting for connection") || strings.Contains(msgLowerCase, "exceeded while awaiting") || strings.Contains(msgLowerCase, "context deadline exceeded") || strings.Contains(msgLowerCase, "timeout") || strings.Contains(msgLowerCase, "context cancellation while reading body") {
 			msg = Conf.Language(24)
@@ -670,6 +804,78 @@ func formatRepoErrorMsg(err error) string {
 	}
 	msg += " (Provider: " + conf.ProviderToStr(Conf.Sync.Provider) + ")"
 	return msg
+}
+
+// isDNSError 判断错误信息是否属于 DNS 解析类（域名解析失败、主机名无法解析等）。
+// dejavu/cloud 层用 fmt.Errorf 原样透传底层网络错误，因此这里用字符串匹配兜底。
+func isDNSError(msg string) bool {
+	return strings.Contains(msg, "no such host") ||
+		strings.Contains(msg, "connection failed") ||
+		strings.Contains(msg, "hostname resolution") ||
+		strings.Contains(msg, "no address associated with hostname")
+}
+
+// lastDNSFlushTime 及其锁用于 DNS 刷新节流，避免自动同步循环里反复 fork 系统命令。
+// 由于同步可能从多个入口并发执行（如启动后台同步与手动同步），这里用互斥锁保护。
+var (
+	lastDNSFlushTime   time.Time
+	lastDNSFlushTimeMu sync.Mutex
+)
+
+// flushAndRetryOnDNSError 在确认是 DNS 类错误且距上次刷新超过 5 分钟时，刷新系统 DNS 缓存并返回 true
+// 以触发上层重试一次同步；否则返回 false。节流是为了避免高频自动同步反复 fork 系统命令。
+func flushAndRetryOnDNSError(err error) bool {
+	if !isDNSError(strings.ToLower(err.Error())) {
+		return false
+	}
+
+	lastDNSFlushTimeMu.Lock()
+	defer lastDNSFlushTimeMu.Unlock()
+	if time.Since(lastDNSFlushTime) < 5*time.Minute {
+		logging.LogInfof("sync failed with DNS error, but DNS cache was flushed recently, skip retry")
+		return false
+	}
+	lastDNSFlushTime = time.Now()
+
+	logging.LogInfof("sync failed with DNS error [%s], flushing DNS cache and retrying once", err)
+	flushDNS()
+	return true
+}
+
+// syncRepoWithDNSRetry 执行一次同步，若失败且判定为 DNS 类错误，则刷新系统 DNS 缓存后重试一次。
+// 统一封装 DNS 重试逻辑，供主同步流程（syncData）与启动后台同步复用。
+func syncRepoWithDNSRetry(exit, byHand bool) (dataChanged bool, err error) {
+	dataChanged, err = syncRepo(exit, byHand)
+	if nil != err && flushAndRetryOnDNSError(err) {
+		dataChanged, err = syncRepo(exit, byHand)
+	}
+	return
+}
+
+// syncRepoDownloadWithDNSRetry 仅下载同步，DNS 类错误时刷新系统 DNS 缓存后重试一次。
+func syncRepoDownloadWithDNSRetry() (err error) {
+	err = syncRepoDownload()
+	if nil != err && flushAndRetryOnDNSError(err) {
+		err = syncRepoDownload()
+	}
+	return
+}
+
+// syncRepoUploadWithDNSRetry 仅上传同步，DNS 类错误时刷新系统 DNS 缓存后重试一次。
+func syncRepoUploadWithDNSRetry() (err error) {
+	err = syncRepoUpload()
+	if nil != err && flushAndRetryOnDNSError(err) {
+		err = syncRepoUpload()
+	}
+	return
+}
+
+func bootSyncRepoWithDNSRetry() (err error) {
+	err = bootSyncRepo()
+	if nil != err && flushAndRetryOnDNSError(err) {
+		err = bootSyncRepo()
+	}
+	return
 }
 
 func getSyncIgnoreLines() (ret []string) {
@@ -708,6 +914,7 @@ func getSyncIgnoreLines() (ret []string) {
 }
 
 func IncSync() {
+	syncDataChangeGen.Add(1)
 	syncSameCount.Store(0)
 	planSyncAfter(time.Duration(Conf.Sync.Interval) * time.Second)
 }
@@ -716,37 +923,6 @@ func planSyncAfter(d time.Duration) {
 	syncPlanTimeLock.Lock()
 	syncPlanTime = time.Now().Add(d)
 	syncPlanTimeLock.Unlock()
-}
-
-func isProviderOnline(byHand bool) (ret bool) {
-	var checkURL string
-	skipTlsVerify := false
-	switch Conf.Sync.Provider {
-	case conf.ProviderSiYuan:
-		checkURL = util.GetCloudSyncServer()
-	case conf.ProviderS3:
-		checkURL = Conf.Sync.S3.Endpoint
-		skipTlsVerify = Conf.Sync.S3.SkipTlsVerify
-	case conf.ProviderWebDAV:
-		checkURL = Conf.Sync.WebDAV.Endpoint
-		skipTlsVerify = Conf.Sync.WebDAV.SkipTlsVerify
-	case conf.ProviderLocal:
-		checkURL = "file://" + Conf.Sync.Local.Endpoint
-	default:
-		logging.LogWarnf("unknown provider: %d", Conf.Sync.Provider)
-		return false
-	}
-
-	if ret = util.IsOnline(checkURL, skipTlsVerify, 7000); !ret {
-		if 1 > autoSyncErrCount || byHand {
-			util.PushErrMsg(Conf.Language(76)+" (Provider: "+conf.ProviderToStr(Conf.Sync.Provider)+")", 5000)
-		}
-		if !byHand {
-			planSyncAfter(fixSyncInterval)
-			autoSyncErrCount++
-		}
-	}
-	return
 }
 
 var (
@@ -842,7 +1018,7 @@ func connectSyncWebSocket() {
 				}
 
 				reconnected := false
-				for retries := 0; retries < 7; retries++ {
+				for range 7 {
 					time.Sleep(7 * time.Second)
 					if nil == Conf.GetUser() {
 						return

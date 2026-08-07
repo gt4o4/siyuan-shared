@@ -1,6 +1,6 @@
 import {newDailyNote} from "../../../util/mount";
 import {openHistory} from "../../../history/history";
-import {Editor} from "../../../editor";
+import type {Editor} from "../../../editor";
 /// #if MOBILE
 import {openDock} from "../../../mobile/dock/util";
 import {popMenu} from "../../../mobile/menu";
@@ -31,9 +31,9 @@ import {Tab} from "../../../layout/Tab";
 /// #if !BROWSER
 import {ipcRenderer} from "electron";
 /// #endif
-import {App} from "../../../index";
+import type {App} from "../../../index";
 import {Constants} from "../../../constants";
-import {setReadOnly} from "../../../config/util/setReadOnly";
+import {editorConfigApi} from "../../../config/tabs/editorRuntime";
 import {lockScreen} from "../../../dialog/processSystem";
 import {newFile} from "../../../util/newFile";
 import {openCard} from "../../../card/openCard";
@@ -42,7 +42,7 @@ import {Wnd} from "../../../layout/Wnd";
 import {unsplitWnd} from "../../../menus/tab";
 import {openFile} from "../../../editor/util";
 import {fetchPost} from "../../../util/fetch";
-import {setStorageVal} from "../../../protyle/util/compatibility";
+import {sanitizeClosedTabs, setStorageVal} from "../../../protyle/util/compatibility";
 
 export const globalCommand = (command: string, app: App) => {
     /// #if MOBILE
@@ -151,7 +151,13 @@ export const globalCommand = (command: string, app: App) => {
         case "recentDocs":
             openRecentDocs();
             return true;
-        case "recentClosed":
+        case "recentClosed": {
+            const closedTabsLength = window.siyuan.storage[Constants.LOCAL_CLOSED_TABS].length;
+            window.siyuan.storage[Constants.LOCAL_CLOSED_TABS] =
+                sanitizeClosedTabs(window.siyuan.storage[Constants.LOCAL_CLOSED_TABS]);
+            if (closedTabsLength !== window.siyuan.storage[Constants.LOCAL_CLOSED_TABS].length) {
+                setStorageVal(Constants.LOCAL_CLOSED_TABS, window.siyuan.storage[Constants.LOCAL_CLOSED_TABS]);
+            }
             if (window.siyuan.storage[Constants.LOCAL_CLOSED_TABS].length > 0) {
                 const closeData = window.siyuan.storage[Constants.LOCAL_CLOSED_TABS].pop();
                 setStorageVal(Constants.LOCAL_CLOSED_TABS, window.siyuan.storage[Constants.LOCAL_CLOSED_TABS]);
@@ -215,6 +221,7 @@ export const globalCommand = (command: string, app: App) => {
                                 app,
                                 blockId: childData.blockId,
                                 rootId: childData.rootId,
+                                notebookId: childData.notebookId,
                                 title: closeData.title,
                             });
                         } else if (childData.instance === "Graph") {
@@ -222,12 +229,14 @@ export const globalCommand = (command: string, app: App) => {
                                 app,
                                 blockId: childData.blockId,
                                 rootId: childData.rootId,
+                                notebookId: childData.notebookId,
                                 title: closeData.title
                             });
                         } else if (childData.instance === "Outline") {
                             openOutline({
                                 app,
                                 rootId: childData.blockId,
+                                notebookId: childData.notebookId,
                                 title: closeData.title,
                                 isPreview: childData.isPreview
                             });
@@ -236,8 +245,18 @@ export const globalCommand = (command: string, app: App) => {
                 });
             }
             return true;
+        }
         case "toggleDock":
             toggleDockBar(document.querySelector("#barDock use"));
+            return true;
+        case "switchLeftDock":
+            window.siyuan.layout.leftDock.togglePin();
+            return true;
+        case "switchRightDock":
+            window.siyuan.layout.rightDock.togglePin();
+            return true;
+        case "switchBottomDock":
+            window.siyuan.layout.bottomDock.togglePin();
             return true;
         case "toggleWin":
             /// #if !BROWSER
@@ -429,16 +448,13 @@ export const globalCommand = (command: string, app: App) => {
             openHistory(app);
             return true;
         case "editReadonly":
-            setReadOnly(!window.siyuan.config.editor.readOnly);
+            editorConfigApi.patch("editor.readOnly", !window.siyuan.config.editor.readOnly);
             return true;
         case "lockScreen":
             lockScreen(app);
             return true;
         case "newFile":
-            newFile({
-                app,
-                useSavePath: true
-            });
+            newFile(app);
             return true;
         case "riffCard":
             openCard(app);

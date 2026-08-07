@@ -19,6 +19,7 @@
     --b3-theme-on-background: #dadada;
     --b3-theme-on-surface: #9aa0a6;
     --b3-theme-on-surface-light: #bababa;
+    --b3-theme-on-surface-lighter: #545454;
     --b3-theme-on-error: #fff;
 
     /* 字体 */
@@ -39,7 +40,7 @@
     --b3-layout-space-margin: -4px;
 
     /* 顶部工具栏 */
-    --b3-toolbar-color: var(--b3-theme-on-surface);
+    --b3-toolbar-color: var(--b3-theme-on-surface-light);
     --b3-toolbar-hover: rgba(255, 255, 255, .08);
     --b3-toolbar-left-mac: 74px;
 
@@ -57,7 +58,8 @@
     --b3-list-icon-hover: rgba(201, 209, 217, .1);
 
     /* 菜单 */
-    --b3-menu-background: var(--b3-theme-surface);
+    --b3-menu-background: var(--b3-theme-background);
+    --b3-menu-icon-color: rgba(255, 255, 255, .7);
 
     /* 提示 */
     --b3-tooltips-background: #030303;
@@ -120,8 +122,8 @@
     --b3-highlight-background: #ffff00;
     --b3-highlight-current-background: #ff9632;
 
-    /* 下拉菜单 */
-    --b3-select-background: url("data:image/svg+xml;utf8,<svg fill='rgba(154, 160, 166, .68)' height='24' viewBox='0 0 24 24' width='24' xmlns='http://www.w3.org/2000/svg'><path d='M7 10l5 5 5-5z'/><path d='M0 0h24v24H0z' fill='none'/></svg>") no-repeat right 2px center var(--b3-theme-background);
+    /* 下拉菜单：底色与菜单保持一致，避免 select 嵌入菜单时出现色块 */
+    --b3-select-background: url("data:image/svg+xml;utf8,<svg fill='rgba(154, 160, 166, .68)' height='24' viewBox='0 0 24 24' width='24' xmlns='http://www.w3.org/2000/svg'><path d='M7 10l5 5 5-5z'/><path d='M0 0h24v24H0z' fill='none'/></svg>") no-repeat right 2px center var(--b3-menu-background);
 
     /* switch */
     --b3-switch-background: #444746;
@@ -133,8 +135,9 @@
     --b3-switch-checked-hover2: rgba(253, 252, 251, .10);
 
     /* 阴影 */
+    --b3-dock-shadow-color: #010409;
     --b3-point-shadow: inset 0 .5px .5px .5px rgba(255, 255, 255, .12), 0 3px 8px rgba(0, 0, 0, .3), 0 0 0 0 transparent;
-    --b3-dialog-shadow: 0 8px 24px #010409;
+    --b3-dialog-shadow: 0 8px 24px rgba(0, 0, 0, .8), 0 0 0 1px rgba(255, 255, 255, .12);
     --b3-button-shadow: 0 1px 2px 0 rgb(0 0 0 / .3), 0 1px 3px 1px rgb(255 255 255 /.15);
     --b3-button-active-shadow: 0 2px 3px 1px rgb(0 0 0 / .3), 0 2px 4px 2px rgb(255 255 255 /.15);
 
@@ -154,7 +157,7 @@
     --b3-graph-doc-point: #e8eaed;
     --b3-graph-tag-point: #dbf32f;
     --b3-graph-asset-point: #05c091;
-    --b3-graph-line: #9aa0a6;
+    --b3-graph-line: rgba(255, 255, 255, .55);
     --b3-graph-ref-line: #d23f31;
     --b3-graph-tag-line: #5f6b06;
     --b3-graph-tag-tag-line: #dbf32f;
@@ -173,21 +176,29 @@
     --b3-protyle-inline-link-color: #8ab4f8;
     --b3-protyle-inline-mark-background: #b29100;
     --b3-protyle-inline-mark-color: var(--b3-theme-on-background);
-    --b3-protyle-inline-tag-color: #9aa0a6;
+    --b3-protyle-inline-tag-color: rgba(255, 255, 255, .55);
     --b3-protyle-inline-blockref-color: #b388ff;
     --b3-protyle-inline-fileref-color: var(--b3-theme-secondary);
 
     /* PDF */
-    --b3-pdf-selection: #779170;
+    --b3-pdf-selection: #d0e9c8;
+    --b3-pdf-selection-dark: #779170;
     --sidebar-width: 200px;
     --b3-pdf-offset: 0;
-    --b3-pdf-background1: var(--b3-theme-error);
-    --b3-pdf-background2: #f5822e;
-    --b3-pdf-background3: #FACA5A;
-    --b3-pdf-background4: #7CC868;
-    --b3-pdf-background5: #FC5C88;
-    --b3-pdf-background6: #69B0F2;
-    --b3-pdf-background7: #C885DA;
+    --b3-pdf-background1-light: #d23f31;
+    --b3-pdf-background1-dark: #d23f31;
+    --b3-pdf-background2-light: #f5822e;
+    --b3-pdf-background2-dark: #f5822e;
+    --b3-pdf-background3-light: #FACA5A;
+    --b3-pdf-background3-dark: #FACA5A;
+    --b3-pdf-background4-light: #7CC868;
+    --b3-pdf-background4-dark: #7CC868;
+    --b3-pdf-background5-light: #FC5C88;
+    --b3-pdf-background5-dark: #FC5C88;
+    --b3-pdf-background6-light: #69B0F2;
+    --b3-pdf-background6-dark: #69B0F2;
+    --b3-pdf-background7-light: #C885DA;
+    --b3-pdf-background7-dark: #C885DA;
     --b3-pdf-dark: #212224;
 
     /* callout */
@@ -214,15 +225,15 @@
 }
 
 /* 微软字体斜体会被相邻背景遮挡，将 arial 放置其前 https://github.com/siyuan-note/siyuan/issues/11841；"Segoe UI" 和 Noto-COLRv1-2.047 冲突，故移除。 */
-:root:lang(zh_CN) {
+:root:lang(zh-CN) {
     --b3-font-family: "Emojis Additional", "Emojis Reset", BlinkMacSystemFont, Helvetica, "PingFang SC", "Luxi Sans", "DejaVu Sans", "Hiragino Sans GB", "Source Han Sans SC", arial, "Microsoft Yahei", sans-serif, emojis;
 }
 
-:root:lang(zh_CHT) {
+:root:lang(zh-TW) {
     --b3-font-family: "Emojis Additional", "Emojis Reset", BlinkMacSystemFont, Helvetica, "PingFang TC", "Luxi Sans", "DejaVu Sans", "Hiragino Sans TC", "Source Han Sans TC", "Microsoft JhengHei", arial, sans-serif, emojis;
 }
 
-:root:lang(ja_JP) {
+:root:lang(ja) {
     --b3-font-family: "Emojis Additional", "Emojis Reset", BlinkMacSystemFont, Helvetica, "Luxi Sans", "DejaVu Sans", "Yu Gothic UI", arial, sans-serif, emojis;
 }
 

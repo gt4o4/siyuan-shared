@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -35,6 +36,7 @@ import (
 	"github.com/lxzan/gws"
 	"github.com/samber/lo"
 	"github.com/siyuan-note/logging"
+	"github.com/siyuan-note/siyuan/kernel/mcp/tools"
 	"github.com/siyuan-note/siyuan/kernel/model"
 	"github.com/siyuan-note/siyuan/kernel/util"
 	"github.com/smallnest/chanx"
@@ -99,7 +101,10 @@ type KernelPlugin struct {
 
 	worker  Worker               // Worker for serializing plugin js-call-go (e.g. logger) and go-call-js (e.g. RPC calls) tasks on a single goroutine
 	runtime *eventloop.EventLoop // goja event loop runtime for this plugin
-	watcher *fsnotify.Watcher    // watcher for kernel plugin storage file changes
+
+	watcherMu   sync.Mutex
+	watcher     *fsnotify.Watcher // watcher for kernel plugin storage file changes
+	watcherDone chan struct{}
 
 	state atomic.Int64 //  PluginState
 
@@ -109,6 +114,7 @@ type KernelPlugin struct {
 	bus EventBus.Bus // Event bus for plugin events and RPC request/response dispatch
 
 	rpcMethods sync.Map // string -> *RpcMethod, registered JSON-RPC methods
+	mcpTools   sync.Map // string -> *tools.Tool, fully-qualified MCP tool names registered by this plugin
 
 	socketsMu sync.RWMutex       // mutex for gwsSockets map
 	sockets   map[*gws.Conn]bool // tracked gws WebSocket connections (true: RPC server, false: regular)
@@ -122,11 +128,6 @@ func NewKernelPlugin(ctx context.Context, petal *model.Petal) *KernelPlugin {
 
 	context, cancel := context.WithCancel(ctx)
 
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		logging.LogErrorf("[plugin:%s] failed to create storage watcher: %s", petal.Name, err)
-	}
-
 	plugin := &KernelPlugin{
 		Petal: petal,
 		token: token,
@@ -134,8 +135,6 @@ func NewKernelPlugin(ctx context.Context, petal *model.Petal) *KernelPlugin {
 
 		pluginDir:  filepath.Join(util.DataDir, "plugins", petal.Name),
 		storageDir: filepath.Join(util.DataDir, "storage", "petal", petal.Name),
-
-		watcher: watcher,
 
 		context: context,
 		cancel:  cancel,
@@ -161,6 +160,20 @@ func createEventMessage(eventType string, detail any) R {
 // State returns the current plugin state (safe for concurrent reads).
 func (p *KernelPlugin) State() PluginState {
 	return PluginState(p.state.Load())
+}
+
+// Clear removes all registered MCP tools and RPC methods for this plugin.
+// Called on plugin stop to prevent residue in global registries.
+func (p *KernelPlugin) Clear() {
+	p.rpcMethods.Clear()
+
+	p.mcpTools.Range(func(_, value any) bool {
+		if tool, ok := value.(*tools.Tool); ok {
+			tools.RemoveTool(tool.Name)
+		}
+		return true
+	})
+	p.mcpTools.Clear()
 }
 
 // updateState updates the plugin state atomically and pushes the new state to the frontend via util.PushKernelPluginState.
@@ -216,8 +229,10 @@ func (p *KernelPlugin) close() (err error) {
 		}
 	}()
 
-	if p.runtime != nil {
-		p.runtime.Stop() // Stops the event loop and waits for it to finish.
+	runtime := p.runtime
+	p.runtime = nil
+	if runtime != nil {
+		runtime.Stop() // Stops the event loop and waits for it to finish.
 		// p.runtime.Terminate() // Interrupts the runtime and causes all executing code to throw an exception.
 	}
 	return
@@ -225,6 +240,12 @@ func (p *KernelPlugin) close() (err error) {
 
 // error sets the plugin state to errored and frees the goja runtime.
 func (p *KernelPlugin) error() {
+	if p.cancel != nil {
+		p.cancel()
+	}
+	p.closeStorageWatcher()
+	p.Clear()
+
 	if err := p.close(); err != nil {
 		logging.LogErrorf("[plugin:%s] failed to close runtime during error handling: %v", p.Name, err)
 	}
@@ -236,8 +257,10 @@ func (p *KernelPlugin) error() {
 func (p *KernelPlugin) start() (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			p.error()
 			err = fmt.Errorf("goja panic during start: %v", r)
+		}
+		if err != nil {
+			p.error()
 		}
 	}()
 
@@ -249,16 +272,12 @@ func (p *KernelPlugin) start() (err error) {
 	}
 
 	if runtimeErr := p.InitRuntime(); runtimeErr != nil {
-		p.error()
 		return fmt.Errorf("start runtime: %v", runtimeErr)
 	}
 
 	if subscribeErr := p.subscribeEventHandlers(); subscribeErr != nil {
-		p.error()
 		return fmt.Errorf("subscribe plugin events: %v", subscribeErr)
 	}
-
-	go p.startStorageWatch()
 
 	p.onLoad()
 	p.updateState(PluginStateRunning)
@@ -291,9 +310,10 @@ func (p *KernelPlugin) stop() (ok bool, err error) {
 
 	p.onUnload()
 
-	p.rpcMethods.Clear()
+	p.Clear()
 
 	p.cancel()
+	p.closeStorageWatcher()
 
 	p.socketsMu.Lock()
 	for c := range p.sockets {
@@ -350,6 +370,88 @@ func (p *KernelPlugin) unbindRpcMethod(name string) error {
 		return nil
 	}
 	return nil
+}
+
+// registerMcpTool registers a tool to the global MCP registry with a plugin-specific prefix, and tracks it for cleanup on plugin stop.
+func (p *KernelPlugin) registerMcpTool(name string, tool *tools.Tool) error {
+	if err := tools.SetTool(tool.Name, tool); err != nil {
+		return err
+	}
+	p.mcpTools.Store(name, tool)
+	return nil
+}
+
+// unregisterMcpTool removes a tool from the global MCP registry and the plugin's tracking map.
+func (p *KernelPlugin) unregisterMcpTool(name string) error {
+	if value, loaded := p.mcpTools.LoadAndDelete(name); loaded {
+		if tool, ok := value.(*tools.Tool); ok {
+			tools.RemoveTool(tool.Name)
+		}
+	}
+	return nil
+}
+
+// invokeMcpTool calls a JS handler registered via siyuan.mcp.registerTool and returns the CallToolResult.
+func (p *KernelPlugin) invokeMcpTool(handler goja.Callable, args map[string]any) (tools.CallToolResult, error) {
+	if p.State() != PluginStateRunning {
+		return tools.CallToolResult{
+			IsError: true,
+			Content: []tools.ContentItem{{Type: "text", Text: fmt.Sprintf("plugin [%s] is not running (state: %s)", p.Name, p.State().String())}},
+		}, nil
+	}
+
+	done := make(chan *TaskResult, 1)
+
+	runErr := p.worker.Run(func(rt *goja.Runtime) (_ any, _ error) {
+		jsArgs := rt.ToValue(args)
+		invokeFunction(func(_ *goja.Runtime, result *CallResult) {
+			done <- result.TaskResult()
+		}, rt, true, handler, rt.GlobalObject(), jsArgs)
+		return
+	}, nil)
+	if runErr != nil {
+		return tools.CallToolResult{
+			IsError: true,
+			Content: []tools.ContentItem{{Type: "text", Text: fmt.Sprintf("error running plugin runtime worker: %v", runErr)}},
+		}, nil
+	}
+
+	select {
+	case taskResult := <-done:
+		if taskResult.err != nil {
+			return tools.CallToolResult{
+				IsError: true,
+				Content: []tools.ContentItem{{Type: "text", Text: fmt.Sprintf("error invoking MCP tool handler: %v", taskResult.err)}},
+			}, nil
+		}
+
+		if taskResult.value == nil {
+			return tools.CallToolResult{
+				Content:              []tools.ContentItem{{Type: "text", Text: "null"}},
+				StructuredContentSet: true,
+			}, nil
+		}
+
+		jsonBytes, marshalErr := json.Marshal(taskResult.value)
+		if marshalErr != nil {
+			return tools.CallToolResult{
+				IsError: true,
+				Content: []tools.ContentItem{{Type: "text", Text: fmt.Sprintf("error marshaling MCP tool result: %v", marshalErr)}},
+			}, nil
+		}
+
+		return tools.CallToolResult{
+			Content:              []tools.ContentItem{{Type: "text", Text: string(jsonBytes)}},
+			StructuredContent:    taskResult.value,
+			StructuredContentSet: true,
+		}, nil
+
+	case <-p.context.Done():
+		return tools.CallToolResult{
+			IsError: true,
+			Content: []tools.ContentItem{{Type: "text", Text: "plugin stopped while invoking MCP tool handler"}},
+		}, nil
+	}
 }
 
 // runtimeEventHandler dispatches an event to the plugin's goja runtime
@@ -629,35 +731,30 @@ func (p *KernelPlugin) UntrackRpcSocket(conn *gws.Conn) {
 }
 
 // startStorageWatch starts a goroutine to watch for file changes in the plugin's storage directory and dispatches events to the plugin.
-func (p *KernelPlugin) startStorageWatch() {
-	if p.watcher == nil {
-		return
-	}
-
-	defer p.watcher.Close()
+func (p *KernelPlugin) startStorageWatch(watcher *fsnotify.Watcher, done chan struct{}) {
+	defer p.finishStorageWatcher(watcher, done)
 
 	for {
 		select {
 		case <-p.context.Done():
 			return
-		case event, ok := <-p.watcher.Events:
+		case event, ok := <-watcher.Events:
 			if !ok {
 				return
 			}
 
-			switch event.Op {
-			case fsnotify.Create, fsnotify.Write, fsnotify.Rename, fsnotify.Remove:
+			for _, operation := range storageWatchOperations(event) {
 				path, relErr := filepath.Rel(p.storageDir, event.Name)
 				if relErr != nil {
 					logging.LogErrorf("[plugin:%s] failed to get relative storage path for [%s]: %v", p.Name, event.Name, relErr)
 					return
 				}
 				p.bus.Publish(EventBusTopicRuntime, createEventMessage("fs-notify", R{
-					"operation": event.Op.String(),
+					"operation": operation,
 					"path":      path,
 				}))
 			}
-		case err, ok := <-p.watcher.Errors:
+		case err, ok := <-watcher.Errors:
 			if !ok {
 				return
 			}
@@ -668,9 +765,23 @@ func (p *KernelPlugin) startStorageWatch() {
 
 // addStorageWatch adds a path to the fsnotify watcher to watch for storage file/directory changes.
 func (p *KernelPlugin) addStorageWatch(path string) (err error) {
+	if !isPluginFileWatchSupported() {
+		return errPluginFileWatchUnsupported
+	}
+
+	p.watcherMu.Lock()
+	defer p.watcherMu.Unlock()
+
+	if contextErr := p.context.Err(); contextErr != nil {
+		return fmt.Errorf("plugin stopped: %w", contextErr)
+	}
 	if p.watcher == nil {
-		err = fmt.Errorf("fsnotify watcher not initialized")
-		return
+		p.watcher, err = fsnotify.NewWatcher()
+		if err != nil {
+			return fmt.Errorf("initialize fsnotify watcher: %w", err)
+		}
+		p.watcherDone = make(chan struct{})
+		go p.startStorageWatch(p.watcher, p.watcherDone)
 	}
 
 	err = p.watcher.Add(path)
@@ -679,12 +790,56 @@ func (p *KernelPlugin) addStorageWatch(path string) (err error) {
 
 // removeStorageWatch removes a path from the fsnotify watcher to stop watching for storage file/directory changes.
 func (p *KernelPlugin) removeStorageWatch(path string) (err error) {
+	if !isPluginFileWatchSupported() {
+		return errPluginFileWatchUnsupported
+	}
+
+	p.watcherMu.Lock()
+	defer p.watcherMu.Unlock()
+
 	if p.watcher == nil {
 		err = fmt.Errorf("fsnotify watcher not initialized")
 		return
 	}
 
 	err = p.watcher.Remove(path)
+	return
+}
+
+func (p *KernelPlugin) closeStorageWatcher() {
+	p.watcherMu.Lock()
+	watcher := p.watcher
+	done := p.watcherDone
+	p.watcher = nil
+	p.watcherDone = nil
+	p.watcherMu.Unlock()
+
+	if watcher != nil {
+		watcher.Close()
+	}
+	if done != nil {
+		<-done
+	}
+}
+
+func (p *KernelPlugin) finishStorageWatcher(watcher *fsnotify.Watcher, done chan struct{}) {
+	watcher.Close()
+
+	p.watcherMu.Lock()
+	if p.watcher == watcher {
+		p.watcher = nil
+		p.watcherDone = nil
+	}
+	p.watcherMu.Unlock()
+	close(done)
+}
+
+func storageWatchOperations(event fsnotify.Event) (ret []string) {
+	for _, operation := range []fsnotify.Op{fsnotify.Create, fsnotify.Write, fsnotify.Rename, fsnotify.Remove} {
+		if event.Has(operation) {
+			ret = append(ret, operation.String())
+		}
+	}
 	return
 }
 
@@ -847,7 +1002,12 @@ func (p *KernelPlugin) handleHttpRequest(c *gin.Context, request *Request, scope
 func (p *KernelPlugin) handleWebSocketRequest(c *gin.Context, request *Request, scope AccessScope) (err error) {
 	done := make(chan error, 1)
 	h := &WsEventHandler{p: p}
-	upgrader := gws.NewUpgrader(h, &gws.ServerOption{})
+	upgrader := gws.NewUpgrader(h, &gws.ServerOption{
+		// 校验 Origin，防止跨站 WebSocket 劫持（CSWSH） https://github.com/siyuan-note/siyuan/security/advisories/GHSA-3cc2-h3v6-rqpq
+		Authorize: func(r *http.Request, _ gws.SessionStorage) bool {
+			return util.IsSessionOriginAllowed(r.Header.Get("Origin"), r.Host)
+		},
+	})
 
 	socket, upgradeErr := upgrader.Upgrade(c.Writer, c.Request)
 	if upgradeErr != nil {
