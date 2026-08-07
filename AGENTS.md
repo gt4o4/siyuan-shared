@@ -4,7 +4,7 @@ This file provides guidance to AI coding agents when working with code in this r
 
 ## Project Overview
 
-**siyuan-shared** is a community fork of [SiYuan Note](https://github.com/siyuan-note/siyuan) with an in-process kernel (Go c-shared library via N-API), S3/WebDAV sync, and self-hosted Docker deployment. The repo contains the full SiYuan source merged at root level, an Android subtree under `android/`, and a set of patches applied during CI builds.
+**siyuan-shared** is a community fork of [SiYuan Note](https://github.com/siyuan-note/siyuan) with an in-process kernel (Go c-shared library via N-API), S3/WebDAV sync, and self-hosted Docker deployment. The repo contains the full SiYuan source merged at root level, an Android subtree under `android/`, an iOS subtree under `ios/`, and a set of patches applied during CI builds.
 
 ## Repository Remotes & Merge Strategy
 
@@ -18,6 +18,7 @@ This file provides guidance to AI coding agents when working with code in this r
 
 - **siyuan** is merged as a full-repo merge (root level: `kernel/`, `app/`, `scripts/`)
 - **siyuan-android** is merged as a proper git subtree into `android/` using `git subtree pull --prefix=android siyuan-android main` (no `--squash`)
+- **siyuan-ios** is merged as a proper git subtree into `ios/` using `git subtree pull --prefix=ios siyuan-ios main` (no `--squash`)
 - **upstream** (appdev) is merged with `git merge upstream/master`, keeping our custom CI workflow
 - **Tag collision warning**: upstream (appdev) and siyuan share tag names (e.g. `v3.6.0`) pointing to different commits. Delete local tags before fetching siyuan tags.
 - **Release tags**: Use `v<upstream>-gbc<N>` format (e.g. `v3.6.4-gbc1`) for fork releases
@@ -31,10 +32,11 @@ kernel/              Go backend (HTTP server, API, data model, search, sync)
   conf/tunnel.go       Tunnel configuration structs
 app/                 TypeScript/Electron frontend (editor, UI, themes, i18n)
 android/             Android app (git subtree from siyuan-android)
+ios/                 iOS app (git subtree from siyuan-ios)
 third_party/
   cloudflared/         Submodule: gt4o4/cloudflared (patched for in-process embedding)
 patches/             Unified diff patches applied to upstream during CI
-  siyuan/              3 patches: disable-update, default-config, mock-vip-user
+  siyuan/              4 patches: disable-update, default-config, mock-vip-user, hide-account-entry
   siyuan-android/      1 patch: debug-build (custom signing config)
   siyuan-ios/          1 patch: build-failed
 scripts/             Build scripts (linux-build.sh, darwin-build.sh, win-build.bat)
