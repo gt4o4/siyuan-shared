@@ -19,6 +19,7 @@ package org.b3log.siyuan;
 
 import android.app.AlertDialog;
 import android.content.Intent;
+import android.content.res.Configuration;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -46,15 +47,17 @@ import java.util.Set;
  * 引导启动.
  *
  * @author <a href="https://88250.b3log.org">Liang Ding</a>
- * @version 1.1.1.2, May 9, 2026
+ * @version 1.1.1.4, Jul 20, 2026
  * @since 1.0.0
  */
 public class BootActivity extends AppCompatActivity {
 
     @Override
     protected void onCreate(final Bundle savedInstanceState) {
-        Log.i("boot", "Create boot activity");
         super.onCreate(savedInstanceState);
+        Utils.logInfo("boot", "Create boot activity, process [" + android.os.Process.myPid()
+                + "], instance [" + System.identityHashCode(this) + "], task [" + getTaskId()
+                + "], saved state [" + (null != savedInstanceState) + "]");
         setContentView(R.layout.activity_boot);
 
         BarUtils.setNavBarVisibility(this, false);
@@ -72,6 +75,24 @@ public class BootActivity extends AppCompatActivity {
         startMainActivity();
     }
 
+    @Override
+    public void onConfigurationChanged(final Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        Utils.logInfo("boot", "Change boot activity configuration, process [" + android.os.Process.myPid()
+                + "], instance [" + System.identityHashCode(this) + "], task [" + getTaskId()
+                + "], configuration [" + Utils.formatInputConfiguration(newConfig) + "]");
+    }
+
+    @Override
+    protected void onDestroy() {
+        Utils.logInfo("boot", "Destroy boot activity, process [" + android.os.Process.myPid()
+                + "], instance [" + System.identityHashCode(this) + "], task [" + getTaskId()
+                + "], finishing [" + isFinishing() + "], task root [" + isTaskRoot()
+                + "], changing configurations [" + isChangingConfigurations() + "], changes [0x"
+                + Integer.toHexString(getChangingConfigurations()) + "]");
+        super.onDestroy();
+    }
+
     private boolean isFirstRun() {
         final String dataDir = getFilesDir().getAbsolutePath();
         final String appDir = dataDir + "/app";
@@ -80,6 +101,8 @@ public class BootActivity extends AppCompatActivity {
     }
 
     private void startMainActivity() {
+        Utils.logInfo("boot", "Start main activity, process [" + android.os.Process.myPid()
+                + "], boot instance [" + System.identityHashCode(this) + "], task [" + getTaskId() + "]");
         final Intent intent = getIntent();
         String blockURL = "";
         try {
@@ -93,6 +116,8 @@ public class BootActivity extends AppCompatActivity {
         }
 
         final Intent startMainIntent = new Intent(getApplicationContext(), MainActivity.class);
+        // 若 MainActivity 已在任务栈中则将其拉到栈顶复用，不创建新实例，避免触发 onDestroy → exit() 重启内核
+        startMainIntent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         if (!blockURL.isEmpty()) {
             startMainIntent.putExtra("blockURL", blockURL);
         }

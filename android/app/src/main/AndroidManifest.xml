@@ -14,6 +14,12 @@
     <!-- Keep Wi-Fi alive for background kernel service -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
+    <!-- 获取用于局域网设备发现的当前网络信息 -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- 接收局域网设备发现所需的组播数据 -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
     <!--
         Fix the problem that notifications cannot be allowed on Android 13
         https://github.com/siyuan-note/siyuan/issues/7960
@@ -33,6 +39,13 @@
 
     <!-- 拍摄照片和视频 -->
     <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- 支持录音 -->
+    <uses-feature
+        android:name="android.hardware.microphone"
+        android:required="false" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
     <!-- 添加桌面快捷方式 -->
     <uses-permission android:name="com.android.launcher.permission.INSTALL_SHORTCUT" />
@@ -64,16 +77,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-
-                <data
-                    android:host="blocks"
-                    android:scheme="siyuan" />
-            </intent-filter>
-
             <meta-data
                 android:name="android.app.shortcuts"
                 android:resource="@xml/shortcuts" />
@@ -91,9 +94,8 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
 
-                <data
-                    android:host="oidc-callback"
-                    android:scheme="siyuan" />
+                <!-- Android 会在未声明 host 时忽略 path，因此统一接收 siyuan: 链接并在代码中精确分派。 -->
+                <data android:scheme="siyuan" />
             </intent-filter>
         </activity>
 
@@ -118,6 +120,7 @@
             android:name=".ShortcutActivity"
             android:exported="true"
             android:launchMode="singleTask"
+            android:taskAffinity="org.b3log.siyuan.shorthand"
             android:theme="@style/Theme.AppCompat.DayNight.NoActionBar"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>

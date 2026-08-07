@@ -1,4 +1,4 @@
-[English](https://github.com/siyuan-note/siyuan-android/blob/master/README.md) | [日本語](https://github.com/siyuan-note/siyuan-android/blob/master/README_ja_JP.md)
+[English](README.md) | [日本語](README.ja.md)
 
 ## 概述
 
@@ -10,7 +10,7 @@
 
 ## 搭建步骤
 
-1. 参考[思源笔记开发指南](https://github.com/siyuan-note/siyuan/blob/master/.github/CONTRIBUTING_zh_CN.md)编译内核
+1. 参考[思源笔记开发指南](https://github.com/siyuan-note/siyuan/blob/master/.github/CONTRIBUTING.zh-CN.md)编译内核
 2. 拷贝资源文件并打包 app/src/main/assets/app.zip
    * appearance
    * guide

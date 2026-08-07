@@ -23,6 +23,11 @@ import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
+import android.net.ConnectivityManager;
+import android.net.LinkAddress;
+import android.net.LinkProperties;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.net.Uri;
 import android.os.LocaleList;
 import android.print.PrintDocumentAdapter;
@@ -50,9 +55,7 @@ import java.io.File;
 import java.io.FileWriter;
 import java.net.Inet4Address;
 import java.net.InetAddress;
-import java.net.NetworkInterface;
 import java.util.ArrayList;
-import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -65,7 +68,7 @@ import mobile.Mobile;
  *
  * @author <a href="https://88250.b3log.org">Liang Ding</a>
  * @author <a href="https://github.com/wwxiaoqi">Jane Haring</a>
- * @version 1.5.0.6, Feb 21, 2026
+ * @version 1.5.0.7, Jul 20, 2026
  * @since 1.0.0
  */
 public final class Utils {
@@ -136,6 +139,14 @@ public final class Utils {
         return configuration.smallestScreenWidthDp >= 600;
     }
 
+    // 移动端容器启用桌面模式时，前端加载的是桌面 bundle（/stage/build/desktop/），
+    // 它依赖 WebView 自身管理软键盘，不会调用 showKeyboard 桥接。此时不能禁用 WebView 焦点，
+    // 否则软键盘收起一次后就再也无法重新获取焦点。https://github.com/siyuan-note/siyuan/issues/18028
+    public static boolean isDesktopMode(final WebView webView) {
+        final String url = webView.getUrl();
+        return null != url && url.contains("/stage/build/desktop/");
+    }
+
     public static boolean isCnChannel(final PackageManager pm) {
         final String channel = getChannel(pm);
         return channel.contains("cn") || channel.equals("huawei");
@@ -195,7 +206,11 @@ public final class Utils {
     public static void hideKeyboardAndToolbar(final WebView webView) {
         webView.post(() -> {
             webView.evaluateJavascript("javascript:hideKeyboardToolbar();document.activeElement.blur();", null);
-            Utils.setWebViewFocusable(webView, false);
+            // 桌面模式依赖 WebView 自身管理软键盘，禁用焦点会导致键盘收起后无法再次获取焦点
+            // https://github.com/siyuan-note/siyuan/issues/18028
+            if (!isDesktopMode(webView)) {
+                Utils.setWebViewFocusable(webView, false);
+            }
         });
     }
 
@@ -207,23 +222,55 @@ public final class Utils {
         }
     }
 
-    public static String getIPAddressList() {
+    public static String getLANIPAddressList(final Context context) {
         final List<String> list = new ArrayList<>();
         try {
-            for (final Enumeration<NetworkInterface> enNetI = NetworkInterface.getNetworkInterfaces(); enNetI.hasMoreElements(); ) {
-                final NetworkInterface netI = enNetI.nextElement();
-                for (final Enumeration<InetAddress> enumIpAddr = netI.getInetAddresses(); enumIpAddr.hasMoreElements(); ) {
-                    final InetAddress inetAddress = enumIpAddr.nextElement();
-                    if (inetAddress instanceof Inet4Address && !inetAddress.isLoopbackAddress()) {
-                        list.add(inetAddress.getHostAddress());
+            final ConnectivityManager manager =
+                    (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (manager != null) {
+                final Network activeNetwork = manager.getActiveNetwork();
+                if (!addLANNetworkAddresses(manager, activeNetwork, list)) {
+                    for (final Network network : manager.getAllNetworks()) {
+                        if (network.equals(activeNetwork)) {
+                            continue;
+                        }
+                        if (addLANNetworkAddresses(manager, network, list)) {
+                            break;
+                        }
                     }
                 }
             }
         } catch (final Exception e) {
-            logError("network", "get IP list failed, returns 127.0.0.1", e);
+            logError("network", "get LAN IP list failed", e);
         }
         list.add("127.0.0.1");
         return TextUtils.join(",", list);
+    }
+
+    private static boolean addLANNetworkAddresses(final ConnectivityManager manager, final Network network,
+                                                  final List<String> addresses) {
+        if (network == null) {
+            return false;
+        }
+        final NetworkCapabilities capabilities = manager.getNetworkCapabilities(network);
+        if (capabilities == null ||
+                (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
+                        !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))) {
+            return false;
+        }
+        final LinkProperties properties = manager.getLinkProperties(network);
+        if (properties == null) {
+            return false;
+        }
+        final int initialSize = addresses.size();
+        for (final LinkAddress linkAddress : properties.getLinkAddresses()) {
+            final InetAddress address = linkAddress.getAddress();
+            if (address instanceof Inet4Address && !address.isLoopbackAddress() &&
+                    !addresses.contains(address.getHostAddress())) {
+                addresses.add(address.getHostAddress());
+            }
+        }
+        return addresses.size() > initialSize;
     }
 
     public static void logError(final String tag, final String msg) {
@@ -287,6 +334,15 @@ public final class Utils {
                 Log.e("logging", "Write mobile log failed", ex);
             }
         }
+    }
+
+    public static String formatInputConfiguration(final Configuration configuration) {
+        return "keyboard [" + configuration.keyboard + "], keyboard hidden [" + configuration.keyboardHidden
+                + "], hard keyboard hidden [" + configuration.hardKeyboardHidden + "], navigation ["
+                + configuration.navigation + "], navigation hidden [" + configuration.navigationHidden
+                + "], touchscreen [" + configuration.touchscreen + "], ui mode [0x"
+                + Integer.toHexString(configuration.uiMode) + "], screen layout [0x"
+                + Integer.toHexString(configuration.screenLayout) + "]";
     }
 
     /**
@@ -375,35 +431,42 @@ public final class Utils {
         if ("zh".equals(language)) {
             // 检查是否为简体字脚本
             if ("hans".equals(script)) {
-                ret = "zh_CN"; // 简体中文，使用 zh_CN
+                ret = "zh-CN"; // 简体中文
             } else if ("hant".equals(script)) {
-                // 对于繁体字脚本，需要进一步检查国家代码
-                if ("tw".equals(country)) {
-                    ret = "zh_CHT"; // 繁体中文对应台湾
-                } else if ("hk".equals(country)) {
-                    ret = "zh_CHT"; // 繁体中文对应香港
-                } else {
-                    ret = "zh_CHT"; // 其他繁体中文情况也使用 zh_CHT
-                }
+                // 对于繁体字脚本，统一映射到 zh-TW（思源当前只有一套繁体翻译，偏台湾用词）
+                ret = "zh-TW";
             } else {
-                ret = "zh_CN"; // 如果脚本不是简体或繁体，默认为简体中文
+                // 如果脚本不是简体或繁体，按国家代码二次判断
+                if ("tw".equals(country) || "hk".equals(country) || "mo".equals(country)) {
+                    ret = "zh-TW";
+                } else {
+                    ret = "zh-CN"; // 默认为简体中文
+                }
             }
         } else {
-            // 对于非中文语言，创建一个映射来定义其他语言代码的对应关系
+            // 对于非中文语言，映射到 BCP 47 合规值（zh-CN/zh-TW/en/ja/pt-BR 等）
             Map<String, String> otherLangMap = new HashMap<>();
-            otherLangMap.put("ar", "ar_SA");
-            otherLangMap.put("de", "de_DE");
-            otherLangMap.put("es", "es_ES");
-            otherLangMap.put("fr", "fr_FR");
-            otherLangMap.put("he", "he_IL");
-            otherLangMap.put("it", "it_IT");
-            otherLangMap.put("ja", "ja_JP");
-            otherLangMap.put("pl", "pl_PL");
-            otherLangMap.put("pt", "pt_BR");
-            otherLangMap.put("ru", "ru_RU");
+            otherLangMap.put("ar", "ar");
+            otherLangMap.put("de", "de");
+            otherLangMap.put("es", "es");
+            otherLangMap.put("fr", "fr");
+            otherLangMap.put("he", "he");
+            otherLangMap.put("it", "it");
+            otherLangMap.put("ja", "ja");
+            otherLangMap.put("ko", "ko");
+            otherLangMap.put("nl", "nl");
+            otherLangMap.put("pl", "pl");
+            otherLangMap.put("pt", "pt-BR");
+            otherLangMap.put("ru", "ru");
+            otherLangMap.put("sk", "sk");
+            otherLangMap.put("th", "th");
+            otherLangMap.put("tr", "tr");
+            otherLangMap.put("uk", "uk");
+            otherLangMap.put("hi", "hi");
+            otherLangMap.put("id", "id");
 
-            // 使用 getOrDefault 方法从映射中获取语言代码，如果语言不存在则默认为 en_US
-            ret = otherLangMap.getOrDefault(language, "en_US");
+            // 使用 getOrDefault 方法从映射中获取语言代码，如果语言不存在则默认为 en
+            ret = otherLangMap.getOrDefault(language, "en");
         }
         return ret;
     }

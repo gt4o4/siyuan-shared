@@ -18,6 +18,8 @@
 package org.b3log.siyuan;
 
 import android.Manifest;
+import android.app.Activity;
+import android.content.ActivityNotFoundException;
 import android.app.AlarmManager;
 import android.app.Notification;
 import android.app.PendingIntent;
@@ -28,18 +30,23 @@ import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.database.Cursor;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
 import android.os.SystemClock;
 import android.provider.MediaStore;
+import android.provider.OpenableColumns;
 import android.provider.Settings;
 import android.util.Log;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
 
 import androidx.core.app.ActivityCompat;
+import androidx.activity.result.ActivityResult;
 import androidx.core.app.AlarmManagerCompat;
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
@@ -51,7 +58,14 @@ import com.blankj.utilcode.util.KeyboardUtils;
 import com.blankj.utilcode.util.StringUtils;
 import com.zackratos.ultimatebarx.ultimatebarx.java.UltimateBarX;
 
+import org.json.JSONObject;
+
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.net.URLDecoder;
 
 import mobile.Mobile;
@@ -61,14 +75,51 @@ import mobile.Mobile;
  *
  * @author <a href="https://88250.b3log.org">Liang Ding</a>
  * @author <a href="https://github.com/Soltus">绛亽</a>
- * @version 1.6.0.6, Apr 30, 2026
+ * @version 1.6.0.8, Aug 3, 2026
  * @since 1.0.0
  */
 public final class JSAndroid {
     private MainActivity activity;
+    private final Object exportFileLock = new Object();
+    private PendingExportFile pendingExportFile;
+
+    private static final class PendingExportFile {
+        private final String url;
+        private final String requestID;
+        private String suggestedName;
+        private ExportFileLease lease;
+
+        private PendingExportFile(final String url, final String requestID, final String suggestedName) {
+            this.url = url;
+            this.requestID = requestID;
+            this.suggestedName = suggestedName;
+        }
+    }
+
+    private static final class ExportFileLease {
+        private final String id;
+        private final String path;
+        private final String name;
+        private final long size;
+
+        private ExportFileLease(final String id, final String path, final String name, final long size) {
+            this.id = id;
+            this.path = path;
+            this.name = name;
+            this.size = size;
+        }
+    }
 
     public JSAndroid(final MainActivity activity) {
         this.activity = activity;
+    }
+
+    @JavascriptInterface
+    public void logInputEvent(final String details) {
+        if (StringUtils.isEmpty(details)) {
+            return;
+        }
+        Utils.logInfo("input", "DOM input event [" + details.substring(0, Math.min(details.length(), 2048)) + "]");
     }
 
     @JavascriptInterface
@@ -249,9 +300,60 @@ public final class JSAndroid {
 
     @JavascriptInterface
     public void writeImageClipboard(final String uri) {
-        final ClipboardManager clipboard = (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
-        final ClipData clip = ClipData.newUri(activity.getContentResolver(), "Copied img from SiYuan", Uri.parse("http://127.0.0.1:6806/" + uri));
-        clipboard.setPrimaryClip(clip);
+        HttpURLConnection connection = null;
+        try {
+            final InputStream inputStream;
+            if (uri.startsWith("assets/")) {
+                final String workspacePath = Mobile.getCurrentWorkspacePath();
+                final String assetAbsPath = Mobile.getAssetAbsPath(uri);
+                final File asset;
+                if (assetAbsPath.contains(workspacePath)) {
+                    asset = new File(workspacePath, assetAbsPath.substring(workspacePath.length() + 1));
+                } else {
+                    asset = new File(workspacePath, "data/" + URLDecoder.decode(uri, "UTF-8"));
+                }
+                inputStream = new FileInputStream(asset);
+            } else {
+                final String imageURL = uri.startsWith("http://") || uri.startsWith("https://")
+                        ? uri : "http://127.0.0.1:6806/" + uri.replaceFirst("^/", "");
+                connection = (HttpURLConnection) new URL(imageURL).openConnection();
+                connection.setConnectTimeout(10000);
+                connection.setReadTimeout(30000);
+                connection.connect();
+                inputStream = connection.getInputStream();
+            }
+
+            final File clipboardDir = new File(activity.getExternalFilesDir(null), "clipboard");
+            if (!clipboardDir.exists() && !clipboardDir.mkdirs()) {
+                throw new IllegalStateException("create clipboard directory failed");
+            }
+            final File imageFile = new File(clipboardDir, "image.png");
+            try (final InputStream input = inputStream;
+                 final FileOutputStream output = new FileOutputStream(imageFile)) {
+                final Bitmap bitmap = BitmapFactory.decodeStream(input);
+                if (null == bitmap) {
+                    throw new IllegalArgumentException("decode clipboard image failed");
+                }
+                try {
+                    if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) {
+                        throw new IllegalStateException("encode clipboard image failed");
+                    }
+                } finally {
+                    bitmap.recycle();
+                }
+            }
+
+            final Uri contentUri = FileProvider.getUriForFile(activity, BuildConfig.APPLICATION_ID, imageFile);
+            final ClipboardManager clipboard = (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
+            final ClipData clip = ClipData.newUri(activity.getContentResolver(), "Copied img from SiYuan", contentUri);
+            clipboard.setPrimaryClip(clip);
+        } catch (final Exception e) {
+            Utils.logError("JSAndroid", "write image clipboard failed", e);
+        } finally {
+            if (null != connection) {
+                connection.disconnect();
+            }
+        }
     }
 
     @JavascriptInterface
@@ -294,7 +396,13 @@ public final class JSAndroid {
 
     @JavascriptInterface
     public void saveExportFile(final String url) {
+        saveExportFileV2(url, "");
+    }
+
+    @JavascriptInterface
+    public void saveExportFileV2(final String url, final String requestID) {
         if (StringUtils.isEmpty(url)) {
+            notifyExportFileResult(requestID, "error", "");
             return;
         }
 
@@ -312,62 +420,280 @@ public final class JSAndroid {
             fileName = "export";
         }
 
-        final String finalFileName = fileName;
-        new Thread(() -> {
-            java.io.FileInputStream inputStream = null;
-            java.io.OutputStream outputStream = null;
-            try {
-                final String srcPath = Mobile.getExportFilePath(url);
-                if (null == srcPath || srcPath.isEmpty()) {
-                    Mobile.showMsg(Mobile.language(291), 5000);
-                    return;
-                }
-
-                final String mimeType = Mobile.getMimeTypeByExt(finalFileName);
-                inputStream = new java.io.FileInputStream(srcPath);
-
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    final ContentValues values = new ContentValues();
-                    values.put(MediaStore.Downloads.DISPLAY_NAME, finalFileName);
-                    values.put(MediaStore.Downloads.MIME_TYPE, mimeType);
-                    values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
-
-                    final Uri insertUri = activity.getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
-                    if (null == insertUri) {
-                        Mobile.showMsg(Mobile.language(292), 5000);
-                        return;
-                    }
-
-                    outputStream = activity.getContentResolver().openOutputStream(insertUri);
-                    if (null == outputStream) {
-                        Mobile.showMsg(Mobile.language(293), 5000);
-                        return;
-                    }
-                } else {
-                    final File downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-                    if (!downloadsDir.exists()) {
-                        downloadsDir.mkdirs();
-                    }
-                    final File outFile = new File(downloadsDir, finalFileName);
-                    outputStream = new java.io.FileOutputStream(outFile);
-                }
-
-                final byte[] buffer = new byte[65536];
-                int bytesRead;
-                while ((bytesRead = inputStream.read(buffer)) != -1) {
-                    outputStream.write(buffer, 0, bytesRead);
-                }
-                outputStream.flush();
-
-                Mobile.showMsg(Mobile.language(289), 5000);
-            } catch (final Exception e) {
-                Utils.logError("JSAndroid", "saveExportFile failed", e);
+        final PendingExportFile request = new PendingExportFile(url, requestID, fileName);
+        synchronized (exportFileLock) {
+            if (null != pendingExportFile) {
+                notifyExportFileResult(requestID, "error", "");
                 Mobile.showMsg(Mobile.language(290), 5000);
-            } finally {
-                try { if (null != inputStream) { inputStream.close(); } } catch (final Exception ignored) {}
-                try { if (null != outputStream) { outputStream.close(); } } catch (final Exception ignored) {}
+                return;
+            }
+            pendingExportFile = request;
+        }
+
+        new Thread(() -> {
+            try {
+                request.lease = acquireExportFileLease(request);
+                request.suggestedName = request.lease.name;
+                activity.runOnUiThread(() -> {
+                    try {
+                        final Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                        intent.addCategory(Intent.CATEGORY_OPENABLE);
+                        final String mimeType = Mobile.getMimeTypeByExt(request.suggestedName);
+                        intent.setType(StringUtils.isEmpty(mimeType) ? "application/octet-stream" : mimeType);
+                        intent.putExtra(Intent.EXTRA_TITLE, request.suggestedName);
+                        activity.launchSaveExportFile(intent);
+                    } catch (final ActivityNotFoundException e) {
+                        clearPendingExportFile(request);
+                        saveExportFileToDownloads(request);
+                    } catch (final Exception e) {
+                        clearPendingExportFile(request);
+                        releaseExportFileLease(request);
+                        Utils.logError("JSAndroid", "open export file picker failed", e);
+                        notifyExportFileResult(request.requestID, "error", "");
+                        Mobile.showMsg(Mobile.language(290), 5000);
+                    }
+                });
+            } catch (final Exception e) {
+                clearPendingExportFile(request);
+                releaseExportFileLease(request);
+                Utils.logError("JSAndroid", "prepare export file failed", e);
+                notifyExportFileResult(request.requestID, "error", "");
+                Mobile.showMsg(Mobile.language(290), 5000);
             }
         }).start();
+    }
+
+    void onSaveExportFileResult(final ActivityResult result) {
+        final PendingExportFile request;
+        synchronized (exportFileLock) {
+            request = pendingExportFile;
+            pendingExportFile = null;
+        }
+        if (null == request) {
+            return;
+        }
+        if (Activity.RESULT_OK != result.getResultCode() || null == result.getData()
+                || null == result.getData().getData()) {
+            releaseExportFileLease(request);
+            notifyExportFileResult(request.requestID, "canceled", "");
+            return;
+        }
+
+        saveExportFileToURI(request, result.getData().getData());
+    }
+
+    private void clearPendingExportFile(final PendingExportFile request) {
+        synchronized (exportFileLock) {
+            if (pendingExportFile == request) {
+                pendingExportFile = null;
+            }
+        }
+    }
+
+    private ExportFileLease acquireExportFileLease(final PendingExportFile request) throws Exception {
+        final String leaseJSON = Mobile.acquireExportFile(request.url);
+        if (StringUtils.isEmpty(leaseJSON)) {
+            throw new IllegalStateException("Export file lease is unavailable");
+        }
+        final JSONObject lease = new JSONObject(leaseJSON);
+        final String leaseID = lease.optString("leaseID");
+        final String srcPath = lease.optString("path");
+        String exportFileName = lease.optString("name", request.suggestedName);
+        if (StringUtils.isEmpty(exportFileName)) {
+            exportFileName = request.suggestedName;
+        }
+        final long expectedSize = lease.optLong("size", -1);
+        if (StringUtils.isEmpty(srcPath) || StringUtils.isEmpty(leaseID) || expectedSize < 0) {
+            if (!StringUtils.isEmpty(leaseID)) {
+                Mobile.releaseExportFile(leaseID);
+            }
+            throw new IllegalStateException("Export file lease is invalid");
+        }
+        return new ExportFileLease(leaseID, srcPath, exportFileName, expectedSize);
+    }
+
+    private void releaseExportFileLease(final PendingExportFile request) {
+        final ExportFileLease lease = request.lease;
+        request.lease = null;
+        if (null != lease) {
+            try {
+                Mobile.releaseExportFile(lease.id);
+            } catch (final Exception e) {
+                Utils.logError("JSAndroid", "release export file failed", e);
+            }
+        }
+    }
+
+    private long copyExportFile(final ExportFileLease lease, final java.io.OutputStream outputStream) throws Exception {
+        long writtenSize = 0;
+        try (java.io.FileInputStream inputStream = new java.io.FileInputStream(lease.path);
+             java.io.OutputStream destination = outputStream) {
+            final byte[] buffer = new byte[65536];
+            int bytesRead;
+            while ((bytesRead = inputStream.read(buffer)) != -1) {
+                destination.write(buffer, 0, bytesRead);
+                writtenSize += bytesRead;
+            }
+            destination.flush();
+        }
+        if (writtenSize != lease.size) {
+            throw new IllegalStateException("Export file size does not match its lease");
+        }
+        return writtenSize;
+    }
+
+    private void saveExportFileToURI(final PendingExportFile request, final Uri destinationURI) {
+        new Thread(() -> {
+            boolean succeeded = false;
+            String savedName = request.suggestedName;
+            try {
+                final ExportFileLease lease = request.lease;
+                if (null == lease) {
+                    throw new IllegalStateException("Export file lease is unavailable");
+                }
+                final java.io.OutputStream outputStream = activity.getContentResolver().openOutputStream(destinationURI, "w");
+                if (null == outputStream) {
+                    throw new IllegalStateException("Cannot open export destination");
+                }
+                copyExportFile(lease, outputStream);
+                savedName = queryExportFileName(destinationURI, lease.name);
+                succeeded = true;
+            } catch (final Exception e) {
+                Utils.logError("JSAndroid", "saveExportFile failed", e);
+                try {
+                    activity.getContentResolver().delete(destinationURI, null, null);
+                } catch (final Exception ignored) {
+                }
+            } finally {
+                releaseExportFileLease(request);
+            }
+            if (succeeded) {
+                notifyExportFileResult(request.requestID, "success", savedName);
+            } else {
+                notifyExportFileResult(request.requestID, "error", "");
+                Mobile.showMsg(Mobile.language(290), 5000);
+            }
+        }).start();
+    }
+
+    private void saveExportFileToDownloads(final PendingExportFile request) {
+        new Thread(() -> {
+            Uri destinationURI = null;
+            File destinationFile = null;
+            boolean succeeded = false;
+            String savedName = request.suggestedName;
+            try {
+                final ExportFileLease lease = request.lease;
+                if (null == lease) {
+                    throw new IllegalStateException("Export file lease is unavailable");
+                }
+                savedName = lease.name;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    final ContentValues values = new ContentValues();
+                    values.put(MediaStore.Downloads.DISPLAY_NAME, lease.name);
+                    values.put(MediaStore.Downloads.MIME_TYPE, Mobile.getMimeTypeByExt(lease.name));
+                    values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
+                    values.put(MediaStore.Downloads.IS_PENDING, 1);
+                    destinationURI = activity.getContentResolver().insert(
+                            MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                    if (null == destinationURI) {
+                        throw new IllegalStateException("Cannot create export destination");
+                    }
+                    final java.io.OutputStream outputStream = activity.getContentResolver().openOutputStream(destinationURI, "w");
+                    if (null == outputStream) {
+                        throw new IllegalStateException("Cannot open export destination");
+                    }
+                    copyExportFile(lease, outputStream);
+                    final ContentValues published = new ContentValues();
+                    published.put(MediaStore.Downloads.IS_PENDING, 0);
+                    if (activity.getContentResolver().update(destinationURI, published, null, null) < 1) {
+                        throw new IllegalStateException("Cannot publish export destination");
+                    }
+                    savedName = queryExportFileName(destinationURI, lease.name);
+                } else {
+                    final File downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                    if (!downloadsDir.exists() && !downloadsDir.mkdirs()) {
+                        throw new IllegalStateException("Cannot create downloads directory");
+                    }
+                    destinationFile = createUniqueDownloadFile(downloadsDir, lease.name);
+                    savedName = destinationFile.getName();
+                    copyExportFile(lease, new java.io.FileOutputStream(destinationFile));
+                }
+                succeeded = true;
+            } catch (final Exception e) {
+                Utils.logError("JSAndroid", "saveExportFile fallback failed", e);
+                try {
+                    if (null != destinationURI) {
+                        activity.getContentResolver().delete(destinationURI, null, null);
+                    } else if (null != destinationFile) {
+                        destinationFile.delete();
+                    }
+                } catch (final Exception ignored) {
+                }
+            } finally {
+                releaseExportFileLease(request);
+            }
+            if (succeeded) {
+                notifyExportFileResult(request.requestID, "success", savedName);
+            } else {
+                notifyExportFileResult(request.requestID, "error", "");
+                Mobile.showMsg(Mobile.language(290), 5000);
+            }
+        }).start();
+    }
+
+    private File createUniqueDownloadFile(final File downloadsDir, final String requestedName) throws Exception {
+        String safeName = new File(requestedName).getName();
+        if (StringUtils.isEmpty(safeName)) {
+            safeName = "export";
+        }
+        final int extensionIndex = safeName.lastIndexOf('.');
+        final String baseName = extensionIndex > 0 ? safeName.substring(0, extensionIndex) : safeName;
+        final String extension = extensionIndex > 0 ? safeName.substring(extensionIndex) : "";
+        for (int index = 0; index < 10000; index++) {
+            final String candidateName = 0 == index ? safeName : baseName + " (" + index + ")" + extension;
+            final File candidate = new File(downloadsDir, candidateName);
+            if (candidate.createNewFile()) {
+                return candidate;
+            }
+        }
+        throw new IllegalStateException("Cannot create a unique export destination");
+    }
+
+    private String queryExportFileName(final Uri uri, final String fallback) {
+        try (Cursor cursor = activity.getContentResolver().query(
+                uri, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            if (null != cursor && cursor.moveToFirst()) {
+                final int index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                if (index >= 0) {
+                    final String name = cursor.getString(index);
+                    if (!StringUtils.isEmpty(name)) {
+                        return name;
+                    }
+                }
+            }
+        } catch (final Exception e) {
+            Utils.logError("JSAndroid", "query export file name failed", e);
+        }
+        return fallback;
+    }
+
+    private void notifyExportFileResult(final String requestID, final String status, final String name) {
+        if (StringUtils.isEmpty(requestID)) {
+            return;
+        }
+        try {
+            final JSONObject result = new JSONObject();
+            result.put("status", status);
+            if (!StringUtils.isEmpty(name)) {
+                result.put("name", name);
+            }
+            final String script = "window.handleSaveExportFileResult && window.handleSaveExportFileResult("
+                    + JSONObject.quote(requestID) + "," + JSONObject.quote(result.toString()) + ");";
+            activity.runOnUiThread(() -> activity.webView.evaluateJavascript(script, null));
+        } catch (final Exception e) {
+            Utils.logError("JSAndroid", "notify export file result failed", e);
+        }
     }
 
     @JavascriptInterface
@@ -445,6 +771,13 @@ public final class JSAndroid {
     }
 
     @JavascriptInterface
+    public String getOIDCCallback() {
+        final String callback = activity.getIntent().getStringExtra("oidcCallback");
+        activity.getIntent().removeExtra("oidcCallback");
+        return StringUtils.isEmpty(callback) ? "" : callback;
+    }
+
+    @JavascriptInterface
     public void changeStatusBarColor(final String color, final int appearanceMode) {
         if (Utils.isTablet(activity)) {
             return;
@@ -461,25 +794,11 @@ public final class JSAndroid {
     private int parseColor(String str) {
         try {
             str = str.trim();
-            if (str.toLowerCase().contains("rgb")) {
-                String splitStr = str.substring(str.indexOf('(') + 1, str.indexOf(')'));
-                String[] splitString = splitStr.split(",");
-
-                final int[] colorValues = new int[splitString.length];
-                for (int i = 0; i < splitString.length; i++) {
-                    colorValues[i] = Integer.parseInt(splitString[i].trim());
-                }
-                return Color.rgb(colorValues[0], colorValues[1], colorValues[2]);
+            if (9 != str.length() || '#' != str.charAt(0)) {
+                throw new IllegalArgumentException("invalid color format");
             }
-            if (7 > str.length()) {
-                // https://stackoverflow.com/questions/10230331/how-to-convert-3-digit-html-hex-colors-to-6-digit-flex-hex-colors
-                str = str.replaceAll("#([0-9a-fA-F])([0-9a-fA-F])([0-9a-fA-F])", "#$1$1$2$2$3$3");
-            }
-            if (9 == str.length() && '#' == str.charAt(0)) {
-                // The status bar color on Android is incorrect https://github.com/siyuan-note/siyuan/issues/10278
-                // 将 #RRGGBBAA 转换为 #AARRGGBB
-                str = "#" + str.substring(7, 9) + str.substring(1, 7);
-            }
+            // 将 #RRGGBBAA 转换为 #AARRGGBB
+            str = "#" + str.substring(7, 9) + str.substring(1, 7);
             return Color.parseColor(str);
         } catch (final Exception e) {
             Utils.logError("js", "parse color [" + str + "] failed", e);
