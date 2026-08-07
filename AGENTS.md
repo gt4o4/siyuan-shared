@@ -38,7 +38,6 @@ third_party/
 patches/             Unified diff patches applied to upstream during CI
   siyuan/              4 patches: disable-update, default-config, mock-vip-user, hide-account-entry
   siyuan-android/      1 patch: debug-build (custom signing config)
-  siyuan-ios/          1 patch: build-failed
 scripts/             Build scripts (linux-build.sh, darwin-build.sh, win-build.bat)
 .github/workflows/   CI pipelines (desktop, android, iOS, docker, cron)
 ```
@@ -128,6 +127,7 @@ After merging a new upstream version, always verify all patches still apply clea
 - **disable-update.patch**: Stubs out `checkUpdate()`, forces `DownloadInstallPkg=false`, disables startup version check
 - **default-config.patch**: Sets defaults (S3 sync provider, zh_CN language, minimize-to-tray on close, hide VIP badge)
 - **mock-vip-user.patch**: Replaces `getCloudUser()` with a mock returning a VIP user (subscription never expires)
+- **hide-account-entry.patch**: Removes account/login UI entry points (top bar, sync settings)
 - **debug-build.patch**: Replaces Android signing config with env-based keystore (`KEYSTORE_PASSWORD`)
 
 ## Upstream Sync Workflow
