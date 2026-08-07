@@ -16,3 +16,10 @@ overrides:
   # 故强制统一到 4.0.3 消除多版本碎片化,修复 electron-builder 打包时的 "Cannot read properties of
   # undefined (reading 'ReadWrite')" 错误。
   '@electron/get': 4.0.3
+  # 安全修复:强制满足 Dependabot 通告的最低已修复版本(仅限同主版本内提升)。
+  'js-yaml@4': ^4.3.1
+  'brace-expansion@2': ^2.1.2
+  'fast-uri@3': ^3.1.5
+  'undici@6': ^6.28.0
+  'ejs@3': ^3.1.10
+  'tar@7': ^7.5.18

@@ -68,7 +68,7 @@
     "electron": "42.7.1",
     "electron-builder": "26.15.7",
     "encoding": "^0.1.13",
-    "esbuild-loader": "^3.0.1",
+    "esbuild-loader": "^4.5.0",
     "eslint": "^9.15.0",
     "file-loader": "^6.2.0",
     "filesize": "^11.0.13",
