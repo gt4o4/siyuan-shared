@@ -1,6 +1,6 @@
 module github.com/siyuan-note/siyuan/kernel
 
-go 1.27.3
+go 1.27.4
 
 require (
 	code.sajari.com/docconv v1.3.8

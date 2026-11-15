@@ -4,140 +4,109 @@ This file provides guidance to AI coding agents when working with code in this r
 
 ## Project Overview
 
-**siyuan-shared** is a community fork of [SiYuan Note](https://github.com/siyuan-note/siyuan) with an in-process kernel (Go c-shared library via N-API), S3/WebDAV sync, and self-hosted Docker deployment. The repo contains the full SiYuan source merged at root level, an Android subtree under `android/`, an iOS subtree under `ios/`, and a set of patches applied during CI builds.
+**siyuan-shared** is our consolidated fork of [SiYuan Note](https://github.com/siyuan-note/siyuan) combining upstream desktop/mobile releases with [appdev/siyuan-unlock](https://github.com/appdev/siyuan-unlock), embedded in-process Tailscale (`tsnet`) and Cloudflare (`cflib`) tunnels, unlocked local/S3/WebDAV sync, real desktop cloud accounts, and self-hosted Docker deployment:
+
+- **In-process desktop kernel (`cshared` → `libkernel.a` → N-API `kernel.node`):** Desktop runs the Go kernel inside the Electron main process via `app/native/kernel_napi.c` (`util.InProcess = true`, no standalone `SiYuan-Kernel` subprocess); the cobra CLI (`kernel/cli/cmd`) runs through `ELECTRON_RUN_AS_NODE=1` on `app/electron/cli.js` (`siyuan-cli`).
+- **Desktop real cloud accounts vs Docker mock VIP:** `IsPaidUser()` returns `true` and `needSubscribe()` returns `false` everywhere, while `getCloudUser()` (`kernel/api/setting.go`) returns a mock VIP account **only** when `util.ContainerDocker == util.Container`, preserving real SiYuan cloud account login on desktop.
+- **NixOS fleet checkout:** Lives at `/home/wenri/.config/nix-configs/submodules/siyuan-shared/` (gitignored in `nix-configs` so `inputs.self.submodules = true` does not copy it into every flake evaluation), packaged by `common/overlays/siyuan.nix` and tracked in `docs/bumping/siyuan.md`.
 
 ## Repository Remotes & Merge Strategy
 
 | Remote | URL | Purpose |
 |--------|-----|---------|
-| `origin` | github.com/gt4o4/siyuan-shared | Fork |
-| `upstream` | github.com/appdev/siyuan-unlock | Upstream unlock project |
-| `siyuan` | github.com/siyuan-note/siyuan | Official SiYuan |
-| `siyuan-android` | github.com/siyuan-note/siyuan-android | Official Android app |
-| `siyuan-ios` | github.com/siyuan-note/siyuan-ios | Official iOS app |
+| `origin` | github.com/gt4o4/siyuan-shared | Fork (`master`) |
+| `upstream` | github.com/appdev/siyuan-unlock | Upstream unlock project (`master`) |
+| `siyuan` | github.com/siyuan-note/siyuan | Official SiYuan (`master` / `vX.Y.Z`) |
+| `siyuan-android` | github.com/siyuan-note/siyuan-android | Official Android app (`main`) |
+| `siyuan-ios` | github.com/siyuan-note/siyuan-ios | Official iOS app (`main`) |
 
-- **siyuan** is merged as a full-repo merge (root level: `kernel/`, `app/`, `scripts/`)
-- **siyuan-android** is merged as a proper git subtree into `android/` using `git subtree pull --prefix=android siyuan-android main` (no `--squash`)
-- **siyuan-ios** is merged as a proper git subtree into `ios/` using `git subtree pull --prefix=ios siyuan-ios main` (no `--squash`)
-- **upstream** (appdev) is merged with `git merge upstream/master`, keeping our custom CI workflow
-- **Tag collision warning**: upstream (appdev) and siyuan share tag names (e.g. `v3.6.0`) pointing to different commits. Delete local tags before fetching siyuan tags.
-- **Release tags**: Use `v<upstream>-gbc<N>` format (e.g. `v3.6.4-gbc1`) for fork releases
+- **`third_party/cloudflared` (`gt4o4/cloudflared` `cflib`):** Sync `gt4o4/cloudflared` (`main` → `cflib`) **first**, then advance `third_party/cloudflared` to `origin/cflib` (`git -C third_party/cloudflared remote set-url origin https://github.com/gt4o4/cloudflared.git` if needed).
+- **`upstream` (`appdev/siyuan-unlock`):** Merge with `git merge upstream/master`, keeping our desktop cloud-account behavior (`getCloudUser` Docker-only mock VIP) and CI workflows.
+- **`siyuan-ios` & `siyuan-android`:** Subtree merges into `ios/` and `android/` (`git subtree merge --prefix=ios siyuan-ios/main`, `git subtree merge --prefix=android siyuan-android/main`, no `--squash`).
+- **`siyuan` (`siyuan-note/siyuan`):** Full-repo merge at root (`kernel/`, `app/`, `scripts/`).
+- **Tag collision & push note:** `upstream` and `siyuan` share tag names (`v3.x.y`) pointing to different commits — fetch branch refs or clean colliding tags first. Push `master` with `git push --recurse-submodules=no origin master` (`third_party/cloudflared` sits on `cflib`, not `master`).
+- **Release tags / Nix version:** `v<upstream>-gbc<N>` (e.g. `v3.8.10-gbc1`).
 
 ## Architecture
 
 ```
 kernel/              Go backend (HTTP server, API, data model, search, sync)
-  server/tunnel/       Cloudflared + Tailscale tunnel support (in-process)
-  api/tunnel.go        Tunnel management API endpoints
+  cshared/             C-archive entrypoints (`startKernel`, `runCLI`) linked into N-API `kernel.node`
+  apicontract/         Typed API contracts (`contracts.go` AST + `tunnel.go`; generates schema & TS types)
+  server/tunnel/       Cloudflared (`cflib`) + Tailscale (`tsnet`) in-process tunnel support
+  api/tunnel.go        Tunnel management API endpoints (`setTunnel`, `getTunnel`, `getTunnelStatus`)
   conf/tunnel.go       Tunnel configuration structs
 app/                 TypeScript/Electron frontend (editor, UI, themes, i18n)
+  native/              N-API C shim (`kernel_napi.c` → `native/build/Release/kernel.node`)
+  electron/            Electron main process (`startup/startupSwitches.ts`, `kernel/kernelBoot.ts`, `cli.js`)
 android/             Android app (git subtree from siyuan-android)
 ios/                 iOS app (git subtree from siyuan-ios)
 third_party/
-  cloudflared/         Submodule: gt4o4/cloudflared (patched for in-process embedding)
-patches/             Unified diff patches applied to upstream during CI
-  siyuan/              4 patches: disable-update, default-config, mock-vip-user, hide-account-entry
-  siyuan-android/      1 patch: debug-build (custom signing config)
-scripts/             Build scripts (linux-build.sh, darwin-build.sh, win-build.bat)
+  cloudflared/         Submodule: gt4o4/cloudflared (`cflib` branch for in-process embedding)
+patches/             Reference unified diffs for CI/upstream auditing
+scripts/             Build & contract scripts (`api-contracts.mjs`, `linux-build.sh`, `darwin-build.sh`)
 .github/workflows/   CI pipelines (desktop, android, iOS, docker, cron)
 ```
 
-### Cloudflared / Tailscale Tunnel Embedding
+### Cloudflared / Tailscale Tunnel Embedding & `go.mod` Replaces
 
-The fork embeds cloudflared and tailscale tsnet in-process (no external binaries). Key `replace` directives in `kernel/go.mod`:
+The fork embeds cloudflared (`cflib`) and tailscale (`tsnet`) in-process (no external binaries). Key `replace` directives in `kernel/go.mod`:
 
 | Replace | Target | Reason |
 |---------|--------|--------|
-| `cloudflare/cloudflared` | `../third_party/cloudflared` | Patched fork with `cmd/cloudflared` API for in-process use |
+| `cloudflare/cloudflared` | `../third_party/cloudflared` | Patched fork (`cflib` branch, currently `2026.11.0` / `a9db97aa5`) with `cmd/cloudflared` API |
 | `quic-go/quic-go` | `chungthuang/quic-go v0.45.1-0.20260529212404-a9fddf436fc4` | Cloudflared fork based on `quic-go v0.59.1` |
-| `imroc/req/v3` | `v3.58.0` | Last version targeting `quic-go v0.59.x` (`v3.59+` requires `quic-go v0.60+`) |
-| `urfave/cli/v2` | `ipostelnik/cli/v2` | Cloudflared needs `ApplyInputSource` not in upstream urfave/cli |
+| `imroc/req/v3` | `v3.58.0` | Last release targeting `quic-go v0.59.x` (`v3.59+` requires `quic-go v0.60+`; `kernel/api/network.go` implements `forwardProxyLimitedBody` locally) |
+| `urfave/cli/v2` | `ipostelnik/cli/v2` | Cloudflared needs `ApplyInputSource` not in upstream `urfave/cli` |
 | `prometheus/golang_client` | `v1.12.1` | Cloudflared pin to avoid CVE-2022-21698 |
 
-## Build Commands
+## Build & Verification Commands
 
-### Desktop (full build)
+### Kernel (`c-archive` + contract/proxy tests)
+```bash
+cd kernel
+go build --tags "fts5 sqlcipher" ./...
+go build -buildmode=c-archive --tags "fts5 sqlcipher" -ldflags "-s -w -X github.com/siyuan-note/siyuan/kernel/util.Mode=prod" -o /tmp/libkernel.a ./cshared/
+go test --tags "fts5 sqlcipher" ./apicontract/...
+go test --tags "fts5 sqlcipher" ./api -run "TestAPIContractRouterCoverage|TestSettingContractFieldsMatchConf|TestForwardProxyResponseSizeLimit"
+```
+
+Both `fts5` and `sqlcipher` build tags are required on desktop.
+
+### Frontend & API contracts
+```bash
+cd app
+pnpm install --frozen-lockfile
+pnpm run api:generate   # updates kernel/apicontract/schema.json & app/src/types/api/index.d.ts
+pnpm run api:check
+pnpm run typecheck
+pnpm run build:electron
+pnpm run test:focused electron/architecture.test.ts electron/kernel/kernelBoot.test.ts
+```
+
+### Full Desktop / Mobile / Docker Builds
 ```bash
 ./scripts/linux-build.sh [--target=amd64|arm64|all]
 ./scripts/darwin-build.sh [--target=amd64|arm64|all]
-```
-
-### Frontend only
-```bash
-cd app && pnpm install --no-frozen-lockfile && pnpm run build
-```
-
-### Kernel only
-```bash
-cd kernel && go build --tags fts5 -ldflags "-s -w" -o ../app/kernel-linux/SiYuan-Kernel .
-```
-
-The `fts5` build tag is **required** for SQLite full-text search.
-
-### Android kernel (AAR)
-```bash
 gomobile bind --tags fts5 -androidapi 21 -target='android/arm64' ./kernel/mobile
-```
-
-### Packaging
-```bash
-cd app
-pnpm run dist-linux        # Linux AppImage
-pnpm run dist-darwin       # macOS Intel DMG
-pnpm run dist-darwin-arm64 # macOS ARM64 DMG
-pnpm run dist              # Windows NSIS
-```
-
-### Lint
-```bash
-cd app && pnpm run lint
-```
-
-### Docker
-```bash
 docker build -t siyuan-shared .
 ```
 
-## Patch System
+## Fork Invariants Across Upstream Merges
 
-Patches use unified diff format and are applied with `git apply` during CI. The siyuan patches use custom path prefixes (`forkSrcPrefix/`, `forkDstPrefix/`) — apply with `-p1`.
+When merging `siyuan/master` (`vX.Y.Z`) and `upstream/master` (`appdev/siyuan-unlock`):
 
-**Applying patches locally:**
-```bash
-# Siyuan patches (already applied in merged repo)
-git apply -p1 patches/siyuan/disable-update.patch
-
-# Android patch (needs --directory for subtree)
-git apply -p1 --directory=android patches/siyuan-android/debug-build.patch
-```
-
-**Verifying patches against upstream:**
-```bash
-# Check if a patch can apply cleanly to a fresh upstream clone
-git apply --check patches/siyuan/disable-update.patch
-
-# Check if a patch is already applied (reverse check)
-git apply --check --reverse -p1 patches/siyuan/disable-update.patch
-```
-
-After merging a new upstream version, always verify all patches still apply cleanly against the upstream tag.
-
-## What Each Patch Does
-
-- **disable-update.patch**: Stubs out `checkUpdate()`, forces `DownloadInstallPkg=false`, disables startup version check
-- **default-config.patch**: Sets defaults (S3 sync provider, zh_CN language, minimize-to-tray on close, hide VIP badge)
-- **mock-vip-user.patch**: Replaces `getCloudUser()` with a mock returning a VIP user (subscription never expires)
-- **hide-account-entry.patch**: Removes account/login UI entry points (top bar, sync settings)
-- **debug-build.patch**: Replaces Android signing config with env-based keystore (`KEYSTORE_PASSWORD`)
+1. **Desktop real cloud accounts vs Docker mock VIP:** `model.IsPaidUser()` returns `true` and `needSubscribe()` returns `false`, while `getCloudUser` (`kernel/api/setting.go`) returns the mock VIP user **only** when `util.ContainerDocker == util.Container`; desktop UI retains account login and `refreshUser()`.
+2. **Typed API contracts (`kernel/apicontract/`):** `routes.go` parses `kernel/apicontract/contracts.go` via `go/parser` AST, so `var SetTunnel`, `var GetTunnel`, and `var GetTunnelStatus` must stay in `contracts.go` (payload structs in `tunnel.go`, `Tunnel *SettingTunnel` on `SystemAppConf` in `system_conf.go`, and the 3 routes in `kernel/api/router.go`). Run `pnpm run api:generate` and `pnpm run api:check` after any API merge.
+3. **Local HTTPS origin:** Keep `app/electron/kernel/kernelEndpoint.ts` on `https://127.0.0.1` (`bootstrap.ts` trusts the self-signed local kernel cert only on `127.0.0.1`/`localhost`).
+4. **In-process exit & updater guards:** `model.ExitKernel()` returns early instead of `os.Exit` when `util.InProcess || util.ContainerCShared == util.Container || util.IsMobileContainer()`; `checkUpdate()` is stubbed and `skipNewVerInstallPkg()` forces `DownloadInstallPkg = false`.
 
 ## Upstream Sync Workflow
 
-1. `git fetch siyuan && git merge siyuan/master` — full-repo merge, resolve go.mod conflicts keeping our deps + upstream's newer versions
-2. `git fetch upstream && git merge upstream/master` — merge appdev/siyuan-unlock, keep our CI workflow
-3. `git subtree pull --prefix=android siyuan-android main` — subtree merge into `android/` (no `--squash`)
-4. Verify all patches apply against the new version
-5. Update patches if needed (regenerate diffs against the new upstream tag)
-6. Tag as `v<upstream>-gbc<N>` and trigger build: `gh workflow run desktop-release.yml --ref <tag> -f version=<tag> -f packageManager=pnpm@latest`
+1. Advance `third_party/cloudflared` to `gt4o4/cloudflared` `cflib` (`git -C third_party/cloudflared fetch origin cflib && git -C third_party/cloudflared checkout --detach origin/cflib`).
+2. Merge `upstream/master` (`appdev/siyuan-unlock`), `git subtree merge --prefix=ios siyuan-ios/main`, and `git subtree merge --prefix=android siyuan-android/main`.
+3. Merge `siyuan/master` (`vX.Y.Z`), preserving the fork invariants above, aligning `kernel/go.mod` (`GOTOOLCHAIN=local`), regenerating `pnpm run api:generate`, and running the kernel + Electron verification commands.
+4. Clean temporary `app/node_modules` and `app/electron-dist`, commit, push via `git push --recurse-submodules=no origin master`, and bump `common/overlays/siyuan.nix` in `nix-configs` (`docs/bumping/siyuan.md`).
 
 ## Version Convention
 
