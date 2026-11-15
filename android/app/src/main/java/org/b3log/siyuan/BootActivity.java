@@ -1,5 +1,5 @@
 /*
- * SiYuan - 源于思考，饮水思源
+ * SiYuan - From thought to insight, with agents
  * Copyright (c) 2020-present, b3log.org
  *
  * This program is free software: you can redistribute it and/or modify
@@ -35,8 +35,6 @@ import android.widget.TextView;
 
 import androidx.appcompat.app.AppCompatActivity;
 
-import com.blankj.utilcode.util.BarUtils;
-
 import org.apache.commons.io.FileUtils;
 
 import java.io.File;
@@ -60,7 +58,8 @@ public class BootActivity extends AppCompatActivity {
                 + "], saved state [" + (null != savedInstanceState) + "]");
         setContentView(R.layout.activity_boot);
 
-        BarUtils.setNavBarVisibility(this, false);
+        SystemBars.configure(this, false);
+        SystemBars.fitContent(this);
 
         final String channel = Utils.getChannel(this.getPackageManager());
         final Set<String> showAgreementChannels = new HashSet<>();
@@ -97,13 +96,34 @@ public class BootActivity extends AppCompatActivity {
         final String dataDir = getFilesDir().getAbsolutePath();
         final String appDir = dataDir + "/app";
         final File appDirFile = new File(appDir);
-        return !appDirFile.exists();
+        return !appDirFile.exists() && !getSharedPreferences("startup", MODE_PRIVATE).getBoolean("agreementAccepted", false);
     }
 
     private void startMainActivity() {
+        final Intent request = getIntent();
+        java.util.concurrent.CompletableFuture.supplyAsync(() -> MarkdownActivity.isMarkdownIntent(this, request))
+                .thenAccept(markdown -> runOnUiThread(() -> { if (!isFinishing() && !isDestroyed()) startRequestedActivity(request, markdown); }));
+    }
+
+    private void startRequestedActivity(final Intent request, final boolean markdownRequest) {
+        if (markdownRequest) {
+            final Intent markdown = new Intent(request).setClass(this, MarkdownActivity.class);
+            markdown.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(markdown);
+            finish();
+            return;
+        }
+        // 通用 MIME 的真实文件名只能在取得 URI 后读取；非 Markdown 选择不启动工作空间。
+        if (request.getData() != null && org.b3log.siyuan.markdown.MarkdownRouting.genericDocument(
+                request.getAction(), request.getData().getScheme(), request.getType())) {
+            new AlertDialog.Builder(this).setTitle(R.string.markdown_editor).setMessage(R.string.markdown_unsupported)
+                    .setPositiveButton(R.string.markdown_close, (dialog, which) -> finish())
+                    .setOnCancelListener(dialog -> finish()).show();
+            return;
+        }
         Utils.logInfo("boot", "Start main activity, process [" + android.os.Process.myPid()
                 + "], boot instance [" + System.identityHashCode(this) + "], task [" + getTaskId() + "]");
-        final Intent intent = getIntent();
+        final Intent intent = request;
         String blockURL = "";
         try {
             final Uri blockURLUri = intent.getData();
@@ -131,6 +151,7 @@ public class BootActivity extends AppCompatActivity {
         public void handleMessage(final Message msg) {
             final String cmd = msg.getData().getString("cmd");
             if ("agreement-y".equals(cmd)) {
+                getSharedPreferences("startup", MODE_PRIVATE).edit().putBoolean("agreementAccepted", true).apply();
                 agreementDialog.dismiss();
                 final ProgressBar progressBar = findViewById(R.id.progressBar);
                 runOnUiThread(() -> progressBar.setVisibility(View.VISIBLE));

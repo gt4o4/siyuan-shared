@@ -1,20 +1,3 @@
-/*
- * SiYuan - 源于思考，饮水思源
- * Copyright (c) 2020-present, b3log.org
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
- */
 package org.b3log.siyuan;
 
 import android.Manifest;
@@ -34,6 +17,7 @@ import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
+import android.graphics.drawable.ColorDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
@@ -42,6 +26,7 @@ import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.provider.Settings;
 import android.util.Log;
+import android.view.View;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
 
@@ -53,10 +38,8 @@ import androidx.core.app.NotificationManagerCompat;
 import androidx.core.app.ShareCompat;
 import androidx.core.content.FileProvider;
 
-import com.blankj.utilcode.util.BarUtils;
 import com.blankj.utilcode.util.KeyboardUtils;
 import com.blankj.utilcode.util.StringUtils;
-import com.zackratos.ultimatebarx.ultimatebarx.java.UltimateBarX;
 
 import org.json.JSONObject;
 
@@ -75,11 +58,12 @@ import mobile.Mobile;
  *
  * @author <a href="https://88250.b3log.org">Liang Ding</a>
  * @author <a href="https://github.com/Soltus">绛亽</a>
- * @version 1.6.0.8, Aug 3, 2026
+ * @version 1.6.0.9, Aug 28, 2026
  * @since 1.0.0
  */
 public final class JSAndroid {
     private MainActivity activity;
+    private final WordSelectionController wordSelection;
     private final Object exportFileLock = new Object();
     private PendingExportFile pendingExportFile;
 
@@ -112,6 +96,7 @@ public final class JSAndroid {
 
     public JSAndroid(final MainActivity activity) {
         this.activity = activity;
+        this.wordSelection = WordSelectionController.install(activity.webView);
     }
 
     @JavascriptInterface
@@ -139,9 +124,7 @@ public final class JSAndroid {
     public int sendNotification(final String channel, final String title, final String body, final int delayInSeconds) {
         if (ActivityCompat.checkSelfPermission(this.activity, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             Utils.showToast(this.activity, "请允许通知权限以接收通知 / Please allow notification permission to receive notifications");
-            final Intent intent = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS);
-            intent.setData(Uri.parse("package:" + this.activity.getPackageName()));
-            this.activity.startActivity(intent);
+            openNotificationSettings(this.activity);
             return -1;
         }
 
@@ -185,16 +168,47 @@ public final class JSAndroid {
         return ret;
     }
 
+    static void openNotificationSettings(final Activity activity) {
+        activity.runOnUiThread(() -> {
+            final Intent intent = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS);
+            intent.putExtra(Settings.EXTRA_APP_PACKAGE, activity.getPackageName());
+            try {
+                activity.startActivity(intent);
+            } catch (final ActivityNotFoundException | SecurityException e) {
+                // 部分系统未提供通知设置入口，使用应用详情页供用户管理权限。
+                final Intent fallback = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                fallback.setData(Uri.parse("package:" + activity.getPackageName()));
+                try {
+                    activity.startActivity(fallback);
+                } catch (final ActivityNotFoundException | SecurityException fallbackError) {
+                    Utils.logError("notification", "open notification settings failed", fallbackError);
+                }
+            }
+        });
+    }
+
     @JavascriptInterface
     public void exit() {
         this.activity.exit();
     }
 
     @JavascriptInterface
+    public void openMarkdownEditor() {
+        this.activity.runOnUiThread(() -> {
+            Intent intent = new Intent(this.activity, MarkdownActivity.class);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            this.activity.startActivity(intent);
+        });
+    }
+
+    @JavascriptInterface
     public void hideKeyboard() {
+        if (wordSelection != null) {
+            wordSelection.cancel();
+        }
         activity.runOnUiThread(() -> {
             final WebView webView = activity.findViewById(R.id.webView);
-            Utils.hideKeyboardAndToolbar(webView);
+            Utils.hideKeyboardAndToolbar(activity, webView, false);
             KeyboardUtils.hideSoftInput(activity);
         });
     }
@@ -203,17 +217,34 @@ public final class JSAndroid {
     public void showKeyboard() {
         activity.runOnUiThread(() -> {
             final WebView webView = activity.findViewById(R.id.webView);
-            Utils.showKeyboardAndToolbar(webView);
-            KeyboardUtils.showSoftInput(activity);
+            Utils.showSoftKeyboard(activity, webView);
         });
     }
 
     @JavascriptInterface
     public void setWebViewFocusable(final boolean focusable) {
+        if (wordSelection != null) {
+            wordSelection.cancel();
+        }
         activity.runOnUiThread(() -> {
             final WebView webView = activity.findViewById(R.id.webView);
             Utils.setWebViewFocusable(webView, focusable);
         });
+    }
+
+    @JavascriptInterface
+    public String getWordSelection(final String text, final int start, final int end) {
+        try {
+            return WordSelection.expand(text, start, end);
+        } catch (final RuntimeException e) {
+            // 系统词典不可用时保留当前选区，不记录正文内容。
+            return "";
+        }
+    }
+
+    @JavascriptInterface
+    public boolean prepareWordSelection(final String word, final int startAdjust, final int endAdjust) {
+        return wordSelection != null && wordSelection.prepare(word, startAdjust, endAdjust);
     }
 
     @JavascriptInterface
@@ -227,7 +258,7 @@ public final class JSAndroid {
 
     @JavascriptInterface
     public void setWebViewDebuggingEnabled(final boolean debuggable) {
-        activity.setWebViewDebuggable(debuggable);
+        activity.runOnUiThread(() -> activity.setWebViewDebuggable(debuggable));
     }
 
     @JavascriptInterface
@@ -323,7 +354,7 @@ public final class JSAndroid {
                 inputStream = connection.getInputStream();
             }
 
-            final File clipboardDir = new File(activity.getExternalFilesDir(null), "clipboard");
+            final File clipboardDir = new File(activity.getCacheDir(), "clipboard");
             if (!clipboardDir.exists() && !clipboardDir.mkdirs()) {
                 throw new IllegalStateException("create clipboard directory failed");
             }
@@ -347,12 +378,42 @@ public final class JSAndroid {
             final ClipboardManager clipboard = (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);
             final ClipData clip = ClipData.newUri(activity.getContentResolver(), "Copied img from SiYuan", contentUri);
             clipboard.setPrimaryClip(clip);
+            cleanupLegacyImageClipboard();
         } catch (final Exception e) {
             Utils.logError("JSAndroid", "write image clipboard failed", e);
         } finally {
             if (null != connection) {
                 connection.disconnect();
             }
+        }
+    }
+
+    private void cleanupLegacyImageClipboard() {
+        final File externalFilesDir = activity.getExternalFilesDir(null);
+        if (null == externalFilesDir) {
+            return;
+        }
+
+        final File legacyClipboardDir = new File(externalFilesDir, "clipboard");
+        final File[] entries = legacyClipboardDir.listFiles();
+        if (null == entries) {
+            return;
+        }
+        if (0 == entries.length) {
+            if (!legacyClipboardDir.delete()) {
+                Log.w("JSAndroid", "delete legacy clipboard directory failed");
+            }
+            return;
+        }
+        if (1 != entries.length || !entries[0].isFile() || !"image.png".equals(entries[0].getName())) {
+            return;
+        }
+        if (!entries[0].delete()) {
+            Log.w("JSAndroid", "delete legacy clipboard image failed");
+            return;
+        }
+        if (!legacyClipboardDir.delete()) {
+            Log.w("JSAndroid", "delete legacy clipboard directory failed");
         }
     }
 
@@ -779,15 +840,15 @@ public final class JSAndroid {
 
     @JavascriptInterface
     public void changeStatusBarColor(final String color, final int appearanceMode) {
-        if (Utils.isTablet(activity)) {
-            return;
-        }
-
         activity.runOnUiThread(() -> {
             final int colorVal = parseColor(color);
-            UltimateBarX.statusBarOnly(activity).transparent().light(appearanceMode == 0).color(colorVal).apply();
-            BarUtils.setNavBarVisibility(activity, false);
-            activity.webView.getRootView().setBackgroundColor(colorVal);
+            SystemBars.setAppearance(activity, appearanceMode == 0);
+            // 窗口缩放和 WebView 重绘期间，各层背景均与页面主题保持一致。
+            activity.getWindow().setBackgroundDrawable(new ColorDrawable(colorVal));
+            activity.findViewById(android.R.id.content).setBackgroundColor(colorVal);
+            ((View) activity.webView.getParent()).setBackgroundColor(colorVal);
+            activity.webView.setBackgroundColor(colorVal);
+            if (activity.keyboardWorkaround != null) activity.keyboardWorkaround.enableNavigationOverlay(activity.webView);
         });
     }
 

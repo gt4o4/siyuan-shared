@@ -1,6 +1,7 @@
 package org.b3log.siyuan;
 
 import android.annotation.SuppressLint;
+import android.annotation.TargetApi;
 import android.app.Activity;
 import android.content.Context;
 import android.graphics.Rect;
@@ -8,9 +9,20 @@ import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.View;
 import android.view.ViewConfiguration;
+import android.view.WindowInsets;
+import android.view.WindowInsetsAnimation;
+import android.webkit.WebView;
 import android.widget.FrameLayout;
 
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowInsetsCompat;
+
 import com.blankj.utilcode.util.BarUtils;
+
+import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * Android small window mode soft keyboard black occlusion <a href="https://github.com/siyuan-note/siyuan-android/pull/7">siyuan-note/siyuan-android#7</a>
@@ -23,8 +35,8 @@ import com.blankj.utilcode.util.BarUtils;
  */
 public class AndroidBug5497Workaround {
 
-    public static void assistActivity(Activity activity) {
-        new AndroidBug5497Workaround(activity);
+    public static AndroidBug5497Workaround assistActivity(Activity activity) {
+        return new AndroidBug5497Workaround(activity);
     }
 
     private int windowMode = 0;
@@ -35,6 +47,24 @@ public class AndroidBug5497Workaround {
     private final FrameLayout frameLayout;
     private final View view;
     private final FrameLayout.LayoutParams frameLayoutParams;
+    private final NavigationBarOverlay navigationOverlay = new NavigationBarOverlay();
+
+    void resetNavigationOverlay() {
+        navigationOverlay.reset(view);
+    }
+
+    void enableNavigationOverlay(WebView webView) {
+        navigationOverlay.enable(webView, view);
+    }
+
+    private void applyContentInsets(WindowInsetsCompat insets, boolean includeKeyboard) {
+        final WebView webView = activity.findViewById(R.id.webView);
+        if (webView != null && webView.getParent() == view) {
+            navigationOverlay.apply(view, webView, insets, includeKeyboard);
+        } else {
+            SystemBars.applyInsets(view, insets, Insets.NONE, includeKeyboard);
+        }
+    }
 
     private AndroidBug5497Workaround(Activity activity) {
         this.activity = activity;
@@ -42,28 +72,111 @@ public class AndroidBug5497Workaround {
         this.view = this.frameLayout.getChildAt(0);
         this.frameLayoutParams = (FrameLayout.LayoutParams) (this.view.getLayoutParams());
 
-        this.view.setOnApplyWindowInsetsListener((v, insets) -> {
-            int imeHeight = 0;
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-                imeHeight = insets.getInsets(android.view.WindowInsets.Type.ime()).bottom;
-            }
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S_V2) {
+            registerKeyboardInsets();
+        } else {
+            ViewCompat.setOnApplyWindowInsetsListener(view, (v, insets) -> {
+                applyContentInsets(insets, true);
+                return WindowInsetsCompat.CONSUMED;
+            });
+        }
 
-            if (imeHeight > 0) { // imeHeight > 0 说明键盘弹出
-                frameLayoutParams.height = frameLayout.getHeight() - imeHeight;
-            } else {
-                frameLayoutParams.height = -1;
-            }
-            view.requestLayout();
-            return v.onApplyWindowInsets(insets);
+        view.addOnLayoutChangeListener((v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+            if (right - left != oldRight - oldLeft) ViewCompat.requestApplyInsets(v);
         });
 
         // 兼容旧逻辑
         this.frameLayout.getViewTreeObserver().addOnGlobalLayoutListener(this::possiblyResizeChildOfContent);
+        ViewCompat.requestApplyInsets(view);
+    }
+
+    @TargetApi(android.os.Build.VERSION_CODES.S_V2)
+    private void registerKeyboardInsets() {
+        final FrameLayout container = (FrameLayout) this.view;
+        final WindowInsets[] currentInsets = new WindowInsets[1];
+        this.view.setWindowInsetsAnimationCallback(new WindowInsetsAnimation.Callback(
+                WindowInsetsAnimation.Callback.DISPATCH_MODE_CONTINUE_ON_SUBTREE) {
+            private final Map<WindowInsetsAnimation, WebView> targets = new HashMap<>();
+
+            @Override
+            public void onPrepare(WindowInsetsAnimation animation) {
+                if ((animation.getTypeMask() & WindowInsets.Type.ime()) != 0) {
+                    final WebView target = activity.findViewById(R.id.webView);
+                    if (target != null) {
+                        targets.put(animation, target);
+                        Utils.keyboardHideState(target).animationStarted(animation);
+                    }
+                }
+            }
+
+            @Override
+            public WindowInsets onProgress(WindowInsets insets, List<WindowInsetsAnimation> animations) {
+                return insets;
+            }
+
+            @Override
+            public void onEnd(WindowInsetsAnimation animation) {
+                final WebView webView = targets.remove(animation);
+                if (webView != null) {
+                    final KeyboardHideState state = Utils.keyboardHideState(webView);
+                    state.animationEnded(animation);
+                    final WindowInsets insets = webView.getRootWindowInsets();
+                    if (insets != null) {
+                        state.visibilityChanged(insets.isVisible(WindowInsets.Type.ime()));
+                    }
+                    webView.post(state::flush);
+                }
+            }
+        });
+        this.view.setOnApplyWindowInsetsListener((v, insets) -> {
+            // 在键盘动画开始前按目标高度布局，确保退场时露出的是已恢复的页面。
+            currentInsets[0] = insets;
+            applyContentInsets(WindowInsetsCompat.toWindowInsetsCompat(insets, v), false);
+            resizeForKeyboard(container, insets);
+            final View webView = activity.findViewById(R.id.webView);
+            if (webView instanceof android.webkit.WebView) {
+                final KeyboardHideState state = Utils.keyboardHideState((WebView) webView);
+                state.visibilityChanged(insets.isVisible(WindowInsets.Type.ime()));
+                Utils.onKeyboardVisibilityChanged(activity, (android.webkit.WebView) webView,
+                        insets.isVisible(WindowInsets.Type.ime()));
+                webView.post(state::flush);
+            }
+            return WindowInsets.CONSUMED;
+        });
+        container.addOnLayoutChangeListener((v, left, top, right, bottom,
+                                             oldLeft, oldTop, oldRight, oldBottom) -> {
+            if (currentInsets[0] != null) {
+                resizeForKeyboard(container, currentInsets[0]);
+            }
+        });
+    }
+
+    @TargetApi(android.os.Build.VERSION_CODES.S_V2)
+    private void resizeForKeyboard(FrameLayout container, WindowInsets insets) {
+        // 页面加载失败时可能替换 WebView，每次布局都获取当前实例。
+        final View webView = activity.findViewById(R.id.webView);
+        if (webView == null || webView.getParent() != container) {
+            return;
+        }
+        final int contentHeight = container.getHeight() - container.getPaddingTop() - container.getPaddingBottom();
+        if (contentHeight <= 0) {
+            return;
+        }
+        final int[] location = new int[2];
+        container.getLocationInWindow(location);
+        // 背景容器始终铺满窗口，仅调整 WebView，并扣除系统栏占位和键盘实际重叠区域。
+        final int height = KeyboardContentHeight.calculate(contentHeight, location[1] + container.getPaddingTop(),
+                container.getRootView().getHeight(), insets.getInsets(WindowInsets.Type.ime()).bottom);
+        final FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) webView.getLayoutParams();
+        if (params.height != height) {
+            params.height = height;
+            webView.requestLayout();
+        }
     }
 
     private void possiblyResizeChildOfContent() {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S_V2) {
-            // Android 13 (33) 及以上用 WindowInsets 处理
+            // Android 12L（32）及以上用 WindowInsets 处理。
             return;
         }
 

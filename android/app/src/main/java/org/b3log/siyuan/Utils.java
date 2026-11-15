@@ -1,5 +1,5 @@
 /*
- * SiYuan - 源于思考，饮水思源
+ * SiYuan - From thought to insight, with agents
  * Copyright (c) 2020-present, b3log.org
  *
  * This program is free software: you can redistribute it and/or modify
@@ -30,10 +30,13 @@ import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.Uri;
 import android.os.LocaleList;
+import android.os.Build;
 import android.print.PrintDocumentAdapter;
 import android.print.PrintManager;
 import android.text.TextUtils;
 import android.util.Log;
+import android.view.WindowInsets;
+import android.view.inputmethod.InputMethodManager;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -55,11 +58,18 @@ import java.io.File;
 import java.io.FileWriter;
 import java.net.Inet4Address;
 import java.net.InetAddress;
+import java.net.NetworkInterface;
+import java.net.SocketException;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Enumeration;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.WeakHashMap;
 
 import mobile.Mobile;
 
@@ -72,6 +82,10 @@ import mobile.Mobile;
  * @since 1.0.0
  */
 public final class Utils {
+
+    // 与前端 KeyboardHideResult 保持一致。
+    private static final String KEYBOARD_HIDE_RESULT_PRESERVE_SELECTION = "1";
+    private static final String KEYBOARD_HIDE_RESULT_RESTORE_TABLE_CELL_SELECTION = "2";
 
     /**
      * App version.
@@ -147,11 +161,6 @@ public final class Utils {
         return null != url && url.contains("/stage/build/desktop/");
     }
 
-    public static boolean isCnChannel(final PackageManager pm) {
-        final String channel = getChannel(pm);
-        return channel.contains("cn") || channel.equals("huawei");
-    }
-
     public static String getChannel(final PackageManager pm) {
         // Privacy policy solicitation will no longer pop up when Android starts for the first time
         // https://github.com/siyuan-note/siyuan/issues/10348
@@ -164,6 +173,10 @@ public final class Utils {
 
         // 从配置清单获取 CHANNEL 的值，用于判断是哪个渠道包
         return applicationInfo.metaData.getString("CHANNEL");
+    }
+
+    public static boolean isHuaweiChannel(final PackageManager pm) {
+        return "huawei".equals(getChannel(pm));
     }
 
     public static void setWebViewFocusable(final WebView webView, final boolean focusable) {
@@ -179,38 +192,213 @@ public final class Utils {
     }
 
     public static void registerSoftKeyboardToolbar(final Activity activity, final WebView webView) {
-        if (Utils.isTablet(activity)) {
+        keyboardFocusStates.put(webView, new KeyboardFocusState());
+        keyboardFocusStates.get(webView).windowFocusChanged(webView.hasWindowFocus(), webView.hasFocus());
+        // 新版 Android 直接使用窗口边衬通知，避免可见矩形在应用切换时滞后。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S_V2) {
             return;
         }
-
         KeyboardUtils.registerSoftInputChangedListener(activity, height -> {
-            if (activity.isInMultiWindowMode()) {
+            onKeyboardVisibilityChanged(activity, webView, height > 0);
+        });
+    }
+
+    private static final Map<WebView, KeyboardFocusState> keyboardFocusStates = new WeakHashMap<>();
+
+    public static void onKeyboardVisibilityChanged(final Activity activity, final WebView webView,
+                                                    final boolean visible) {
+        final KeyboardFocusState state = keyboardFocusStates.get(webView);
+        if (state == null || isDesktopMode(webView) || activity.isInMultiWindowMode() ||
+                !webView.hasWindowFocus() || !state.visibilityChanged(visible)) {
+            return;
+        }
+        if (visible) {
+            showKeyboardAndToolbar(webView);
+        } else {
+            hideKeyboardAndToolbar(activity, webView, true);
+        }
+    }
+
+    public static void onKeyboardWindowFocusChanged(final Activity activity, final WebView webView,
+                                                     final boolean focused) {
+        final KeyboardFocusState state = keyboardFocusStates.get(webView);
+        if (state == null || isDesktopMode(webView)) {
+            return;
+        }
+        state.windowFocusChanged(focused, webView.hasFocus());
+        // 每次窗口切换都作废已排队的工具栏回调，避免返回前台后继续清理旧焦点。
+        final KeyboardToolbarRequest request = beginKeyboardToolbarRequest(webView);
+        if (!state.shouldRestore() || activity.isInMultiWindowMode()) {
+            return;
+        }
+        webView.post(() -> {
+            if (keyboardToolbarRequests.get(webView) != request || !state.shouldRestore()) {
                 return;
             }
+            webView.evaluateJavascript("document.activeElement && (document.activeElement.isContentEditable || " +
+                    "/^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName))", result -> {
+                if (keyboardToolbarRequests.get(webView) != request || !state.shouldRestore() ||
+                        !webView.hasWindowFocus()) {
+                    return;
+                }
+                if (!"true".equals(result) || !webView.hasFocus()) {
+                    state.hideRequested();
+                    webView.evaluateJavascript("javascript:hideKeyboardToolbar();", null);
+                    return;
+                }
+                requestSoftKeyboard(activity, webView);
+                // 输入法不可用时只收起工具栏，不清除仍在编辑的光标，也不无限等待恢复。
+                webView.postDelayed(() -> {
+                    if (keyboardToolbarRequests.get(webView) == request && state.shouldRestore()) {
+                        final WindowInsets insets = webView.getRootWindowInsets();
+                        final boolean visible = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && insets != null ?
+                                insets.isVisible(WindowInsets.Type.ime()) : KeyboardUtils.isSoftInputVisible(activity);
+                        if (visible) {
+                            onKeyboardVisibilityChanged(activity, webView, true);
+                        } else {
+                            state.hideRequested();
+                            webView.evaluateJavascript("javascript:hideKeyboardToolbar();", null);
+                        }
+                    }
+                }, 1000);
+            });
+        });
+    }
 
-            if (KeyboardUtils.isSoftInputVisible(activity)) {
-                showKeyboardAndToolbar(webView);
-            } else {
-                hideKeyboardAndToolbar(webView);
+    public static void showSoftKeyboard(final Activity activity, final WebView webView) {
+        showKeyboardAndToolbar(webView);
+        final KeyboardToolbarRequest request = keyboardToolbarRequests.get(webView);
+        // 按明确的显示请求唤起输入法，重复请求不切换成隐藏。
+        webView.post(() -> {
+            if (keyboardToolbarRequests.get(webView) == request) {
+                requestSoftKeyboard(activity, webView);
             }
         });
     }
 
+    private static void requestSoftKeyboard(final Activity activity, final WebView webView) {
+        if (!webView.hasWindowFocus()) {
+            return;
+        }
+        final InputMethodManager inputMethodManager =
+                (InputMethodManager) activity.getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (inputMethodManager != null) {
+            inputMethodManager.showSoftInput(webView, InputMethodManager.SHOW_IMPLICIT);
+        }
+    }
+
+    // 状态仅在主线程访问，按 WebView 隔离，避免不同窗口的键盘回调互相覆盖。
+    private static final Map<WebView, KeyboardToolbarRequest> keyboardToolbarRequests = new WeakHashMap<>();
+    private static final Map<WebView, KeyboardHideState> keyboardHideStates = new WeakHashMap<>();
+
+    static KeyboardHideState keyboardHideState(final WebView webView) {
+        return keyboardHideStates.computeIfAbsent(webView, key -> new KeyboardHideState());
+    }
+
+    private static final class KeyboardToolbarRequest {
+        private Runnable pendingShow;
+    }
+
+    private static KeyboardToolbarRequest beginKeyboardToolbarRequest(final WebView webView) {
+        keyboardHideState(webView).cancel();
+        final KeyboardToolbarRequest request = new KeyboardToolbarRequest();
+        final KeyboardToolbarRequest previous = keyboardToolbarRequests.put(webView, request);
+        if (previous != null && previous.pendingShow != null) {
+            webView.removeCallbacks(previous.pendingShow);
+            previous.pendingShow = null;
+        }
+        return request;
+    }
+
     public static void showKeyboardAndToolbar(final WebView webView) {
+        final KeyboardToolbarRequest request = beginKeyboardToolbarRequest(webView);
         webView.post(() -> {
-            webView.postDelayed(() -> webView.evaluateJavascript("javascript:showKeyboardToolbar();", null), 288);
+            if (keyboardToolbarRequests.get(webView) != request || !webView.hasWindowFocus()) {
+                return;
+            }
+            request.pendingShow = () -> {
+                request.pendingShow = null;
+                if (keyboardToolbarRequests.get(webView) != request || !webView.hasWindowFocus()) {
+                    return;
+                }
+                webView.evaluateJavascript("javascript:showKeyboardToolbar();", null);
+            };
+            webView.postDelayed(request.pendingShow, 288);
             Utils.setWebViewFocusable(webView, true);
         });
     }
 
-    public static void hideKeyboardAndToolbar(final WebView webView) {
-        webView.post(() -> {
-            webView.evaluateJavascript("javascript:hideKeyboardToolbar();document.activeElement.blur();", null);
-            // 桌面模式依赖 WebView 自身管理软键盘，禁用焦点会导致键盘收起后无法再次获取焦点
-            // https://github.com/siyuan-note/siyuan/issues/18028
-            if (!isDesktopMode(webView)) {
-                Utils.setWebViewFocusable(webView, false);
+    public static void hideKeyboardAndToolbar(final Activity activity, final WebView webView,
+                                              final boolean preserveSelection) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S_V2) {
+            final KeyboardFocusState state = keyboardFocusStates.get(webView);
+            if (preserveSelection && (!webView.hasWindowFocus() ||
+                    (state != null && state.shouldIgnoreSystemHide()))) {
+                return;
             }
+            if (!preserveSelection && state != null) {
+                state.hideRequested();
+            }
+            // 页面恢复高度前先隐藏工具栏，焦点和选区仍等退场动画完成后清理。
+            webView.evaluateJavascript("window.dispatchEvent(new CustomEvent('siyuan-mobile-keyboard-hiding'));", null);
+            final KeyboardHideState hideState = keyboardHideState(webView);
+            hideState.request(!preserveSelection, () -> finishKeyboardHide(activity, webView, preserveSelection));
+            // 等待同一轮窗口边衬和动画准备通知完成，无动画时也能清理。
+            webView.post(hideState::flush);
+            return;
+        }
+        finishKeyboardHide(activity, webView, preserveSelection);
+    }
+
+    private static void finishKeyboardHide(final Activity activity, final WebView webView,
+                                          final boolean preserveSelection) {
+        final KeyboardFocusState state = keyboardFocusStates.get(webView);
+        if (!preserveSelection && state != null) {
+            state.hideRequested();
+        }
+        if (preserveSelection && (!webView.hasWindowFocus() ||
+                (state != null && state.shouldIgnoreSystemHide()))) {
+            return;
+        }
+        final KeyboardToolbarRequest request = beginKeyboardToolbarRequest(webView);
+        webView.post(() -> {
+            if (keyboardToolbarRequests.get(webView) != request) {
+                return;
+            }
+            // 系统隐藏通知可能排队到窗口失焦后才执行，主动收起键盘仍正常处理。
+            if (preserveSelection && (!webView.hasWindowFocus() ||
+                    (state != null && state.shouldIgnoreSystemHide()))) {
+                return;
+            }
+            final String script = "javascript:hideKeyboardToolbar(" + preserveSelection + ");";
+            webView.evaluateJavascript(script, result -> {
+                // 只处理当前关闭请求的结果，避免过期回调恢复键盘或清除新一轮输入的焦点。
+                if (keyboardToolbarRequests.get(webView) != request) {
+                    return;
+                }
+                // 等待前端返回期间切入后台时，保留 WebView 焦点和键盘恢复条件。
+                if (preserveSelection && (!webView.hasWindowFocus() ||
+                        (state != null && state.shouldIgnoreSystemHide()))) {
+                    return;
+                }
+                if (KEYBOARD_HIDE_RESULT_RESTORE_TABLE_CELL_SELECTION.equals(result) || "true".equals(result)) {
+                    showSoftKeyboard(activity, webView);
+                    return;
+                }
+                if (KEYBOARD_HIDE_RESULT_PRESERVE_SELECTION.equals(result)) {
+                    return;
+                }
+                webView.evaluateJavascript("javascript:document.activeElement.blur();", null);
+                if (activity instanceof MainActivity) {
+                    ((MainActivity) activity).finishWebViewActionMode();
+                }
+                // 桌面模式依赖 WebView 自身管理软键盘，禁用焦点会导致键盘收起后无法再次获取焦点
+                // https://github.com/siyuan-note/siyuan/issues/18028
+                // 平板保持 WebView 可聚焦，以支持触摸和外接键盘继续输入。
+                if (!isDesktopMode(webView) && !Utils.isTablet(activity)) {
+                    Utils.setWebViewFocusable(webView, false);
+                }
+            });
         });
     }
 
@@ -227,19 +415,19 @@ public final class Utils {
         try {
             final ConnectivityManager manager =
                     (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
+            final Set<String> excludedAddresses = new HashSet<>();
             if (manager != null) {
                 final Network activeNetwork = manager.getActiveNetwork();
-                if (!addLANNetworkAddresses(manager, activeNetwork, list)) {
-                    for (final Network network : manager.getAllNetworks()) {
-                        if (network.equals(activeNetwork)) {
-                            continue;
-                        }
-                        if (addLANNetworkAddresses(manager, network, list)) {
-                            break;
-                        }
+                addLANNetworkAddresses(manager, activeNetwork, list);
+                addExcludedNetworkAddresses(manager, activeNetwork, excludedAddresses);
+                for (final Network network : manager.getAllNetworks()) {
+                    if (!network.equals(activeNetwork)) {
+                        addLANNetworkAddresses(manager, network, list);
                     }
+                    addExcludedNetworkAddresses(manager, network, excludedAddresses);
                 }
             }
+            addPrivateInterfaceAddresses(excludedAddresses, list);
         } catch (final Exception e) {
             logError("network", "get LAN IP list failed", e);
         }
@@ -253,11 +441,28 @@ public final class Utils {
             return false;
         }
         final NetworkCapabilities capabilities = manager.getNetworkCapabilities(network);
-        if (capabilities == null ||
+        if (capabilities == null || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN) ||
                 (!capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) &&
                         !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))) {
             return false;
         }
+        return addNetworkAddresses(manager, network, addresses);
+    }
+
+    private static void addExcludedNetworkAddresses(final ConnectivityManager manager, final Network network,
+                                                    final Set<String> addresses) {
+        if (network == null) {
+            return;
+        }
+        final NetworkCapabilities capabilities = manager.getNetworkCapabilities(network);
+        if (capabilities != null && (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ||
+                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN))) {
+            addNetworkAddresses(manager, network, addresses);
+        }
+    }
+
+    private static boolean addNetworkAddresses(final ConnectivityManager manager, final Network network,
+                                               final Collection<String> addresses) {
         final LinkProperties properties = manager.getLinkProperties(network);
         if (properties == null) {
             return false;
@@ -271,6 +476,30 @@ public final class Utils {
             }
         }
         return addresses.size() > initialSize;
+    }
+
+    private static void addPrivateInterfaceAddresses(final Set<String> excludedAddresses,
+                                                     final List<String> addresses) throws SocketException {
+        final Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+        if (interfaces == null) {
+            return;
+        }
+        while (interfaces.hasMoreElements()) {
+            final NetworkInterface networkInterface = interfaces.nextElement();
+            if (!networkInterface.isUp() || networkInterface.isLoopback() || networkInterface.isPointToPoint() ||
+                    !networkInterface.supportsMulticast()) {
+                continue;
+            }
+            final Enumeration<InetAddress> interfaceAddresses = networkInterface.getInetAddresses();
+            while (interfaceAddresses.hasMoreElements()) {
+                final InetAddress address = interfaceAddresses.nextElement();
+                final String hostAddress = address.getHostAddress();
+                if (address instanceof Inet4Address && address.isSiteLocalAddress() &&
+                        !excludedAddresses.contains(hostAddress) && !addresses.contains(hostAddress)) {
+                    addresses.add(hostAddress);
+                }
+            }
+        }
     }
 
     public static void logError(final String tag, final String msg) {
