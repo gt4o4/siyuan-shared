@@ -13,12 +13,17 @@ on:
 jobs:
   build:
     runs-on: ${{ matrix.config.os }}
+    env:
+      # Keep the Go build cache in the workspace temp dir so it can be cached
+      # and shared with other macOS workflows on the same OS/arch/toolchain.
+      GOCACHE: ${{ github.workspace }}/.gocache
     strategy:
       matrix:
         config:
           - os: macos-latest
             kernel_path: "../ios/iosk.xcframework"
-            target: "ios"
+            # Device arm64 only: the Xcode build below targets -sdk iphoneos.
+            target: "ios/arm64"
 
     steps:
       - uses: actions/checkout@v6
@@ -40,8 +45,12 @@ jobs:
 
           cd ..
 
-          git clone --depth=1 https://github.com/siyuan-note/siyuan-ios.git
+          git clone https://github.com/siyuan-note/siyuan-ios.git
           cd siyuan-ios
+          # Pin the iOS shell to the v3.8.8 window so release builds are reproducible.
+          git checkout 05280f32ba89705e3ba55c233037db02c93cdea8
+          # Keep iOS 15 support: @available is illegal on lazy stored properties.
+          git apply "${{ github.workspace }}/siyuan-note/patches/siyuan-ios/text-menu-availability.patch"
 
           # https://github.com/siyuan-note/siyuan-ios/commit/d72cd11a6d78df88b56a2850f0f46c2b905a5433 
           # ASSETCATALOG_COMPILER_APPICON_NAME = logo;
@@ -60,6 +69,15 @@ jobs:
           cache-dependency-path: "**/*.sum"
       - run: go version
 
+      - name: Cache Go build output
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.gocache
+          # Repository-scoped: any workflow using the same key and path can restore it.
+          key: go-build-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            go-build-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Set up Node
         uses: actions/setup-node@v6
         with:
@@ -68,6 +86,11 @@ jobs:
       - name: Install Node pnpm
         run: npm install -g ${{ github.event.inputs.packageManager }}
         working-directory: ${{ github.workspace }}/siyuan-note/siyuan/app
+
+      - name: Verify account-free sync
+        shell: bash
+        working-directory: ${{ github.workspace }}/siyuan-note
+        run: bash scripts/check-account-free.sh siyuan
 
       - name: Install Node Dependencies
         run: pnpm install --no-frozen-lockfile
@@ -85,7 +108,7 @@ jobs:
 
       - name: Building ios Kernel
         run: |
-          gomobile bind --tags fts5 -ldflags '-s -w' -v -target=ios -o "${{ matrix.config.kernel_path }}" ./
+          gomobile bind --tags "fts5 sqlcipher" -ldflags '-s -w' -v -target=${{ matrix.config.target }} -o "${{ matrix.config.kernel_path }}" ./
         working-directory: ${{ github.workspace }}/siyuan-note/siyuan/kernel/mobile
         env:
           GO111MODULE: on
@@ -123,3 +146,5 @@ jobs:
           asset_name: siyuan-${{ github.event.inputs.version }}-ios.ipa
           asset_path: ${{ github.workspace }}/siyuan-note/siyuan-ios-out/siyuan.ipa
           asset_content_type: application/octet-stream
+          # Replace the ipa when rebuilding the same version.
+          overwrite: true
