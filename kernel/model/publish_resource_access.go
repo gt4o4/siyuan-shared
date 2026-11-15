@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
@@ -66,7 +54,11 @@ func CheckPluginAccessableInPublish(name string) bool {
 	}
 
 	found, _, _, _, disabledInPublish, disallowInstall, _ := bazaar.ParseInstalledPlugin(name, "")
-	return found && !disabledInPublish && !disallowInstall
+	return found && isPetalAccessableInPublish(petal, disabledInPublish, disallowInstall)
+}
+
+func isPetalAccessableInPublish(petal *Petal, disabledInPublish, disallowInstall bool) bool {
+	return petal != nil && petal.Enabled && !petal.UserDisabledInPublish && !disabledInPublish && !disallowInstall
 }
 
 func CheckWidgetAccessableInPublish(name string) bool {
@@ -74,7 +66,7 @@ func CheckWidgetAccessableInPublish(name string) bool {
 		return false
 	}
 	widget, err := bazaar.ParsePackageJSON(filepath.Join(util.DataDir, "widgets", name, "widget.json"))
-	return err == nil && widget != nil && !widget.DisabledInPublish
+	return err == nil && bazaar.IsValidInstalledPackage(widget, name) && !widget.DisabledInPublish
 }
 
 func CheckWidgetAccessableByPublishAccess(c *gin.Context, name string, publishAccess PublishAccess) bool {
@@ -93,21 +85,47 @@ func CheckEmojiAccessableByPublishAccess(c *gin.Context, relativePath string, pu
 }
 
 func checkResourceAccessableByPublishAccess(c *gin.Context, resource string, publishAccess PublishAccess, widget bool) bool {
+	publishDisable := filterDisablePublishAccess(publishAccess)
+	// 缓存只提供引用候选，每次请求仍校验当前文档版本和发布权限。
+	found := false
+	publishResourceRefsCache.Range(func(key, value any) bool {
+		refs := value.(*publishResourceRefs)
+		if !refs.contains(resource, widget) {
+			return true
+		}
+		boxID, rootID, _ := strings.Cut(key.(string), "/")
+		bt := treenode.GetBlockTreeInExactBox(rootID, boxID)
+		if bt != nil && bt.Type == "d" && bt.Updated == refs.updated &&
+			getBlockTreePublishAccessStatus(c, publishAccess, publishDisable, bt) == PublishAccessAllowed {
+			found = true
+			return false
+		}
+		return true
+	})
+	if found {
+		return true
+	}
+
 	for _, bt := range treenode.GetBlockTreesByType("d") {
-		if !checkBlockTreeAccessableByPublishAccess(c, publishAccess, bt) {
+		if getBlockTreePublishAccessStatus(c, publishAccess, publishDisable, bt) != PublishAccessAllowed {
 			continue
 		}
 
 		refs := getPublishResourceRefs(bt)
-		if widget {
-			if _, ok := refs.widgets[resource]; ok {
-				return true
-			}
-		} else if _, ok := refs.emojis[resource]; ok {
+		if refs.contains(resource, widget) {
 			return true
 		}
 	}
 	return false
+}
+
+func (refs *publishResourceRefs) contains(resource string, widget bool) bool {
+	if widget {
+		_, ok := refs.widgets[resource]
+		return ok
+	}
+	_, ok := refs.emojis[resource]
+	return ok
 }
 
 func getPublishResourceRefs(bt *treenode.BlockTree) *publishResourceRefs {

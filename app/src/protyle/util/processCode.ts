@@ -7,12 +7,35 @@ import {mindmapRender} from "../render/mindmapRender";
 import {flowchartRender} from "../render/flowchartRender";
 import {plantumlRender} from "../render/plantumlRender";
 import {htmlRender} from "../render/htmlRender";
-import {Constants} from "../../constants";
 import {escapeHtml} from "../../util/escape";
+import {customBlockRender} from "../../plugin/customBlockRender";
+import {buildSemanticInlineHTML} from "./inlineElementMarker";
+import {renderTableCellRichElements} from "../render/tableCellRich";
+import {renderEmbedHeadings} from "../render/embedHeading";
+import {normalizeInlineElementBoundaries} from "./inlineElementBoundary";
+import {renderLongTextRuns} from "./longTextWrap";
+import {renderImageActions} from "../render/imageActions";
+import {renderImageDisplay} from "../render/imageDisplay";
+import {renderMediaResize} from "../render/mediaResize";
+import {renderBlockDirection} from "../render/blockDirection";
 
 export const processPasteCode = (html: string, text: string, originalTextHTML: string, protyle: IProtyle) => {
     const tempElement = document.createElement("div");
     tempElement.innerHTML = html;
+    const preElement = tempElement.querySelector("pre");
+    if (preElement) {
+        // IDE 识别仅用于独立代码片段，混合内容保留 HTML 中的段落和代码块结构。
+        let element: Element = preElement;
+        while (element !== tempElement) {
+            const parent = element.parentElement;
+            if (Array.from(parent.childNodes).some(node => node !== element &&
+                (node.nodeType === Node.ELEMENT_NODE ||
+                    node.nodeType === Node.TEXT_NODE && node.textContent.trim() !== ""))) {
+                return false;
+            }
+            element = parent;
+        }
+    }
     let isCode = false;
     if (tempElement.childElementCount === 1 &&
         (tempElement.lastElementChild as HTMLElement).style.fontFamily.indexOf("monospace") > -1) {
@@ -41,7 +64,7 @@ export const processPasteCode = (html: string, text: string, originalTextHTML: s
             return protyle.lute.Md2BlockDOM(code);
         } else {
             // Paste code <&lt;div class="b3-dialog__action"&gt;> WithAll<XXX>() <div class="b3-dialog__action">
-            return `<span data-type="code" spellcheck="false">${Constants.ZWSP}${escapeHtml(code)}</span>`;
+            return buildSemanticInlineHTML("code", escapeHtml(code), ' spellcheck="false"');
         }
     }
     return false;
@@ -53,12 +76,26 @@ const RENDER_MAP: Record<string, (previewPanel: Element) => void> = {
     mermaid: mermaidRender,
     flowchart: flowchartRender,
     echarts: chartRender,
-    mindmap: mindmapRender,
     graphviz: graphvizRender,
     math: mathRender,
 };
 
 export const processRender = (previewPanel: Element) => {
+    renderBlockDirection(previewPanel);
+    renderImageActions(previewPanel);
+    renderImageDisplay(previewPanel);
+    normalizeInlineElementBoundaries(previewPanel);
+    renderLongTextRuns(previewPanel);
+    renderEmbedHeadings(previewPanel);
+    renderTableCellRichElements(previewPanel);
+    // 受限 Lite 编辑器只渲染公式，代码围栏始终作为源码编辑，不能执行图表或 HTML。
+    if (previewPanel.closest('[data-protyle-lite-render="safe"]')) {
+        mathRender(previewPanel);
+        return;
+    }
+    renderMediaResize(previewPanel);
+    customBlockRender(previewPanel);
+    mindmapRender(previewPanel);
     const language = previewPanel.getAttribute("data-subtype");
     if (RENDER_MAP[language]) {
         RENDER_MAP[language](previewPanel);

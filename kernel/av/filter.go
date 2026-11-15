@@ -1,23 +1,13 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package av
 
 import (
 	"reflect"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,6 +21,7 @@ import (
 // 分组节点：Combination 指明子节点的组合方式，Filters 为子节点列表（递归）。
 type ViewFilter struct {
 	Column        string            `json:"column"`                  // 字段（列）ID，叶子节点有效
+	ValueSource   ValueSource       `json:"valueSource,omitempty"`   // 值来源，叶子节点有效
 	Qualifier     FilterQuantifier  `json:"quantifier,omitempty"`    // 量词，叶子节点有效
 	Operator      FilterOperator    `json:"operator"`                // 操作符，叶子节点有效
 	Value         *Value            `json:"value"`                   // 过滤值，叶子节点有效
@@ -110,28 +101,85 @@ const (
 
 func Filter(viewable Viewable, attrView *AttributeView, rollupFurtherCollections map[string]*RollupRenderContext,
 	cachedAttrViews map[string]*AttributeView) {
+	FilterWithContext(viewable, attrView, rollupFurtherCollections, cachedAttrViews, nil)
+}
+
+// FilterWithContext 使用一次渲染请求的上下文过滤视图数据。
+func FilterWithContext(viewable Viewable, attrView *AttributeView, rollupFurtherCollections map[string]*RollupRenderContext,
+	cachedAttrViews map[string]*AttributeView, context *FilterContext) {
 	collection := viewable.(Collection)
 	filters := collection.GetFilters()
-	if 1 > len(filters) {
+	if 0 < len(filters) {
+		// 归一化为单一根组：spec 5 起顶层应为一个根组；旧数据/异常数据为扁平叶子数组时，
+		// 在内存里包成隐式 AND 根组参与求值，不修改原数据、不崩溃。
+		root := normalizeFiltersAsRoot(filters)
+		if nil != root {
+			// 递归收集所有叶子引用的列 ID 在 values 中的下标，避免每行重复查找。
+			fields := collection.GetFields()
+			colIndexByColumn := map[string]int{}
+			collectLeafColumnIndexes([]*ViewFilter{root}, fields, colIndexByColumn)
+
+			var items []Item
+			for _, item := range collection.GetItems() {
+				values := item.GetValues()
+				if evalNode(root, values, colIndexByColumn, attrView, item.GetID(), rollupFurtherCollections,
+					cachedAttrViews) {
+					items = append(items, item)
+				}
+			}
+			collection.SetItems(items)
+		}
+	}
+
+	filterByContext(collection, attrView, rollupFurtherCollections, cachedAttrViews, context)
+}
+
+// filterByContext 将物理数据库块的上下文筛选与当前视图筛选按 AND 组合。
+func filterByContext(collection Collection, attrView *AttributeView,
+	rollupFurtherCollections map[string]*RollupRenderContext, cachedAttrViews map[string]*AttributeView,
+	context *FilterContext) {
+	if nil == context || "" == context.KeyID {
+		return
+	}
+	if nil == attrView || 1 > len(context.CurrentDocumentItemIDs) {
+		collection.SetItems(nil)
+		return
+	}
+	keyValues, err := attrView.GetKeyValues(context.KeyID)
+	if nil != err || nil == keyValues {
+		collection.SetItems(nil)
 		return
 	}
 
-	// 归一化为单一根组：spec 5 起顶层应为一个根组；旧数据/异常数据为扁平叶子数组时，
-	// 在内存里包成隐式 AND 根组参与求值，不修改原数据、不崩溃。
-	root := normalizeFiltersAsRoot(filters)
-	if nil == root {
-		return
+	filter := &ViewFilter{
+		Column:   context.KeyID,
+		Operator: FilterOperatorContainsAnyItem,
+		Value: &Value{
+			Type: KeyTypeRelation,
+			Relation: &ValueRelation{
+				BlockIDs: context.CurrentDocumentItemIDs,
+			},
+		},
 	}
-
-	// 递归收集所有叶子引用的列 ID 在 values 中的下标，避免每行重复查找。
-	fields := collection.GetFields()
-	colIndexByColumn := map[string]int{}
-	collectLeafColumnIndexes([]*ViewFilter{root}, fields, colIndexByColumn)
-
+	if KeyTypeRollup == keyValues.Key.Type {
+		filter.Value = &Value{Type: KeyTypeRollup, Rollup: &ValueRollup{Contents: []*Value{filter.Value}}}
+	}
+	valuesByItemID := make(map[string]*Value, len(keyValues.Values))
+	for _, value := range keyValues.Values {
+		if nil == value {
+			continue
+		}
+		if _, exists := valuesByItemID[value.BlockID]; !exists {
+			valuesByItemID[value.BlockID] = value
+		}
+	}
 	var items []Item
 	for _, item := range collection.GetItems() {
-		values := item.GetValues()
-		if evalNode(root, values, colIndexByColumn, attrView, item.GetID(), rollupFurtherCollections, cachedAttrViews) {
+		value := valuesByItemID[item.GetID()]
+		if nil == value && KeyTypeRollup == keyValues.Key.Type {
+			value = &Value{KeyID: context.KeyID, BlockID: item.GetID(), Type: KeyTypeRollup, Rollup: &ValueRollup{}}
+		}
+		if nil != value && value.Filter(filter, attrView, item.GetID(), rollupFurtherCollections, cachedAttrViews) {
 			items = append(items, item)
 		}
 	}
@@ -255,7 +303,26 @@ func evalLeaf(filter *ViewFilter, values []*Value, index int, attrView *Attribut
 		return evalMissingLeaf(filter)
 	}
 
-	return values[index].Filter(filter, attrView, itemID, rollupFurtherCollections, cachedAttrViews)
+	return ResolveValueSource(values[index], filter.ValueSource).Filter(resolveFilterValueSource(filter), attrView, itemID,
+		rollupFurtherCollections, cachedAttrViews)
+}
+
+func resolveFilterValueSource(filter *ViewFilter) *ViewFilter {
+	if nil == filter || ValueSourceRendered != filter.ValueSource || nil == filter.Value ||
+		KeyTypeTemplate == filter.Value.Type {
+		return filter
+	}
+
+	ret := *filter
+	content := filter.Value.String(false)
+	if KeyTypeLocation == filter.Value.Type && nil != filter.Value.Text {
+		content = filter.Value.Text.Content
+	}
+	if KeyTypeNumber == filter.Value.Type && nil != filter.Value.Number && filter.Value.Number.IsNotEmpty {
+		content = strconv.FormatFloat(filter.Value.Number.Content, 'f', -1, 64)
+	}
+	ret.Value = &Value{Type: KeyTypeTemplate, Template: &ValueTemplate{Content: content}}
+	return &ret
 }
 
 func evalMissingLeaf(filter *ViewFilter) bool {
@@ -268,8 +335,13 @@ func evalMissingLeaf(filter *ViewFilter) bool {
 	case FilterOperatorIsNotEmpty:
 		return false
 	case FilterOperatorContainsAnyItem, FilterOperatorDoesNotContainAnyItem:
-		if !isExactRelationFilter(filter) || nil == filter.Value.Relation ||
-			1 > len(filter.Value.Relation.BlockIDs) {
+		comparison := filter
+		if nil != filter.Value && KeyTypeRollup == filter.Value.Type && nil != filter.Value.Rollup &&
+			0 < len(filter.Value.Rollup.Contents) {
+			comparison = &ViewFilter{Operator: filter.Operator, Value: filter.Value.Rollup.Contents[0]}
+		}
+		if !isExactRelationFilter(comparison) || nil == comparison.Value.Relation ||
+			1 > len(comparison.Value.Relation.BlockIDs) {
 			return true
 		}
 		return FilterOperatorDoesNotContainAnyItem == filter.Operator
@@ -301,14 +373,23 @@ func CloneFilters(filters []*ViewFilter) (ret []*ViewFilter) {
 			continue
 		}
 		cloned := &ViewFilter{
-			Column:        f.Column,
-			Qualifier:     f.Qualifier,
-			Operator:      f.Operator,
-			Value:         f.Value,
-			RelativeDate:  f.RelativeDate,
-			RelativeDate2: f.RelativeDate2,
-			DateEndpoint:  f.DateEndpoint,
-			Combination:   f.Combination,
+			Column:       f.Column,
+			ValueSource:  f.ValueSource,
+			Qualifier:    f.Qualifier,
+			Operator:     f.Operator,
+			DateEndpoint: f.DateEndpoint,
+			Combination:  f.Combination,
+		}
+		if nil != f.Value {
+			cloned.Value = f.Value.Clone()
+		}
+		if nil != f.RelativeDate {
+			relativeDate := *f.RelativeDate
+			cloned.RelativeDate = &relativeDate
+		}
+		if nil != f.RelativeDate2 {
+			relativeDate := *f.RelativeDate2
+			cloned.RelativeDate2 = &relativeDate
 		}
 		if 0 < len(f.Filters) {
 			cloned.Filters = CloneFilters(f.Filters)
@@ -585,38 +666,57 @@ func (value *Value) Filter(filter *ViewFilter, attrView *AttributeView, itemID s
 	// 单独处理汇总
 	if nil != value.Rollup && KeyTypeRollup == value.Type && nil != filter.Value && KeyTypeRollup == filter.Value.Type && nil != filter.Value.Rollup {
 		key, _ := attrView.GetKey(value.KeyID)
-		if nil == key {
+		if nil == key || nil == key.Rollup {
 			return false
 		}
 
 		relKey, _ := attrView.GetKey(key.Rollup.RelationKeyID)
-		if nil == relKey {
+		if !isConfiguredRelationKey(relKey) {
 			return false
 		}
 
 		relVal := attrView.GetValue(relKey.ID, itemID)
-		if nil == relVal || nil == relVal.Relation {
-			return false
-		}
 
 		destAv := cachedAttrViews[relKey.Relation.AvID]
 		if nil == destAv {
 			destAv, _ = ParseAttributeView(relKey.Relation.AvID)
 			if nil != destAv {
-				cachedAttrViews[relKey.Relation.AvID] = destAv
+				if nil != cachedAttrViews {
+					cachedAttrViews[relKey.Relation.AvID] = destAv
+				}
 			}
 		}
 		if nil == destAv {
 			return false
 		}
+		attrView.ApplyRelatedCustomColorRenderContext(destAv)
 
 		destKey, _ := destAv.GetKey(key.Rollup.KeyID)
 		if nil == destKey {
 			return false
 		}
+		var comparison *ViewFilter
+		if 0 < len(filter.Value.Rollup.Contents) {
+			candidate := &ViewFilter{Operator: filter.Operator, Value: filter.Value.Rollup.Contents[0]}
+			if isExactRelationFilter(candidate) {
+				if !isRollupValueList(key) || !isConfiguredRelationKey(destKey) {
+					return false
+				}
+				comparison = candidate
+			}
+		}
+		if nil == relVal || nil == relVal.Relation {
+			return nil != comparison && filterRelationRollupItems(nil, comparison)
+		}
 
 		rollupContext := rollupFurtherCollections[key.ID]
-		value.Rollup.BuildContents(destAv.KeyValues, destKey, relVal, key.Rollup.Calc, rollupContext)
+		if nil != comparison {
+			// 精确筛选按条目 ID 匹配，不能让显示值按名称去重后丢失同名条目。
+			contents := &ValueRollup{}
+			contents.BuildContents(destAv, destKey, relVal, nil, rollupContext)
+			return filterRelationRollupItems(contents.Contents, comparison)
+		}
+		value.Rollup.BuildContents(destAv, destKey, relVal, key.Rollup.Calc, rollupContext)
 		relationContentCount := len(relVal.Relation.Contents)
 		if nil != rollupContext && nil != rollupContext.EligibleItemIDs {
 			relationContentCount = 0
@@ -638,19 +738,14 @@ func (value *Value) Filter(filter *ViewFilter, attrView *AttributeView, itemID s
 					return true
 				}
 
-				for _, c := range value.Rollup.Contents {
-					if v := c.GetValByType(c.Type); nil == v || reflect.ValueOf(v).IsNil() {
-						return true
-					}
-				}
-				return false
+				return slices.ContainsFunc(value.Rollup.Contents, isRollupStoredValueEmpty)
 			} else if FilterOperatorIsNotEmpty == filter.Operator {
 				if 1 > len(value.Rollup.Contents) {
 					return false
 				}
 
 				for _, c := range value.Rollup.Contents {
-					if v := c.GetValByType(c.Type); nil != v && !reflect.ValueOf(v).IsNil() {
+					if !isRollupStoredValueEmpty(c) {
 						return true
 					}
 				}
@@ -681,7 +776,7 @@ func (value *Value) Filter(filter *ViewFilter, attrView *AttributeView, itemID s
 				}
 
 				for _, c := range value.Rollup.Contents {
-					if v := c.GetValByType(c.Type); nil != v && !reflect.ValueOf(v).IsNil() {
+					if !isRollupStoredValueEmpty(c) {
 						return false
 					}
 				}
@@ -695,12 +790,7 @@ func (value *Value) Filter(filter *ViewFilter, attrView *AttributeView, itemID s
 					return false
 				}
 
-				for _, c := range value.Rollup.Contents {
-					if v := c.GetValByType(c.Type); nil == v || reflect.ValueOf(v).IsNil() {
-						return false
-					}
-				}
-				return true
+				return !slices.ContainsFunc(value.Rollup.Contents, isRollupStoredValueEmpty)
 			}
 
 			if 1 > len(filter.Value.Rollup.Contents) {
@@ -727,19 +817,14 @@ func (value *Value) Filter(filter *ViewFilter, attrView *AttributeView, itemID s
 					return true
 				}
 
-				for _, c := range value.Rollup.Contents {
-					if v := c.GetValByType(c.Type); nil == v || reflect.ValueOf(v).IsNil() {
-						return false
-					}
-				}
-				return true
+				return !slices.ContainsFunc(value.Rollup.Contents, isRollupStoredValueEmpty)
 			} else if FilterOperatorIsNotEmpty == filter.Operator {
 				if 1 > len(value.Rollup.Contents) {
 					return true
 				}
 
 				for _, c := range value.Rollup.Contents {
-					if v := c.GetValByType(c.Type); nil != v && !reflect.ValueOf(v).IsNil() {
+					if !isRollupStoredValueEmpty(c) {
 						return false
 					}
 				}
@@ -772,10 +857,8 @@ func (value *Value) Filter(filter *ViewFilter, attrView *AttributeView, itemID s
 
 		if nil != value.Relation {
 			for _, blockID := range value.Relation.BlockIDs {
-				for _, filterBlockID := range filter.Value.Relation.BlockIDs {
-					if blockID == filterBlockID {
-						return FilterOperatorContainsAnyItem == filter.Operator
-					}
+				if slices.Contains(filter.Value.Relation.BlockIDs, blockID) {
+					return FilterOperatorContainsAnyItem == filter.Operator
 				}
 			}
 		}
@@ -966,10 +1049,21 @@ func (value *Value) Filter(filter *ViewFilter, attrView *AttributeView, itemID s
 }
 
 // isRollupFilterValueEmpty 判断汇总筛选是否缺少比较值，相对日期仅依赖相对时间配置。
+func isRollupStoredValueEmpty(value *Value) bool {
+	if nil == value || KeyTypeLocation == value.Type {
+		return value.IsEmpty()
+	}
+	v := value.GetValByType(value.Type)
+	return nil == v || reflect.ValueOf(v).IsNil()
+}
+
 func isRollupFilterValueEmpty(filter *ViewFilter) bool {
 	valueType := filter.Value.Rollup.Contents[0].Type
-	if nil != filter.RelativeDate && (KeyTypeDate == valueType || KeyTypeCreated == valueType || KeyTypeUpdated == valueType) {
+	if nil != filter.RelativeDate && (IsDateKeyType(valueType)) {
 		return false
+	}
+	if KeyTypeLocation == valueType {
+		return nil == filter.Value.Rollup.Contents[0].Text
 	}
 	v := filter.Value.GetValByType(valueType)
 	return nil == v || reflect.ValueOf(v).IsNil()
@@ -1122,6 +1216,10 @@ func (value *Value) filter(other *Value, relativeDate, relativeDate2 *RelativeDa
 		if nil != value.Email && nil != other && nil != other.Email {
 			return filterTextContent(operator, value.Email.Content, other.Email.Content)
 		}
+	case KeyTypeLocation:
+		if nil != other && nil != other.Text {
+			return filterTextContent(operator, value.String(false), other.Text.Content)
+		}
 	case KeyTypePhone:
 		if nil != value.Phone && nil != other && nil != other.Phone {
 			return filterTextContent(operator, value.Phone.Content, other.Phone.Content)
@@ -1228,8 +1326,7 @@ func (value *Value) filter(other *Value, relativeDate, relativeDate2 *RelativeDa
 	case KeyTypeRelation: // 过滤汇总字段，并且汇总目标是关联字段时才会进入该分支
 		if nil != value.Relation && 0 < len(value.Relation.Contents) && nil != value.Relation.Contents[0].Block &&
 			nil != other && nil != other.Relation && 0 < len(other.Relation.BlockIDs) {
-			filterValue := &Value{Type: KeyTypeBlock, Block: &ValueBlock{Content: other.Relation.BlockIDs[0]}}
-			return filterTextContent(operator, value.Relation.Contents[0].Block.Content, filterValue.Block.Content)
+			return filterTextContent(operator, value.Relation.Contents[0].Block.Content, other.Relation.BlockIDs[0])
 		}
 	}
 	return false
@@ -1241,7 +1338,7 @@ func filterTextContent(operator FilterOperator, valueContent, otherValueContent 
 		if "" == strings.TrimSpace(otherValueContent) {
 			return true
 		}
-		if util.SearchCaseSensitive {
+		if util.SearchCaseSensitive.Load() {
 			return valueContent == otherValueContent
 		}
 		return strings.EqualFold(valueContent, otherValueContent)
@@ -1249,7 +1346,7 @@ func filterTextContent(operator FilterOperator, valueContent, otherValueContent 
 		if "" == strings.TrimSpace(otherValueContent) {
 			return true
 		}
-		if util.SearchCaseSensitive {
+		if util.SearchCaseSensitive.Load() {
 			return valueContent != otherValueContent
 		}
 		return !strings.EqualFold(valueContent, otherValueContent)
@@ -1257,7 +1354,7 @@ func filterTextContent(operator FilterOperator, valueContent, otherValueContent 
 		if "" == strings.TrimSpace(otherValueContent) {
 			return true
 		}
-		if util.SearchCaseSensitive {
+		if util.SearchCaseSensitive.Load() {
 			return strings.Contains(valueContent, otherValueContent)
 		}
 		return strings.Contains(strings.ToLower(valueContent), strings.ToLower(otherValueContent))
@@ -1265,7 +1362,7 @@ func filterTextContent(operator FilterOperator, valueContent, otherValueContent 
 		if "" == strings.TrimSpace(otherValueContent) {
 			return true
 		}
-		if util.SearchCaseSensitive {
+		if util.SearchCaseSensitive.Load() {
 			return !strings.Contains(valueContent, otherValueContent)
 		}
 		return !strings.Contains(strings.ToLower(valueContent), strings.ToLower(otherValueContent))
@@ -1273,7 +1370,7 @@ func filterTextContent(operator FilterOperator, valueContent, otherValueContent 
 		if "" == strings.TrimSpace(otherValueContent) {
 			return true
 		}
-		if util.SearchCaseSensitive {
+		if util.SearchCaseSensitive.Load() {
 			return strings.HasPrefix(valueContent, otherValueContent)
 		}
 		return strings.HasPrefix(strings.ToLower(valueContent), strings.ToLower(otherValueContent))
@@ -1281,7 +1378,7 @@ func filterTextContent(operator FilterOperator, valueContent, otherValueContent 
 		if "" == strings.TrimSpace(otherValueContent) {
 			return true
 		}
-		if util.SearchCaseSensitive {
+		if util.SearchCaseSensitive.Load() {
 			return strings.HasSuffix(valueContent, otherValueContent)
 		}
 		return strings.HasSuffix(strings.ToLower(valueContent), strings.ToLower(otherValueContent))
@@ -1523,6 +1620,9 @@ func (filter *ViewFilter) IsValid() bool {
 	}
 
 	if FilterOperatorIsEmpty != filter.Operator && FilterOperatorIsNotEmpty != filter.Operator {
+		if KeyTypeLocation == filter.Value.Type {
+			return nil != filter.Value.Text && "" != strings.TrimSpace(filter.Value.Text.Content)
+		}
 		if KeyTypeRelation == filter.Value.Type {
 			return nil != filter.Value.Relation &&
 				(0 < len(filter.Value.Relation.BlockIDs) || 0 < len(filter.Value.Relation.Contents))
@@ -1536,7 +1636,7 @@ func (filter *ViewFilter) IsValid() bool {
 
 func (filter *ViewFilter) GetAffectValue(key *Key, addingBlockID string) (ret *Value, allowNearItem bool) {
 	if nil != filter.Value {
-		if KeyTypeTemplate == filter.Value.Type || KeyTypeRollup == filter.Value.Type || KeyTypeUpdated == filter.Value.Type || KeyTypeCreated == filter.Value.Type {
+		if HasKeyGroup(filter.Value.Type, KeyGroupNoFilterDefault) {
 			// 所有生成的数据都不设置默认值
 			return nil, false
 		}

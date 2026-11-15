@@ -1,11 +1,18 @@
 import {Constants} from "../constants";
-import {Dialog} from "../dialog";
-import {forceQuit} from "../dialog/processSystem";
+import {MobileDialog as Dialog} from "../dialog/mobileDialog";
+import {forceQuit, isHostQuitStarted} from "../dialog/processSystem";
 import {isBrowser, isKernelInContainer, isMobile} from "./functions";
 import {isInIOS, isInMobileApp} from "../protyle/util/compatibility";
+import {checkKernelConnection} from "./kernelConnection";
 
-export const kernelError = () => {
-    if (document.querySelector("#errorLog")) {
+export const kernelError = async (isObsolete = () => false) => {
+    if (isHostQuitStarted() || document.querySelector("#errorLog") || isObsolete()) {
+        return;
+    }
+    if (!isBrowser() && !isInMobileApp() && await checkKernelConnection()) {
+        return;
+    }
+    if (isHostQuitStarted() || document.querySelector("#errorLog") || isObsolete()) {
         return;
     }
     let title: string;
@@ -17,6 +24,14 @@ export const kernelError = () => {
 </div>
 <div class="b3-dialog__action">
     <button class="b3-button">${window.siyuan.languages.retry}</button>
+</div>`;
+    } else if (isInMobileApp()) {
+        title = `🍵 ${window.siyuan.languages.mobileKernelReconnecting} <small>v${Constants.SIYUAN_VERSION}</small>`;
+        content = `<div class="b3-dialog__content">
+    <div>${window.siyuan.languages.mobileKernelReconnectPrompt}</div>
+</div>
+<div class="b3-dialog__action">
+    <button class="b3-button">${window.siyuan.languages.safeQuit}</button>
 </div>`;
     } else {
         title = `💔 ${window.siyuan.languages.kernelFault0} <small>v${Constants.SIYUAN_VERSION}</small>`;

@@ -1,24 +1,15 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
 import (
+	"encoding/json"
 	"fmt"
+	"maps"
 	"regexp"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,10 +18,11 @@ import (
 	"github.com/88250/lute/ast"
 	"github.com/88250/lute/parse"
 	"github.com/siyuan-note/siyuan/kernel/treenode"
+	"github.com/siyuan-note/siyuan/kernel/util"
 )
 
 // UndoEntry 是撤销栈中的一条记录。跨文档操作（MutatedRootIDs 含多个 rootID）的 entry
-// 会以同一指针同时挂在这些 rootID 的栈上，撤销任一端时联动其它端移除引用。
+// 会以同一指针同时挂在这些 rootID 的栈上，撤销任一端时联动其他端移除引用。
 type UndoEntry struct {
 	id             string
 	doOperations   []*Operation
@@ -76,7 +68,7 @@ type UndoLog struct {
 // GlobalUndoLog 全局撤销日志单例。内存态，重启清空。
 var GlobalUndoLog = newUndoLog(64)
 
-var undoEntrySeq uint64
+var undoEntrySeq atomic.Uint64
 
 func newUndoLog(max int) *UndoLog {
 	return &UndoLog{
@@ -86,7 +78,7 @@ func newUndoLog(max int) *UndoLog {
 }
 
 func newUndoEntryID() string {
-	seq := atomic.AddUint64(&undoEntrySeq, 1)
+	seq := undoEntrySeq.Add(1)
 	return fmt.Sprintf("undo-%d-%d", time.Now().UnixNano(), seq)
 }
 
@@ -177,7 +169,7 @@ func (l *UndoLog) Undo(rootID string) *UndoEntry {
 	return entry
 }
 
-// UndoCommit 在逆操作成功执行后，联动从其它关联栈移除该 entry（按 id 匹配）。
+// UndoCommit 在逆操作成功执行后，联动从其他关联栈移除该 entry（按 id 匹配）。
 func (l *UndoLog) UndoCommit(entry *UndoEntry, rootID string) {
 	if nil == entry {
 		return
@@ -232,7 +224,7 @@ func (l *UndoLog) Redo(rootID string) *UndoEntry {
 	return entry
 }
 
-// RedoCommit 在重做成功执行后，联动把 entry 重新挂到其它关联栈顶。
+// RedoCommit 在重做成功执行后，联动把 entry 重新挂到其他关联栈顶。
 func (l *UndoLog) RedoCommit(entry *UndoEntry, rootID string) {
 	if nil == entry {
 		return
@@ -295,21 +287,30 @@ func (l *UndoLog) State(rootID string) (canUndo, canRedo bool, peekMutatedRootID
 	return
 }
 
-// Clear 清理撤销日志。rootID 非空时清该文档栈并联动移除其它栈中相关条目；为空时清空全部。
+// Clear 清理撤销日志。rootID 非空时清该文档栈并联动移除其他栈中相关条目；为空时清空全部。
 func (l *UndoLog) Clear(rootID string) {
+	l.clear(rootID)
+}
+
+// 返回状态发生变化的文档，包括联动移除跨文档记录的其他文档。
+func (l *UndoLog) clear(rootID string) (rootIDs []string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	if "" == rootID {
+		for id := range l.stacks {
+			rootIDs = append(rootIDs, id)
+		}
 		l.stacks = map[string]*undoStack{}
 		return
 	}
+	rootIDs = append(rootIDs, rootID)
 
 	s := l.stacks[rootID]
 	if nil == s {
 		return
 	}
-	// 收集该栈中所有跨文档条目的 id，联动从其它栈移除
+	// 收集该栈中所有跨文档条目的 id，联动从其他栈移除
 	linkedIDs := map[string]bool{}
 	for _, e := range s.undoStack {
 		for _, r := range e.mutatedRootIDs {
@@ -327,11 +328,68 @@ func (l *UndoLog) Clear(rootID string) {
 	}
 	delete(l.stacks, rootID)
 	for otherID, other := range l.stacks {
+		beforeUndo, beforeRedo := len(other.undoStack), len(other.redoStack)
 		for id := range linkedIDs {
 			other.undoStack = removeEntryByID(other.undoStack, id)
 			other.redoStack = removeEntryByID(other.redoStack, id)
 		}
-		_ = otherID
+		if beforeUndo != len(other.undoStack) || beforeRedo != len(other.redoStack) {
+			rootIDs = append(rootIDs, otherID)
+		}
+	}
+	return
+}
+
+// 非编辑器写盘成功后失效旧记录，并通知所有客户端更新撤销和重做状态。
+func invalidateDocumentHistory(rootID string) {
+	rootIDs := GlobalUndoLog.clear(rootID)
+	states := map[string]map[string]bool{}
+	for _, id := range rootIDs {
+		canUndo, canRedo, _ := GlobalUndoLog.State(id)
+		states[id] = map[string]bool{"canUndo": canUndo, "canRedo": canRedo}
+	}
+	event := util.NewCmdResult("transactions", 0, util.PushModeBroadcast)
+	event.Data = []*Transaction{}
+	event.Context = map[string]any{"rootIDs": rootIDs, "undoState": states}
+	util.PushEvent(event)
+}
+
+// ClearAttributeView 从各文档栈清理涉及指定数据库的整笔撤销、重做记录，保留无关记录。
+// 非编辑器事务移除绑定条目后，旧记录不能再安全地重放单元格编辑或数据库快照。
+func (l *UndoLog) ClearAttributeView(avID string) {
+	if avID == "" {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	affected := func(entry *UndoEntry) bool {
+		for _, operations := range [][]*Operation{entry.doOperations, entry.undoOperations} {
+			for _, operation := range operations {
+				if operation.AvID == avID {
+					return true
+				}
+				if conversion := operation.listConversion; conversion != nil {
+					for _, binding := range conversion.bindings {
+						if binding.avID == avID {
+							return true
+						}
+					}
+				}
+				if snapshot := operation.attributeViewFields; snapshot != nil && snapshot.changes[avID] != nil {
+					return true
+				}
+				if items := operation.attributeViewItems; items != nil && items.relatedChanges != nil &&
+					items.relatedChanges.changes[avID] != nil {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	for _, stack := range l.stacks {
+		stack.undoStack = slices.DeleteFunc(stack.undoStack, affected)
+		stack.redoStack = slices.DeleteFunc(stack.redoStack, affected)
 	}
 }
 
@@ -353,16 +411,37 @@ func removeEntryByID(stack []*UndoEntry, id string) []*UndoEntry {
 	return stack
 }
 
-// cloneOperations 深拷贝操作切片（值拷贝每个 Operation），使日志条目与后续事务解耦。
-// performTx 的 doInsert0 等会原地改写 operation.ID/Action 等标量字段，若浅拷贝指针会导致
-// 已记录的条目被改写、redo 重放时 ID 失效。值拷贝复制标量字段，Data(any) 共享引用（performTx 不改其内容）。
+// cloneOperations 复制操作及重放期间可能改写的引用字段，使日志条目与后续事务解耦。
+// Data(any) 共享引用，事务执行只会替换 Data 本身，不会修改其内部内容。
 func cloneOperations(ops []*Operation) []*Operation {
 	if nil == ops {
 		return nil
 	}
 	ret := make([]*Operation, len(ops))
 	for i, op := range ops {
-		cloned := *op // 值拷贝标量字段（ID/Action/ParentID/PreviousID/NextID/AvID 等）
+		cloned := *op
+		cloned.relationCellReplay = op.relationCellReplay.clone()
+		if op.attributeViewFields != nil {
+			state := *op.attributeViewFields
+			cloned.attributeViewFields = &state
+		}
+		if op.relationCellContext != nil {
+			context := *op.relationCellContext
+			context.SourceItemIDs = slices.Clone(op.relationCellContext.SourceItemIDs)
+			cloned.relationCellContext = &context
+		}
+		if op.relationDetailConfig != nil {
+			state := *op.relationDetailConfig
+			cloned.relationDetailConfig = &state
+			if data, ok := op.Data.(json.RawMessage); ok {
+				cloned.Data = append(json.RawMessage(nil), data...)
+			}
+		}
+		cloned.BlockIDs = cloneOperationBlockIDs(op.BlockIDs)
+		if nil != op.Context {
+			cloned.Context = make(map[string]any, len(op.Context))
+			maps.Copy(cloned.Context, op.Context)
+		}
 		ret[i] = &cloned
 	}
 	return ret
@@ -461,7 +540,7 @@ func existingReplayBlockIDs(insertIndexes, deleteIndexes map[string]int) map[str
 // ResolveReplayDuplicateIds 在 undo/redo 重放事务前解决块 ID 冲突。
 // 场景：剪切块 X 后粘贴到别处（保留原 ID），再撤销剪切会 insert X，而 X 已存在于粘贴处，产生重复 ID。
 // 这里检查实际重放的 insert 操作；若其引入的 ID 在块树中已存在，且不会被前置 delete 清理，
-// 则在当前重放操作的 ID、ParentID、PreviousID、NextID 与 Data 内联 ID 中统一替换为新 ID。
+// 则在当前重放操作的 ID、ParentID、PreviousID、NextID、BlockIDs 与 Data 内联 ID 中统一替换为新 ID。
 func ResolveReplayDuplicateIds(tx *Transaction) {
 	if nil == tx || !tx.isReplay {
 		return
@@ -508,6 +587,11 @@ func ResolveReplayDuplicateIds(tx *Transaction) {
 			}
 			if newID, ok := replacements[op.NextID]; ok {
 				op.NextID = newID
+			}
+			for i, blockID := range op.BlockIDs {
+				if newID, ok := replacements[blockID]; ok {
+					op.BlockIDs[i] = newID
+				}
 			}
 			data, ok := op.Data.(string)
 			if !ok {

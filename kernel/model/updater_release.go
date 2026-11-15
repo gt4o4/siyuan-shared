@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
@@ -39,14 +27,15 @@ import (
 )
 
 const (
-	githubReleasesURL            = "https://api.github.com/repos/siyuan-note/siyuan/releases?per_page=100"
-	githubReleaseURLPrefix       = "https://github.com/siyuan-note/siyuan/releases/tag/v"
+	githubReleasesURL            = "https://api.github.com/repos/gt4o4/siyuan-shared/releases?per_page=100"
+	githubReleaseURLPrefix       = "https://github.com/gt4o4/siyuan-shared/releases/tag/v"
 	githubAPIReleaseCacheSeconds = int64(6 * 60 * 60)
 	maxChecksumManifestSize      = int64(1024 * 1024)
 )
 
 type updateRelease struct {
 	Version    string
+	Channel    string
 	ReleaseURL string
 	Packages   map[string]*updatePackage
 }
@@ -79,10 +68,7 @@ var (
 )
 
 func getUpdateRelease(force bool) (*updateRelease, error) {
-	channel := Conf.System.UpdateChannel
-	if conf.UpdateChannelStable == channel {
-		return getStableUpdateRelease(force)
-	}
+	channel := Conf.System.Load().UpdateChannel
 	if !isValidUpdateChannel(channel) {
 		return nil, errors.New("update channel is invalid")
 	}
@@ -103,6 +89,7 @@ func getStableUpdateRelease(force bool) (*updateRelease, error) {
 
 	release := &updateRelease{
 		Version:    version,
+		Channel:    conf.UpdateChannelStable,
 		ReleaseURL: getStableReleaseURL(result, version),
 		Packages:   map[string]*updatePackage{},
 	}
@@ -114,8 +101,9 @@ func getStableUpdateRelease(force bool) (*updateRelease, error) {
 	if "" == checksum {
 		return release, nil
 	}
+	githubURL := "https://github.com/siyuan-note/siyuan/releases/download/v" + version + "/" + pkgName
 	release.Packages[pkgName] = &updatePackage{
-		URLs:     getStablePackageURLs(release.Version, pkgName),
+		URLs:     getUpdatePackageURLs(pkgName, githubURL),
 		Checksum: checksum,
 	}
 	return release, nil
@@ -147,15 +135,10 @@ func getStablePackageChecksum(result map[string]any, pkgName string) string {
 	return normalizeSHA256(checksum)
 }
 
-func getStablePackageURLs(version, pkgName string) []string {
+func getUpdatePackageURLs(pkgName, githubURL string) []string {
 	b3logURL := "https://release.b3log.org/siyuan/" + pkgName
 	liuyunURL := "https://release.liuyun.io/siyuan/" + pkgName
-	githubURL := "https://github.com/siyuan-note/siyuan/releases/download/v" + strings.TrimPrefix(version, "v") + "/" + pkgName
-	ghproxyURL := "https://ghfast.top/" + githubURL
-	if util.IsChinaCloud() {
-		return []string{b3logURL, liuyunURL, ghproxyURL, githubURL}
-	}
-	return []string{b3logURL, liuyunURL, githubURL, ghproxyURL}
+	return []string{b3logURL, liuyunURL, githubURL}
 }
 
 func getGitHubUpdateRelease(channel string, force bool) (*updateRelease, error) {
@@ -171,6 +154,7 @@ func getGitHubUpdateRelease(channel string, force bool) (*updateRelease, error) 
 	version := strings.TrimPrefix(normalizeReleaseVersion(selected.TagName), "v")
 	release := &updateRelease{
 		Version:    version,
+		Channel:    channel,
 		ReleaseURL: selected.HTMLURL,
 		Packages:   map[string]*updatePackage{},
 	}
@@ -196,7 +180,7 @@ func getGitHubUpdateRelease(channel string, force bool) (*updateRelease, error) 
 		}
 	}
 	release.Packages[pkgName] = &updatePackage{
-		URLs:     []string{asset.BrowserDownloadURL},
+		URLs:     getUpdatePackageURLs(pkgName, asset.BrowserDownloadURL),
 		Checksum: checksum,
 	}
 	return release, nil
@@ -292,7 +276,7 @@ func isReleaseAllowed(channel, version string) bool {
 }
 
 func prereleaseChannelLabel(prerelease string) string {
-	identifier := strings.SplitN(prerelease, ".", 2)[0]
+	identifier, _, _ := strings.Cut(prerelease, ".")
 	for _, channel := range []string{"alpha", "beta", "rc"} {
 		if channel == identifier {
 			return channel
@@ -416,7 +400,7 @@ func getGitHubManifestChecksum(ctx context.Context, release *githubRelease, pkgN
 }
 
 func parseChecksumManifest(manifest, pkgName string) string {
-	for _, line := range strings.Split(manifest, "\n") {
+	for line := range strings.SplitSeq(manifest, "\n") {
 		fields := strings.Fields(line)
 		if 2 > len(fields) {
 			continue

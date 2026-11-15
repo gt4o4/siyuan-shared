@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package agent
 
@@ -21,6 +9,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +17,7 @@ import (
 	"github.com/sashabaranov/go-openai"
 	mcptools "github.com/siyuan-note/siyuan/kernel/mcp/tools"
 	kernelModel "github.com/siyuan-note/siyuan/kernel/model"
+	"github.com/siyuan-note/siyuan/kernel/util"
 )
 
 const (
@@ -64,6 +54,7 @@ func mergeAgentAttachments(current []AgentAttachment, attachments []mcptools.Mod
 			)
 		}
 		added = append(added, AgentAttachment{
+			PDFImage:   attachment.PDFImage,
 			Type:       attachment.Type,
 			Data:       attachment.Data,
 			MIMEType:   attachment.MIMEType,
@@ -125,6 +116,10 @@ func buildAttachmentMessage(attachments []AgentAttachment) (openai.ChatCompletio
 		})
 	}
 	if imageCount == 0 {
+		if omitted {
+			return openai.ChatCompletionMessage{Role: openai.ChatMessageRoleUser, Content: "The requested image attachments are unavailable. Do not claim to have inspected them. " +
+				"For PDF previews, list the source PDF again before requesting a new preview; the source may have changed or become inaccessible."}, true
+		}
 		return openai.ChatCompletionMessage{}, false
 	}
 	if omitted {
@@ -151,7 +146,23 @@ func resolveAgentAttachment(attachment AgentAttachment) (data []byte, mimeType s
 		height = attachment.Height
 		return
 	}
-	prepared, prepareErr := kernelModel.PrepareDocumentImage(attachment.DocumentID, attachment.Path)
+	var prepared kernelModel.PreparedDocumentImage
+	var prepareErr error
+	if attachment.PDFImage != nil {
+		var image util.PreparedImage
+		image, prepareErr = kernelModel.PreparePDFImage(context.Background(), kernelModel.PDFImageSource{
+			DocumentID: attachment.DocumentID, Path: attachment.Path,
+		}, *attachment.PDFImage)
+		if prepareErr != nil {
+			err = prepareErr
+			return
+		}
+		return image.Data, image.MIMEType, image.Width, image.Height, nil
+	} else if attachment.DocumentID == "" {
+		prepared, prepareErr = kernelModel.PrepareAgentMessageImage(attachment.Path)
+	} else {
+		prepared, prepareErr = kernelModel.PrepareDocumentImage(attachment.DocumentID, attachment.Path)
+	}
 	if prepareErr != nil {
 		err = prepareErr
 		return
@@ -161,6 +172,28 @@ func resolveAgentAttachment(attachment AgentAttachment) (data []byte, mimeType s
 	width = prepared.Prepared.Width
 	height = prepared.Prepared.Height
 	return
+}
+
+func agentMessageAttachments(message AgentMessage) (ret []AgentAttachment) {
+	if message.Role == "user" {
+		for _, assetPath := range kernelModel.AgentMessageImageAssets(message.Content) {
+			ret = append(ret, AgentAttachment{Type: "image", Path: assetPath})
+		}
+		return
+	}
+	for _, toolCall := range message.ToolCalls {
+		ret = append(ret, toolCall.Attachments...)
+	}
+	return
+}
+
+func latestAgentMessageAttachments(messages []AgentMessage) (index int, attachments []AgentAttachment) {
+	for i, message := range slices.Backward(messages) {
+		if attachments = agentMessageAttachments(message); len(attachments) > 0 {
+			return i, attachments
+		}
+	}
+	return -1, nil
 }
 
 func chatMessageText(message openai.ChatCompletionMessage) string {
@@ -299,16 +332,14 @@ func isImageInputUnsupportedError(err error) bool {
 }
 
 func imageInputValidationError(err error) (statusCode int, detail string, ok bool) {
-	var apiErr *openai.APIError
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[*openai.APIError](err); ok {
 		detail = apiErr.Message + " " + apiErr.Type + " " + fmt.Sprint(apiErr.Code)
 		if apiErr.Param != nil {
 			detail += " " + *apiErr.Param
 		}
 		return apiErr.HTTPStatusCode, detail, true
 	}
-	var requestErr *openai.RequestError
-	if errors.As(err, &requestErr) {
+	if requestErr, ok := errors.AsType[*openai.RequestError](err); ok {
 		return requestErr.HTTPStatusCode, requestErr.Error(), true
 	}
 	return 0, "", false
@@ -323,11 +354,12 @@ func containsAny(value string, candidates ...string) bool {
 	return false
 }
 
-// createImageCompatibleStream 在上游明确拒绝图片且尚未产生输出时，使用纯文本请求投影兼容重试一次。
-func createImageCompatibleStream(
+func createProtocolImageCompatibleStream(
 	ctx context.Context,
-	client *openai.Client,
+	client *util.AIClient,
+	protocol string,
 	req openai.ChatCompletionRequest,
+	responseInput func(downgradeImages bool) []any,
 	capabilityKey string,
 	forceDowngrade bool,
 	maxRetries int,
@@ -336,7 +368,7 @@ func createImageCompatibleStream(
 	retryDelay func(string, int) time.Duration,
 	ch chan<- AgentEvent,
 ) (
-	stream *openai.ChatCompletionStream,
+	stream *util.OpenAICompletionStream,
 	firstResponse openai.ChatCompletionStreamResponse,
 	cancel context.CancelFunc,
 	requestMessages []openai.ChatCompletionMessage,
@@ -350,8 +382,12 @@ func createImageCompatibleStream(
 		requestMessages, downgraded = messagesForImageCapability(req.Messages, capabilityKey)
 	}
 	req.Messages = requestMessages
-	stream, firstResponse, cancel, err = createStreamWithRetry(
-		ctx, client, req, maxRetries, requestTimeout, streamIdleTimeout, retryDelay, ch)
+	var input []any
+	if responseInput != nil {
+		input = responseInput(downgraded)
+	}
+	stream, firstResponse, cancel, err = createProtocolStreamWithRetry(
+		ctx, client, protocol, req, input, maxRetries, requestTimeout, streamIdleTimeout, retryDelay, ch)
 	if err == nil || downgraded || !containsImageInput(requestMessages) || !isImageInputUnsupportedError(err) {
 		return
 	}
@@ -363,8 +399,11 @@ func createImageCompatibleStream(
 	}
 	fallbackReq := req
 	fallbackReq.Messages = fallbackMessages
-	stream, firstResponse, cancel, err = createStreamWithRetry(
-		ctx, client, fallbackReq, maxRetries, requestTimeout, streamIdleTimeout, retryDelay, ch)
+	if responseInput != nil {
+		input = responseInput(true)
+	}
+	stream, firstResponse, cancel, err = createProtocolStreamWithRetry(
+		ctx, client, protocol, fallbackReq, input, maxRetries, requestTimeout, streamIdleTimeout, retryDelay, ch)
 	requestMessages = fallbackMessages
 	downgraded = true
 	if err == nil {

@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package av
 
@@ -74,7 +62,6 @@ func (av *AttributeView) SetNewItemTemplates(config *NewItemTemplatesConfig) err
 			return fmt.Errorf("invalid new item template target type [%s]", itemTemplate.TargetType)
 		}
 		if NewItemTargetDocument != itemTemplate.TargetType {
-			itemTemplate.Icon = ""
 			itemTemplate.HideInFileTree = false
 		}
 		itemTemplate.ContentTemplatePath = strings.TrimSpace(itemTemplate.ContentTemplatePath)
@@ -355,6 +342,12 @@ func (av *AttributeView) normalizeNewItemTemplateFieldValues(itemTemplate *NewIt
 
 func normalizeNewItemTemplateValue(value *Value, key *Key) (*Value, error) {
 	value = value.Clone()
+	if nil == value {
+		return nil, errors.New("invalid template value")
+	}
+	if KeyTypeLocation != key.Type {
+		value.Location = nil
+	}
 	switch key.Type {
 	case KeyTypeText:
 		if nil == value.Text {
@@ -393,6 +386,14 @@ func normalizeNewItemTemplateValue(value *Value, key *Key) (*Value, error) {
 			return nil, errors.New("email value is missing")
 		}
 		value.Text, value.Number, value.Date, value.MSelect, value.URL, value.Phone, value.MAsset, value.Checkbox, value.Relation = nil, nil, nil, nil, nil, nil, nil, nil, nil
+	case KeyTypeLocation:
+		if nil == value.Location {
+			return nil, errors.New("location value is missing")
+		}
+		if err := value.Location.Normalize(); nil != err {
+			return nil, err
+		}
+		value.Text, value.Number, value.Date, value.MSelect, value.URL, value.Email, value.Phone, value.MAsset, value.Checkbox, value.Relation = nil, nil, nil, nil, nil, nil, nil, nil, nil, nil
 	case KeyTypePhone:
 		if nil == value.Phone {
 			return nil, errors.New("phone value is missing")
@@ -457,12 +458,7 @@ func normalizeNewItemTemplateValue(value *Value, key *Key) (*Value, error) {
 }
 
 func isNewItemTemplateEditableKeyType(keyType KeyType) bool {
-	switch keyType {
-	case KeyTypeText, KeyTypeNumber, KeyTypeDate, KeyTypeSelect, KeyTypeMSelect, KeyTypeURL, KeyTypeEmail,
-		KeyTypePhone, KeyTypeMAsset, KeyTypeCheckbox, KeyTypeRelation:
-		return true
-	}
-	return false
+	return GetKeyCapability(keyType).Editable && keyType != KeyTypeBlock
 }
 
 func cloneNewItemTemplate(itemTemplate *NewItemTemplate) *NewItemTemplate {
@@ -477,6 +473,10 @@ func cloneNewItemTemplate(itemTemplate *NewItemTemplate) *NewItemTemplate {
 		PrimaryKeyTemplate:  itemTemplate.PrimaryKeyTemplate,
 		ContentTemplatePath: itemTemplate.ContentTemplatePath,
 		HideInFileTree:      itemTemplate.HideInFileTree,
+		OpenInCurrentTab:    itemTemplate.OpenInCurrentTab,
+	}
+	if nil != itemTemplate.OpenAfterCreate {
+		ret.OpenAfterCreate = new(*itemTemplate.OpenAfterCreate)
 	}
 	if nil != itemTemplate.SaveLocation {
 		ret.SaveLocation = &NewItemSaveLocation{

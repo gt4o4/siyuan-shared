@@ -7,7 +7,7 @@
 		"id": "20210808180321-hbvl5c2",
 		"title": "通用操作",
 		"type": "doc",
-		"updated": "20260614114901"
+		"updated": "20261016191102"
 	},
 	"Children": [
 		{
@@ -253,7 +253,7 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20240507235827-iguozve",
-				"updated": "20240507235827"
+				"updated": "20260809232000"
 			},
 			"Children": [
 				{
@@ -261,7 +261,7 @@
 					"TextMarkType": "block-ref",
 					"TextMarkBlockRefID": "20210331200042-94gs1hh",
 					"TextMarkBlockRefSubtype": "d",
-					"TextMarkTextContent": "超链接"
+					"TextMarkTextContent": "块超链接"
 				}
 			]
 		},
@@ -351,6 +351,23 @@
 			]
 		},
 		{
+			"ID": "20260903150000-r25yic3",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20260903150000-r25yic3",
+				"updated": "20260903150000"
+			},
+			"Children": [
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "block-ref",
+					"TextMarkBlockRefID": "20260903150000-u4065fm",
+					"TextMarkBlockRefSubtype": "d",
+					"TextMarkTextContent": "连接远程内核"
+				}
+			]
+		},
+		{
 			"ID": "20240507235849-l7rtlvx",
 			"Type": "NodeParagraph",
 			"Properties": {
@@ -406,7 +423,7 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20240507235859-ys2qt7e",
-				"updated": "20240507235859"
+				"updated": "20260809232000"
 			},
 			"Children": [
 				{
@@ -414,7 +431,7 @@
 					"TextMarkType": "block-ref",
 					"TextMarkBlockRefID": "20230104144904-39br4c6",
 					"TextMarkBlockRefSubtype": "d",
-					"TextMarkTextContent": "分享文档"
+					"TextMarkTextContent": "分享文档到社区"
 				}
 			]
 		},
@@ -466,6 +483,57 @@
 					"TextMarkBlockRefID": "20260614104254-4ifhixg",
 					"TextMarkBlockRefSubtype": "d",
 					"TextMarkTextContent": "网络代理"
+				}
+			]
+		},
+		{
+			"ID": "20261016191102-1pn7jpz",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261016191102-1pn7jpz",
+				"updated": "20261016191102"
+			},
+			"Children": [
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "block-ref",
+					"TextMarkBlockRefID": "20260804190000-oidccn1",
+					"TextMarkBlockRefSubtype": "d",
+					"TextMarkTextContent": "OIDC 登录"
+				}
+			]
+		},
+		{
+			"ID": "20261016191102-ef23phm",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261016191102-ef23phm",
+				"updated": "20261016191102"
+			},
+			"Children": [
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "block-ref",
+					"TextMarkBlockRefID": "20260804185000-secvr01",
+					"TextMarkBlockRefSubtype": "d",
+					"TextMarkTextContent": "密钥和变量"
+				}
+			]
+		},
+		{
+			"ID": "20261016191102-mraox6b",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261016191102-mraox6b",
+				"updated": "20261016191102"
+			},
+			"Children": [
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "block-ref",
+					"TextMarkBlockRefID": "20260907120000-crycn01",
+					"TextMarkBlockRefSubtype": "d",
+					"TextMarkTextContent": "加密笔记本"
 				}
 			]
 		}

@@ -1,24 +1,11 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
 import (
 	"sort"
-	"strings"
 
 	"github.com/88250/lute"
 	"github.com/88250/lute/ast"
@@ -36,6 +23,10 @@ type backlinkParentMapping struct {
 }
 
 func buildBacklinkParentMappings(refBlocks []*Block, boxID string) (ret []*backlinkParentMapping) {
+	return buildBacklinkParentMappingsWithDocumentGrouping(refBlocks, boxID, true)
+}
+
+func buildBacklinkParentMappingsWithDocumentGrouping(refBlocks []*Block, boxID string, groupDocuments bool) (ret []*backlinkParentMapping) {
 	parentRefParagraphs := map[string][]*Block{}
 	var paragraphParentIDs []string
 	for _, refBlock := range refBlocks {
@@ -52,13 +43,35 @@ func buildBacklinkParentMappings(refBlocks []*Block, boxID string) (ret []*backl
 
 	luteEngine := util.NewLute()
 	treeCache := map[string]*parse.Tree{}
+	return buildBacklinkParentMappingsForSources(refBlocks, parentRefParagraphs, paragraphParents, groupDocuments,
+		func(parent *Block, refs []*Block) *Block {
+			return selectBacklinkParentRef(parent, refs, boxID, luteEngine, treeCache)
+		}, func(parent *Block) map[string]bool {
+			return backlinkHeadingCoveredIDs(parent, boxID, treeCache)
+		})
+}
+
+// 查询反链与事务内收集共享归并过程，调用方提供同一快照中的父块和标题覆盖范围。
+func buildBacklinkParentMappingsForSources(refBlocks []*Block, parentRefParagraphs map[string][]*Block,
+	paragraphParents []*Block, groupDocuments bool, selectRef func(*Block, []*Block) *Block,
+	headingCoveredIDsFor func(*Block) map[string]bool) (ret []*backlinkParentMapping) {
+	titleRefIDs := map[string]bool{}
+	for _, refBlock := range refBlocks {
+		if refBlock != nil && refBlock.Type == "NodeDocument" {
+			titleRefIDs[refBlock.ID] = true
+		}
+	}
 	var mappings []*backlinkParentMapping
 	for _, parent := range paragraphParents {
-		if nil == parent {
+		if nil == parent || !groupDocuments && "NodeDocument" == parent.Type {
+			continue
+		}
+		// 标题引用使用文档根 ID，正文不能再合并到同一条目而覆盖其独立来源。
+		if parent.Type == "NodeDocument" && titleRefIDs[parent.ID] {
 			continue
 		}
 
-		refBlock := selectBacklinkParentRef(parent, parentRefParagraphs[parent.ID], boxID, luteEngine, treeCache)
+		refBlock := selectRef(parent, parentRefParagraphs[parent.ID])
 		if nil == refBlock {
 			continue
 		}
@@ -90,7 +103,7 @@ func buildBacklinkParentMappings(refBlocks []*Block, boxID string) (ret []*backl
 			continue
 		}
 
-		mapping.coveredIDs = backlinkHeadingCoveredIDs(mapping.parent, boxID, treeCache)
+		mapping.coveredIDs = headingCoveredIDsFor(mapping.parent)
 		for _, refBlock := range refBlocks {
 			if nil != refBlock && mapping.coveredIDs[refBlock.ID] {
 				mapping.coveredRefIDs[refBlock.ID] = true
@@ -189,18 +202,7 @@ func isPureBlockRefParagraph(block *Block, luteEngine *lute.Lute) bool {
 		return false
 	}
 
-	hasBlockRef := false
-	for node := inlineTree.Root.FirstChild.FirstChild; nil != node; node = node.Next {
-		if treenode.IsBlockRef(node) {
-			hasBlockRef = true
-			continue
-		}
-		if ast.NodeText == node.Type && "" == strings.TrimSpace(node.Text()) {
-			continue
-		}
-		return false
-	}
-	return hasBlockRef
+	return isPureBacklinkReferenceNode(inlineTree.Root.FirstChild)
 }
 
 func isFirstBacklinkParentParagraph(refBlock, parent *Block, boxID string, treeCache map[string]*parse.Tree) bool {

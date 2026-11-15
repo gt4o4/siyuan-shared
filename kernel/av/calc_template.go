@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package av
 
@@ -41,11 +29,11 @@ func buildRollupTemplateContext(values []float64, strs []string, raw []*Value) m
 	}
 
 	var nonEmptyCount int
-	var sum float64
+	var sum decimalSum
 	minVal := math.MaxFloat64
 	maxVal := -math.MaxFloat64
 	for _, v := range values {
-		sum += v
+		sum.add(v)
 		if v < minVal {
 			minVal = v
 		}
@@ -54,10 +42,10 @@ func buildRollupTemplateContext(values []float64, strs []string, raw []*Value) m
 		}
 		nonEmptyCount++
 	}
-	ctx["sum"] = sum
+	ctx["sum"] = sum.float64()
 	ctx["nonEmptyCount"] = nonEmptyCount
 	if 0 < nonEmptyCount {
-		ctx["avg"] = sum / float64(nonEmptyCount)
+		ctx["avg"] = sum.average(nonEmptyCount)
 		ctx["min"] = minVal
 		ctx["max"] = maxVal
 
@@ -65,7 +53,7 @@ func buildRollupTemplateContext(values []float64, strs []string, raw []*Value) m
 		copy(sorted, values)
 		sort.Float64s(sorted)
 		if 0 == nonEmptyCount%2 {
-			ctx["median"] = (sorted[nonEmptyCount/2-1] + sorted[nonEmptyCount/2]) / 2
+			ctx["median"] = numberMean(sorted[nonEmptyCount/2-1], sorted[nonEmptyCount/2])
 		} else {
 			ctx["median"] = sorted[nonEmptyCount/2]
 		}
@@ -143,7 +131,7 @@ func collectFieldValues(collection Collection, fieldIndex int) (nums []float64, 
 				raw = append(raw, &Value{Type: KeyTypeMAsset, MAsset: []*ValueAsset{ast}})
 			}
 		default:
-			val, _ := util.Convert2Float(v.String(false))
+			val := calculationNumber(v)
 			nums = append(nums, val)
 			strs = append(strs, v.String(false))
 			raw = append(raw, v)

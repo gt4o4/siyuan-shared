@@ -29,10 +29,12 @@ const dragoverScroll: {
     element?: Element,
     space?: number, // -1 向上或向左；1 向下或向右
     direction?: "x" | "y",
-    lastTime?: number
+    lastTime?: number,
+    canContinue?: () => boolean
 } = {};
 
 export const stopScrollAnimation = () => {
+    dragoverScroll.canContinue = undefined;
     if (dragoverScroll.animationId) {
         cancelAnimationFrame(dragoverScroll.animationId);
         dragoverScroll.animationId = null;
@@ -44,6 +46,10 @@ export const stopScrollAnimation = () => {
 };
 
 const scrollAnimation = (timestamp: number) => {
+    if (dragoverScroll.canContinue && !dragoverScroll.canContinue()) {
+        stopScrollAnimation();
+        return;
+    }
     if (!dragoverScroll.lastTime) {
         dragoverScroll.lastTime = timestamp - 8;
     }
@@ -58,7 +64,8 @@ const scrollAnimation = (timestamp: number) => {
     dragoverScroll.lastTime = timestamp;
 };
 
-export const dragOverScroll = (moveEvent: MouseEvent, contentRect: DOMRect, element: Element, direction: "x" | "y" = "y") => {
+export const dragOverScroll = (moveEvent: Pick<MouseEvent, "clientX" | "clientY">, contentRect: DOMRect,
+                               element: Element, direction: "x" | "y" = "y", canContinue?: () => boolean) => {
     const clientPosition = direction === "x" ? moveEvent.clientX : moveEvent.clientY;
     const start = direction === "x" ? contentRect.left : contentRect.top;
     const end = direction === "x" ? contentRect.right : contentRect.bottom;
@@ -68,6 +75,7 @@ export const dragOverScroll = (moveEvent: MouseEvent, contentRect: DOMRect, elem
             (dragoverScroll.element !== element || dragoverScroll.direction !== direction)) {
             stopScrollAnimation();
         }
+        dragoverScroll.canContinue = canContinue;
         dragoverScroll.space = dragToStart ? clientPosition - start - Constants.SIZE_SCROLL_TB :
             clientPosition - end + Constants.SIZE_SCROLL_TB;
         if (!dragoverScroll.animationId) {

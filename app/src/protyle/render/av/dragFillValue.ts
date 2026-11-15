@@ -1,3 +1,6 @@
+import {createAVLocationReplacement} from "./locationValue";
+import {genEmptyAVCellValue} from "./cellValue";
+
 interface IAVCellValueTarget {
     id: string;
     keyID: string;
@@ -5,16 +8,21 @@ interface IAVCellValueTarget {
 }
 
 export const rebindAVCellValue = (source: IAVCellValue, target: IAVCellValueTarget) => {
-    const value = JSON.parse(JSON.stringify(source)) as IAVCellValue & {
+    const value = JSON.parse(JSON.stringify(source,
+        (key, item) => key === "renderedContent" ? undefined : item)) as IAVCellValue & {
         createdAt?: number;
         updatedAt?: number;
     };
     value.id = target.id;
     value.keyID = target.keyID;
     value.blockID = target.blockID;
+    if (value.type === "location") {
+        value.location = createAVLocationReplacement(value.location);
+    }
     delete value.createdAt;
     delete value.updatedAt;
     return value;
 };
 
-export const genAVDragFillValue = rebindAVCellValue;
+export const genAVDragFillValue = (source: IAVCellValue, target: IAVCellValueTarget) =>
+    rebindAVCellValue({...genEmptyAVCellValue(source.type), ...source}, target);

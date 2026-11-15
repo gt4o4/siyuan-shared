@@ -1,4 +1,9 @@
-import {focusBlock, focusByRange, getRangeByPoint} from "./selection";
+import {hasAVKeyGroup} from "../render/av/capabilities";
+import {dropSubItems} from "../render/av/subItemsDrag";
+import type {FileTreeGetDocRequestInput} from "../../types/api";
+import {cleanupDragIndicators, createListDragTarget} from "./listDragTarget";
+import {focusBlock, getRangeByPoint} from "./selection";
+import {focusByRange} from "./selectionOffsets";
 import {
     getContenteditableElement,
     getNextBlockSibling,
@@ -22,12 +27,13 @@ import {
     cancelSB,
     genEmptyElement,
     genSBElement,
+    getCancelSBOperations,
     insertEmptyBlock,
     refreshSbAndPersistWidth,
     refreshSbResize
 } from "../../block/util";
 import {transaction, turnsIntoOneTransaction} from "../wysiwyg/transaction";
-import {updateListOrder} from "../wysiwyg/list";
+import {getOrderedListStart, updateListOrder} from "../wysiwyg/list";
 import {fetchPost, fetchSyncPost} from "../../util/fetch";
 import {onGet} from "./onGet";
 /// #if !MOBILE
@@ -36,40 +42,62 @@ import {updatePanelByEditor} from "../../editor/util";
 /// #endif
 import {blockRender} from "../render/blockRender";
 /// #else
-import {uploadFiles, uploadLocalFiles} from "../upload";
+import {uploadLocalFiles} from "../upload";
+import {getLocalDropFiles, hasDataTransferFiles} from "../upload/localDropFiles";
 import {insertHTML} from "./insertHTML";
 import {isBrowser} from "../../util/functions";
 import {hideElements} from "../ui/hideElements";
 import {insertAttrViewBlockAnimation} from "../render/av/row";
-import * as dayjs from "dayjs";
+import dayjs from "dayjs";
 import {zoomOut} from "../../menus/protyle";
+import {isFoldedHeading, shouldUnfoldMovedHeading} from "./foldHeadingMove";
 /// #if !BROWSER
 import {webUtils} from "electron";
 import {dragUpload} from "../render/av/asset";
 /// #endif
+import {dragUploadFiles} from "../render/av/asset";
 import {addDragFill, getTypeByCellElement} from "../render/av/cell";
 import {insertGalleryItemAnimation} from "../render/av/gallery/item";
 import {clearSelect} from "./clear";
 import {dragoverTab} from "../render/av/view";
 import {setFold} from "./blockFold";
 import {isEncryptedBox} from "../../util/pathName";
+import {getHostCapabilities} from "../../util/hostCapabilities";
 import {
     getAVRowDropTarget,
+    getBlockDragInsertPosition,
+    getBlockDragoverTarget,
+    getMissingDragIds,
     getSameSuperBlockEdgeTarget,
+    getSuperBlockResizeDropTarget,
+    getTabsContentDropTarget,
     getTopListDragTarget,
     isAttributeViewTitleTarget,
+    isCopyBlockDrag,
+    isFragmentBlockDrag,
     isDragTargetInSource,
     isSameDragEditor,
     isSameSiblingMove,
+    parseBlockDragData,
     replaceDragUndoOperation,
     shouldKeepListBlockDragTarget,
     uniqueDragIds
 } from "./dragDocument";
 import {getAVFilteredTipContext, getAVViewID} from "../render/av/filteredTip";
-import {getAVSelectedItemPoints, updateAVRowSelect} from "../render/av/virtualScroll";
-import {setAVItemAnchor} from "../render/av/rangeSelect";
+import {getAVData, getAVPreviousItemID, getAVSelectedItemPoints} from "../render/av/virtualScroll";
+import {getCaretRect} from "./caretRect";
+import {isBlockRefDropTargetDisabled} from "./blockRefDrop";
+import {appendCancelSuperBlockOperations} from "../../block/cancelSuperBlock";
+import {preserveTabTask, remapTabsDOMIDs} from "./tabsCopy";
+import {remapListMindmapIDs} from "../render/listMindmap/model";
+import {getTabItems, getTabTask} from "../render/tabsRender";
+import {repairActiveTab} from "../wysiwyg/tabsRemoval";
+import {sortAVRows} from "../render/av/rowSort";
 
 const KANBAN_GROUP_DRAG_TYPE = `${Constants.SIYUAN_DROP_GUTTER}NodeAttributeView${Constants.ZWSP}Group${Constants.ZWSP}`;
+const SHIFT_EMBED_INSERT_TARGET_TYPES = ["NodeParagraph", "NodeHeading", "NodeCodeBlock", "NodeAttributeView"];
+const DRAG_SOURCE_NOTEBOOK_ID = "data-drag-source-notebook-id";
+const DRAG_SOURCE_ROOT_ID = "data-drag-source-root-id";
 
 const convertListItemSubtype = (listItem: Element, subtype: string) => {
     const actionElement = listItem.querySelector(".protyle-action");
@@ -105,13 +133,26 @@ const getTargetListItem = (targetElement: Element, isBottom: boolean) => {
     return targetElement.closest(".li") as HTMLElement;
 };
 
-const isFoldedHeading = (element: Element) => {
-    return element.getAttribute("data-type") === "NodeHeading" && element.getAttribute("fold") === "1";
-};
-
 type TDragSourcePosition = {
+    nextID?: string,
     previousID: string,
     parentID: string
+};
+
+const getDragSourceNextID = (element: Element, sources: Element[]) => {
+    let current = element;
+    while (current) {
+        let next = getNextBlockSibling(current);
+        // 折叠标题下辖块与其他源块都会移动，撤销锚点必须留在原容器中。
+        while (next && shouldUnfoldMovedHeading(current, next)) {
+            next = getNextBlockSibling(next);
+        }
+        if (!next || !sources.includes(next)) {
+            return next?.getAttribute("data-node-id") || "";
+        }
+        current = next;
+    }
+    return "";
 };
 
 type TDragSourceContainerSnapshot = {
@@ -149,15 +190,58 @@ const getDragSourceParentID = async (protyle: IProtyle, element: Element) => {
     if (sourceRootID) {
         return sourceRootID;
     }
+    const dragSourceElement = element.closest(`[${DRAG_SOURCE_ROOT_ID}]`);
+    sourceRootID = dragSourceElement?.getAttribute(DRAG_SOURCE_ROOT_ID) || "";
+    if (sourceRootID) {
+        return sourceRootID;
+    }
     const response = await fetchSyncPost("/api/block/getBlockInfo", {
-        id: element.getAttribute("data-node-id")
+        id: element.getAttribute("data-node-id"),
+        notebook: dragSourceElement?.getAttribute(DRAG_SOURCE_NOTEBOOK_ID) || "",
     });
-    return response?.data?.rootID || "";
+    return response.code === 0 ? response.data.rootID : "";
+};
+
+const cancelDetachedSourceSB = async (nodeElement: Element, excludedChildIDs: Set<string>) => {
+    const sourceElement = nodeElement.closest(`[${DRAG_SOURCE_ROOT_ID}]`);
+    const notebookID = sourceElement?.getAttribute(DRAG_SOURCE_NOTEBOOK_ID) || "";
+    const relevantIDs = await fetchSyncPost("/api/block/getBlockRelevantIDs", {
+        id: nodeElement.getAttribute("data-node-id"),
+        notebook: notebookID,
+    });
+    if (relevantIDs.code !== 0) {
+        throw new Error(relevantIDs.msg);
+    }
+    const operationData = await getCancelSBOperations(nodeElement, {
+        notebookID,
+        previousID: relevantIDs.data.previousID,
+        parentID: relevantIDs.data.parentID || sourceElement?.getAttribute(DRAG_SOURCE_ROOT_ID) || "",
+        fallbackParentID: sourceElement?.getAttribute(DRAG_SOURCE_ROOT_ID) || "",
+        excludedChildIDs,
+    });
+    if (operationData.doOperations.length > 0) {
+        nodeElement.querySelectorAll(".sb__resize").forEach(handle => handle.remove());
+        nodeElement.lastElementChild.remove();
+        nodeElement.replaceWith(...nodeElement.children);
+    }
+    return operationData;
+};
+
+const cancelDragSourceSB = async (nodeElement: Element, excludedChildIDs: Set<string>) => {
+    /// #if !MOBILE
+    const sourceProtyleElement = hasClosestByClassName(nodeElement, "protyle", true);
+    const sourceEditor = getAllEditor().find(item => item.protyle.element === sourceProtyleElement);
+    if (sourceEditor) {
+        return cancelSB(sourceEditor.protyle, nodeElement);
+    }
+    /// #endif
+    return cancelDetachedSourceSB(nodeElement, excludedChildIDs);
 };
 
 const wrapInRowSB = async (protyle: IProtyle, elements: Element[]) => {
     const firstElement = elements[0];
     const sourcePosition: TDragSourcePosition = {
+        nextID: getDragSourceNextID(firstElement, elements),
         previousID: getPreviousBlockSibling(firstElement)?.getAttribute("data-node-id") || "",
         parentID: await getDragSourceParentID(protyle, firstElement)
     };
@@ -217,7 +301,10 @@ const moveTo = async (protyle: IProtyle, sourceElements: Element[], targetElemen
     const doOperations: IOperation[] = [];
     const undoOperations: IOperation[] = [];
     const copyFoldHeadingIds: { newId: string, oldId: string }[] = [];
-    const targetId = targetElement.getAttribute("data-node-id");
+    const removedSourceIDs = new Set(sourceElements.map(item => item.getAttribute("data-node-id"))
+        .filter((id): id is string => !!id));
+    const targetId = targetElement.classList.contains("tab-item-content") ?
+        targetElement.parentElement.getAttribute("data-node-id") : targetElement.getAttribute("data-node-id");
     const newSourceElements: Element[] = [];
     let tempTargetElement = targetElement;
     let isSameLi = true;
@@ -229,7 +316,26 @@ const moveTo = async (protyle: IProtyle, sourceElements: Element[], targetElemen
     });
     let newListElement: Element;
     let newListId: string;
-    const orderListElements: { [key: string]: Element } = {};
+    let tabsPlaceholderID: string;
+    const orderListElements: { [key: string]: { element: Element, start?: number } } = {};
+    const sourceTabs = new Map<HTMLElement, {ids: string[], active: string}>();
+    const sourceTabItems = new Set<HTMLElement>();
+    if (!isCopy) {
+        sourceElements.forEach(item => {
+            const tabItem = item.closest<HTMLElement>(".tab-item");
+            if (tabItem?.parentElement?.getAttribute("data-type") === "NodeTabs") {
+                sourceTabItems.add(tabItem);
+            }
+        });
+        sourceElements.filter(item => item.getAttribute("data-type") === "NodeTabItem").forEach(item => {
+            const tabs = item.parentElement;
+            if (tabs.getAttribute("data-type") !== "NodeTabs") {
+                return;
+            }
+            sourceTabs.set(tabs, {ids: getTabItems(tabs).map(tab => tab.dataset.nodeId),
+                active: tabs.getAttribute("tabs-active-id")});
+        });
+    }
     // 在 DOM 移动前显式捕获每个源块的位置，供 undoOperations 使用。
     // 不能依赖循环内 getParentBlock(item)（移动后 item 的父已变），否则撤销会移到错误位置。
     // 关键：对于文档顶层块，getParentBlock 返回 .protyle-wysiwyg 容器（无 data-node-id），
@@ -239,6 +345,7 @@ const moveTo = async (protyle: IProtyle, sourceElements: Element[], targetElemen
             const id = item.getAttribute("data-node-id");
             if (id && !sourcePositions.has(id)) {
                 sourcePositions.set(id, {
+                    nextID: getDragSourceNextID(item, sourceElements),
                     previousID: getPreviousBlockSibling(item)?.getAttribute("data-node-id") || "",
                     parentID: await getDragSourceParentID(protyle, item)
                 });
@@ -250,16 +357,33 @@ const moveTo = async (protyle: IProtyle, sourceElements: Element[], targetElemen
         const originalSubtype = item.getAttribute("data-subtype");
         const id = item.getAttribute("data-node-id");
         const parentID = getParentBlock(item).getAttribute("data-node-id") || protyle.block.parentID || protyle.block.rootID;
-        if (item.getAttribute("data-type") === "NodeListItem" && !newListId && !isSameLi) {
+        const isTabItem = item.getAttribute("data-type") === "NodeTabItem";
+        const targetParent = position === "afterbegin" ? targetElement : targetElement.parentElement;
+        const inheritedTask = isTabItem && item.parentElement !== targetParent && !item.hasAttribute("tabs-task") ?
+            getTabTask(item) : null;
+        const needsTabs = isTabItem && (position === "afterbegin" ?
+            targetElement.getAttribute("data-type") !== "NodeTabs" :
+            targetElement.parentElement.getAttribute("data-type") !== "NodeTabs");
+        if (!newListId && (needsTabs || (item.getAttribute("data-type") === "NodeListItem" && !isSameLi))) {
             newListId = Lute.NewNodeID();
             newListElement = document.createElement("div");
-            newListElement.innerHTML = `<div data-subtype="${item.getAttribute("data-subtype")}" data-node-id="${newListId}" data-type="NodeList" class="list"><div class="protyle-attr" contenteditable="false">${Constants.ZWSP}</div></div>`;
+            newListElement.innerHTML = needsTabs ?
+                `<div data-node-id="${newListId}" data-type="NodeTabs" class="tabs"><div class="protyle-attr" contenteditable="false">${Constants.ZWSP}</div></div>` :
+                `<div data-subtype="${item.getAttribute("data-subtype")}" data-node-id="${newListId}" data-type="NodeList" class="list"><div class="protyle-attr" contenteditable="false">${Constants.ZWSP}</div></div>`;
             newListElement = newListElement.firstElementChild;
+            if (needsTabs) {
+                const template = document.createElement("template");
+                template.innerHTML = protyle.lute.Md2BlockDOM("::: tabs\n@tab\n\n:::\n");
+                const placeholder = template.content.querySelector<HTMLElement>(".tab-item");
+                tabsPlaceholderID = placeholder.dataset.nodeId;
+                newListElement.prepend(placeholder);
+            }
             doOperations.push({
                 action: "insert",
                 data: newListElement.outerHTML,
                 id: newListId,
-                previousID: position === "afterbegin" ? null : (position === "afterend" ? targetId : getPreviousBlockSibling(tempTargetElement)?.getAttribute("data-node-id")),
+                nextID: position === "beforebegin" ? tempTargetElement.getAttribute("data-node-id") : undefined,
+                previousID: position === "afterend" ? targetId : undefined,
                 parentID: position === "afterbegin" ? targetId : (getParentBlock(tempTargetElement)?.getAttribute("data-node-id") || protyle.block.parentID || protyle.block.rootID),
             });
             undoOperations.push({
@@ -279,6 +403,7 @@ const moveTo = async (protyle: IProtyle, sourceElements: Element[], targetElemen
 
         let copyElement;
         let undoMoveOperation: IOperation;
+        const moveGroupID = Lute.NewNodeID();
         if (isCopy) {
             undoOperations.push({
                 action: "delete",
@@ -286,12 +411,14 @@ const moveTo = async (protyle: IProtyle, sourceElements: Element[], targetElemen
             });
         } else {
             // 用 DOM 移动前预捕获的源位置构造撤销操作，避免移动后 item 的父/兄弟已变导致撤销移到错误位置
-            const srcPos = sourcePositions.get(id) || {previousID: "", parentID};
+            const srcPos = sourcePositions.get(id) || {nextID: "", previousID: "", parentID};
             undoMoveOperation = {
                 action: "move",
                 id,
+                nextID: srcPos.nextID,
                 previousID: srcPos.previousID,
                 parentID: srcPos.parentID,
+                context: {moveGroupID},
             };
             undoOperations.push(undoMoveOperation);
         }
@@ -304,12 +431,17 @@ const moveTo = async (protyle: IProtyle, sourceElements: Element[], targetElemen
         }
         if (isCopy) {
             copyElement = item.cloneNode(true) as HTMLElement;
+            preserveTabTask(item, copyElement);
+            const copiedIDs = new Map<string, string>([[id, copyNewId]]);
             copyElement.setAttribute("data-node-id", copyNewId);
             copyElement.querySelectorAll("[data-node-id]").forEach((e) => {
                 const newId = Lute.NewNodeID();
+                copiedIDs.set(e.getAttribute("data-node-id"), newId);
                 e.setAttribute("data-node-id", newId);
                 e.setAttribute("updated", newId.split("-")[0]);
             });
+            remapTabsDOMIDs(copyElement, copiedIDs);
+            remapListMindmapIDs(copyElement, copiedIDs);
             const targetSubtype = targetElement.getAttribute("data-subtype");
             if (copyElement.getAttribute("data-type") === "NodeListItem" &&
                 targetElement.getAttribute("data-type") === "NodeListItem" && targetSubtype &&
@@ -330,7 +462,8 @@ const moveTo = async (protyle: IProtyle, sourceElements: Element[], targetElemen
                     action: "insert",
                     id: copyNewId,
                     data: copyElement.outerHTML,
-                    previousID: position === "afterbegin" ? null : (position === "afterend" ? targetId : getPreviousBlockSibling(copyElement)?.getAttribute("data-node-id")), // 不能使用常量，移动后会被修改
+                    nextID: position === "beforebegin" ? tempTargetElement.getAttribute("data-node-id") : undefined,
+                    previousID: position === "afterend" ? targetId : undefined,
                     parentID: position === "afterbegin" ? targetId : (getParentBlock(copyElement)?.getAttribute("data-node-id") || protyle.block.parentID || protyle.block.rootID),
                 });
                 newSourceElements.push(copyElement);
@@ -339,7 +472,7 @@ const moveTo = async (protyle: IProtyle, sourceElements: Element[], targetElemen
             let topSourceElement = getTopAloneElement(item);
             const oldSourceParentElement = getParentBlock(item);
             const sourceContainerSnapshots = new Map<Element, TDragSourceContainerSnapshot>();
-            if (topSourceElement !== item && item.getAttribute("data-type") === "NodeListItem") {
+            if (topSourceElement !== item) {
                 let sourceContainer = oldSourceParentElement;
                 while (sourceContainer) {
                     const sourceContainerID = sourceContainer.getAttribute("data-node-id");
@@ -347,10 +480,9 @@ const moveTo = async (protyle: IProtyle, sourceElements: Element[], targetElemen
                         const sourceContainerClone = sourceContainer.cloneNode(true) as Element;
                         const movedItemClone = sourceContainerClone.querySelector(`[data-node-id="${id}"]`);
                         if (movedItemClone) {
-                            const placeholderElement = genDragListItemPlaceholder(
-                                protyle.lute,
-                                movedItemClone.getAttribute("data-subtype")
-                            );
+                            const placeholderElement = item.getAttribute("data-type") === "NodeListItem" ?
+                                genDragListItemPlaceholder(protyle.lute, movedItemClone.getAttribute("data-subtype")) :
+                                genEmptyElement(false, false, Lute.NewNodeID());
                             const placeholderID = placeholderElement?.getAttribute("data-node-id");
                             if (!placeholderElement || !placeholderID) {
                                 break;
@@ -375,7 +507,19 @@ const moveTo = async (protyle: IProtyle, sourceElements: Element[], targetElemen
                 }
             }
             if (item.classList.contains("li") && item.getAttribute("data-subtype") === "o") {
-                orderListElements[item.parentElement.getAttribute("data-node-id")] = item.parentElement;
+                const listElement = item.parentElement;
+                const listID = listElement.getAttribute("data-node-id");
+                if (listID && !orderListElements[listID]) {
+                    orderListElements[listID] = {
+                        element: listElement,
+                        start: getOrderedListStart(listElement),
+                    };
+                }
+            }
+            if (inheritedTask !== null) {
+                item.setAttribute("tabs-task", inheritedTask);
+                doOperations.push({action: "setAttrs", id, data: JSON.stringify({"tabs-task": inheritedTask})});
+                undoOperations.push({action: "setAttrs", id, data: JSON.stringify({"tabs-task": ""})});
             }
             if (newListId) {
                 newListElement.insertAdjacentElement("afterbegin", item);
@@ -383,14 +527,17 @@ const moveTo = async (protyle: IProtyle, sourceElements: Element[], targetElemen
                     action: "move",
                     id,
                     parentID: newListId,
+                    context: {moveGroupID},
                 });
             } else {
                 tempTargetElement.insertAdjacentElement(position, item);
                 doOperations.push({
                     action: "move",
                     id,
-                    previousID: position === "afterbegin" ? null : (position === "afterend" ? targetId : getPreviousBlockSibling(item)?.getAttribute("data-node-id")), // 不能使用常量，移动后会被修改
+                    nextID: position === "beforebegin" ? tempTargetElement.getAttribute("data-node-id") : undefined,
+                    previousID: position === "afterend" ? targetId : undefined,
                     parentID: position === "afterbegin" ? targetId : (getParentBlock(item)?.getAttribute("data-node-id") || protyle.block.parentID || protyle.block.rootID),
+                    context: {moveGroupID},
                 });
                 newSourceElements.push(item);
             }
@@ -406,7 +553,7 @@ const moveTo = async (protyle: IProtyle, sourceElements: Element[], targetElemen
                 });
                 const sourceContainerSnapshot = sourceContainerSnapshots.get(topSourceElement);
                 if (sourceContainerSnapshot && undoMoveOperation) {
-                    // 使用占位列表项保持容器快照有效，撤销时恢复容器、移回原列表项，再删除占位项。
+                    // 占位块保持容器快照有效，撤销时恢复容器、移回原块，再删除占位块。
                     replaceDragUndoOperation(undoOperations, undoMoveOperation, [
                         {
                             action: "delete",
@@ -425,6 +572,10 @@ const moveTo = async (protyle: IProtyle, sourceElements: Element[], targetElemen
                     });
                 }
                 const topSourceParentElement = topSourceElement.parentElement;
+                const topSourceID = topSourceElement.getAttribute("data-node-id");
+                if (topSourceID) {
+                    removedSourceIDs.add(topSourceID);
+                }
                 topSourceElement.remove();
                 if (!isSameEditor) {
                     // 打开两个相同的文档
@@ -437,44 +588,20 @@ const moveTo = async (protyle: IProtyle, sourceElements: Element[], targetElemen
                     // 拖拽后，sb 只剩下一个元素
                     if (isSameEditor) {
                         const sbData = await cancelSB(protyle, topSourceParentElement);
-                        doOperations.push(sbData.doOperations[0], sbData.doOperations[1]);
-                        undoOperations.push(sbData.undoOperations[1], sbData.undoOperations[0]);
+                        appendCancelSuperBlockOperations(doOperations, undoOperations, sbData);
                     } else {
-                        /// #if !MOBILE
-                        const allEditor = getAllEditor();
-                        const sourceProtyleElement = hasClosestByClassName(topSourceParentElement, "protyle", true);
-                        for (let i = 0; i < allEditor.length; i++) {
-                            if (allEditor[i].protyle.element === sourceProtyleElement) {
-                                const otherSbData = await cancelSB(allEditor[i].protyle, topSourceParentElement);
-                                doOperations.push(otherSbData.doOperations[0], otherSbData.doOperations[1]);
-                                undoOperations.push(otherSbData.undoOperations[1], otherSbData.undoOperations[0]);
-                                // 全局撤销栈下跨文档移动为可逆条目，无需清空源编辑器历史
-                                break;
-                            }
-                        }
-                        /// #endif
+                        const sbData = await cancelDragSourceSB(topSourceParentElement, removedSourceIDs);
+                        appendCancelSuperBlockOperations(doOperations, undoOperations, sbData);
                     }
                 }
             } else if (oldSourceParentElement.classList.contains("sb") && getSbChildBlockCount(oldSourceParentElement) === 1) {
                 // 拖拽后，sb 只剩下一个元素
                 if (isSameEditor) {
                     const sbData = await cancelSB(protyle, oldSourceParentElement);
-                    doOperations.push(sbData.doOperations[0], sbData.doOperations[1]);
-                    undoOperations.push(sbData.undoOperations[1], sbData.undoOperations[0]);
+                    appendCancelSuperBlockOperations(doOperations, undoOperations, sbData);
                 } else {
-                    /// #if !MOBILE
-                    const allEditor = getAllEditor();
-                    const sourceProtyleElement = hasClosestByClassName(oldSourceParentElement, "protyle", true);
-                    for (let i = 0; i < allEditor.length; i++) {
-                        if (allEditor[i].protyle.element === sourceProtyleElement) {
-                            const otherSbData = await cancelSB(allEditor[i].protyle, oldSourceParentElement);
-                            doOperations.push(otherSbData.doOperations[0], otherSbData.doOperations[1]);
-                            undoOperations.push(otherSbData.undoOperations[1], otherSbData.undoOperations[0]);
-                            // 全局撤销栈下跨文档移动为可逆条目，无需清空源编辑器历史
-                            break;
-                        }
-                    }
-                    /// #endif
+                    const sbData = await cancelDragSourceSB(oldSourceParentElement, removedSourceIDs);
+                    appendCancelSuperBlockOperations(doOperations, undoOperations, sbData);
                 }
             } else if (oldSourceParentElement.classList.contains("protyle-wysiwyg") && oldSourceParentElement.childElementCount === 0) {
                 /// #if !MOBILE
@@ -522,9 +649,14 @@ const moveTo = async (protyle: IProtyle, sourceElements: Element[], targetElemen
         }
 
         if (newListId && (index === 0 ||
-            sourceElements[index - 1].getAttribute("data-type") !== "NodeListItem" ||
+            sourceElements[index - 1].getAttribute("data-type") !== item.getAttribute("data-type") ||
             sourceElements[index - 1].getAttribute("data-subtype") !== originalSubtype)
         ) {
+            if (tabsPlaceholderID) {
+                newListElement.querySelector(`[data-node-id="${tabsPlaceholderID}"]`).remove();
+                doOperations.push({action: "delete", id: tabsPlaceholderID});
+                tabsPlaceholderID = undefined;
+            }
             if (position === "beforebegin") {
                 tempTargetElement = newListElement;
             }
@@ -557,8 +689,41 @@ const moveTo = async (protyle: IProtyle, sourceElements: Element[], targetElemen
             tempTargetElement = isCopy ? copyElement : item;
         }
     }
+    sourceTabItems.forEach(tabItem => {
+        const content = tabItem.querySelector<HTMLElement>(":scope > .tab-item-content");
+        if (!content || content.querySelector(":scope > [data-node-id]")) {
+            return;
+        }
+        const paragraph = genEmptyElement(false, false);
+        content.appendChild(paragraph);
+        doOperations.push({action: "insert", id: paragraph.dataset.nodeId,
+            parentID: tabItem.dataset.nodeId, data: paragraph.outerHTML});
+        undoOperations.push({action: "delete", id: paragraph.dataset.nodeId});
+    });
+    sourceTabs.forEach(({ids, active}, tabs) => {
+        if (!tabs.isConnected) {
+            return;
+        }
+        const before = tabs.cloneNode(true) as HTMLElement;
+        // 撤销先恢复合法容器，再移回原页签项，最后移除临时占位项。
+        if (getTabItems(tabs).length === 0) {
+            const template = document.createElement("template");
+            template.innerHTML = protyle.lute.Md2BlockDOM("::: tabs\n@tab\n\n:::\n");
+            const placeholder = template.content.querySelector<HTMLElement>(".tab-item");
+            before.insertBefore(placeholder, before.querySelector(":scope > .protyle-attr"));
+            undoOperations.unshift({action: "delete", id: placeholder.dataset.nodeId});
+        }
+        repairActiveTab(tabs, ids, active);
+        doOperations.push({action: "update", id: tabs.dataset.nodeId, data: tabs.outerHTML});
+        if (active) {
+            undoOperations.unshift({action: "setAttrs", id: before.dataset.nodeId,
+                data: JSON.stringify({"tabs-active-id": active})});
+        }
+        undoOperations.push({action: "update", id: before.dataset.nodeId, data: before.outerHTML});
+    });
     Object.keys(orderListElements).forEach(key => {
-        Array.from(orderListElements[key].children).forEach((item) => {
+        const orderList = orderListElements[key];
+        Array.from(orderList.element.children).forEach((item) => {
             if (item.classList.contains("protyle-attr")) {
                 return;
             }
@@ -568,8 +733,8 @@ const moveTo = async (protyle: IProtyle, sourceElements: Element[], targetElemen
                 data: item.outerHTML
             });
         });
-        updateListOrder(orderListElements[key], 1);
-        Array.from(orderListElements[key].children).forEach((item) => {
+        updateListOrder(orderList.element, orderList.start);
+        Array.from(orderList.element.children).forEach((item) => {
             if (item.classList.contains("protyle-attr")) {
                 return;
             }
@@ -584,6 +749,9 @@ const moveTo = async (protyle: IProtyle, sourceElements: Element[], targetElemen
     for (let j = 0; j < copyFoldHeadingIds.length; j++) {
         const childrenItem = copyFoldHeadingIds[j];
         const responseTransaction = await fetchSyncPost("/api/block/getHeadingInsertTransaction", {id: childrenItem.oldId});
+        if (responseTransaction.code !== 0) {
+            throw new Error(responseTransaction.msg);
+        }
         responseTransaction.data.doOperations.splice(0, 1);
         responseTransaction.data.doOperations[0].previousID = childrenItem.newId;
         responseTransaction.data.undoOperations.splice(0, 1);
@@ -645,16 +813,21 @@ const dragSb = async (protyle: IProtyle, sourceElements: Element[], targetElemen
         wrapUndoOperations.splice(0, 0, ...targetWrap.undoOperations);
         targetElement = targetWrap.element;
         sourcePositions.forEach(position => {
+            if (position.nextID === targetID) {
+                position.nextID = targetElement.getAttribute("data-node-id");
+            }
             if (position.previousID === targetID) {
                 position.previousID = targetElement.getAttribute("data-node-id");
             }
         });
     }
     const undoOperations: IOperation[] = [];
+    const targetMoveGroupID = Lute.NewNodeID();
     const targetMoveUndo: IOperation = {
         action: "move",
         context: {
-            removeFold: "true"
+            removeFold: "true",
+            moveGroupID: targetMoveGroupID,
         },
         id: targetElement.getAttribute("data-node-id"),
         previousID: getPreviousBlockSibling(targetElement)?.getAttribute("data-node-id"),
@@ -713,14 +886,16 @@ const dragSb = async (protyle: IProtyle, sourceElements: Element[], targetElemen
         targetOperations.push({
             action: "move",
             id: targetElement.getAttribute("data-node-id"),
-            parentID: sbElement.getAttribute("data-node-id")
+            parentID: sbElement.getAttribute("data-node-id"),
+            context: {moveGroupID: targetMoveGroupID},
         });
     } else {
         sbElement.lastElementChild.insertAdjacentElement("beforebegin", targetElement);
         targetOperations.push({
             action: "move",
             id: targetElement.getAttribute("data-node-id"),
-            previousID: sourcePreviousID
+            previousID: sourcePreviousID,
+            context: {moveGroupID: targetMoveGroupID},
         });
     }
     doOperations.splice(removeIndex, 0, ...targetOperations);
@@ -773,7 +948,8 @@ const dragSame = async (protyle: IProtyle, sourceElements: Element[], targetElem
     if (!isCopy && isDragTargetInSource(sourceElements, targetElement)) {
         return;
     }
-    const siblingElements = Array.from(targetElement.parentElement.children)
+    const intoEmptyTab = targetElement.classList.contains("tab-item-content");
+    const siblingElements = Array.from((intoEmptyTab ? targetElement : targetElement.parentElement).children)
         .filter(item => item.hasAttribute("data-node-id"));
     if (!isCopy && isSameSiblingMove(siblingElements, sourceElements, targetElement, isBottom)) {
         return;
@@ -792,7 +968,7 @@ const dragSame = async (protyle: IProtyle, sourceElements: Element[], targetElem
     });
 
     const sourceHasFoldHeading = sourceElements.some(isFoldedHeading);
-    const targetParentElement = targetElement.parentElement;
+    const targetParentElement = intoEmptyTab ? targetElement : targetElement.parentElement;
     const isColumnDrop = targetParentElement.classList.contains("sb") &&
         targetParentElement.getAttribute("data-sb-layout") === "col";
     const wrapUndoOperations: IOperation[] = [];
@@ -812,6 +988,9 @@ const dragSame = async (protyle: IProtyle, sourceElements: Element[], targetElem
         wrapUndoOperations.splice(0, 0, ...targetWrap.undoOperations);
         targetElement = targetWrap.element;
         sourcePositions.forEach(position => {
+            if (position.nextID === targetID) {
+                position.nextID = targetElement.getAttribute("data-node-id");
+            }
             if (position.previousID === targetID) {
                 position.previousID = targetElement.getAttribute("data-node-id");
             }
@@ -831,8 +1010,11 @@ const dragSame = async (protyle: IProtyle, sourceElements: Element[], targetElem
             parentID: targetParentElement.getAttribute("data-node-id")
         });
     }
+    const targetListStart = targetElement.getAttribute("data-type") === "NodeListItem" &&
+        targetElement.getAttribute("data-subtype") === "o" ? getOrderedListStart(targetElement.parentElement) : undefined;
+    const previousBlockElement = getPreviousBlockSibling(targetElement);
     const moveToResult = await moveTo(protyle, sourceElements, sourceRowElement || targetElement, isSameEditor,
-        sourceRowElement ? "afterbegin" : (isBottom ? "afterend" : "beforebegin"), isCopy, sourcePositions);
+        sourceRowElement || intoEmptyTab ? "afterbegin" : (isBottom ? "afterend" : "beforebegin"), isCopy, sourcePositions);
     if (sourceRowElement && isCopy) {
         clearCopiedColumnWidth(sourceRowElement, moveToResult.doOperations);
     }
@@ -847,24 +1029,35 @@ const dragSame = async (protyle: IProtyle, sourceElements: Element[], targetElem
     }
     undoOperations.push(...wrapUndoOperations);
     const newSourceParentElement = moveToResult.newSourceElements;
-    let foldData;
-    const previousBlockElement = getPreviousBlockSibling(targetElement);
+    const unfoldHeadingElements = new Set<Element>();
     if (!isColumnDrop && isBottom &&
         targetElement.getAttribute("data-type") === "NodeHeading" &&
         targetElement.getAttribute("fold") === "1") {
-        foldData = setFold(protyle, targetElement, true, false, false, true);
+        unfoldHeadingElements.add(targetElement);
     } else if (!isColumnDrop && !isBottom &&
         previousBlockElement?.getAttribute("data-type") === "NodeHeading" &&
         previousBlockElement.getAttribute("fold") === "1") {
-        foldData = setFold(protyle, previousBlockElement, true, false, false, true);
+        unfoldHeadingElements.add(previousBlockElement);
     }
-    if (foldData) {
+    if (!isColumnDrop) {
+        // 同一落点可由相邻块的上方或下方命中，统一展开会吸收目标内容的源标题。
+        newSourceParentElement.forEach(item => {
+            if (shouldUnfoldMovedHeading(item, getNextBlockSibling(item))) {
+                unfoldHeadingElements.add(item);
+            }
+        });
+    }
+    unfoldHeadingElements.forEach(item => {
+        const foldData = setFold(protyle, item, true, false, true);
+        if (!foldData.doOperations?.length) {
+            return;
+        }
         foldData.doOperations[0].context = {
             focusId: sourceElements[0].getAttribute("data-node-id"),
         };
         doOperations.push(...foldData.doOperations);
         undoOperations.push(...foldData.undoOperations);
-    }
+    });
     if (targetElement.getAttribute("data-type") === "NodeListItem" &&
         targetElement.getAttribute("data-subtype") === "o") {
         // https://github.com/siyuan-note/insider/issues/536
@@ -878,7 +1071,7 @@ const dragSame = async (protyle: IProtyle, sourceElements: Element[], targetElem
                 data: item.outerHTML
             });
         });
-        updateListOrder(targetElement.parentElement, 1);
+        updateListOrder(targetElement.parentElement, targetListStart);
         Array.from(targetElement.parentElement.children).forEach((item) => {
             if (item.classList.contains("protyle-attr")) {
                 return;
@@ -929,9 +1122,14 @@ const dragSame = async (protyle: IProtyle, sourceElements: Element[], targetElem
 };
 
 export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
+    let dragoverElement: Element;
     let kanbanGroupDragoverElement: HTMLElement;
     let kanbanGroupDragoverPosition: "left" | "right";
     let kanbanGroupDragHeight = "";
+    const isLiteTabDrag = (event: DragEvent) => protyle.lite &&
+        event.dataTransfer.types.includes(Constants.SIYUAN_DROP_TAB);
+    const shouldCopyBlockDrag = (event: DragEvent) => isCopyBlockDrag(protyle.lite, event.ctrlKey,
+        protyle.wysiwyg.element, window.siyuan.dragElement);
     const clearKanbanGroupDragover = () => {
         if (kanbanGroupDragoverElement) {
             kanbanGroupDragoverElement.classList.remove("dragover__left", "dragover__right");
@@ -939,6 +1137,10 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
             kanbanGroupDragoverElement = undefined;
             kanbanGroupDragoverPosition = undefined;
         }
+    };
+    const clearBlockDragoverTarget = (scope: ParentNode = editorElement) => {
+        cleanupDragIndicators(scope);
+        dragoverElement = undefined;
     };
     editorElement.addEventListener("dragstart", (event) => {
         if (protyle.disabled) {
@@ -995,6 +1197,7 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                 window.siyuan.dragTitle = getContenteditableElement(target.parentElement)?.textContent?.trim() || "";
 
                 window.siyuan.dragElement = protyle.wysiwyg.element;
+                event.dataTransfer.setData(Constants.SIYUAN_DROP_BLOCK, Constants.SIYUAN_DROP_BLOCK);
                 event.dataTransfer.setData(`${Constants.SIYUAN_DROP_GUTTER}NodeListItem${Constants.ZWSP}${target.parentElement.getAttribute("data-subtype")}${Constants.ZWSP}${[target.parentElement.getAttribute("data-node-id")]}`,
                     protyle.wysiwyg.element.innerHTML);
                 return;
@@ -1032,25 +1235,11 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
             } else if (target.classList.contains("av__gallery-item")) {
                 const blockElement = hasClosestBlock(target);
                 if (blockElement) {
-                    if (blockElement.querySelector('.block__icon[data-type="av-sort"]')?.classList.contains("block__icon--active")) {
-                        const bodyElements = blockElement.querySelectorAll(".av__body");
-                        if (bodyElements.length === 1) {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            return;
-                        } else if (["template", "created", "updated"].includes(bodyElements[0].getAttribute("data-dtype"))) {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            return;
-                        }
-                    }
-                    if (!target.classList.contains("av__gallery-item--select")) {
-                        clearSelect(["galleryItem"], blockElement);
-                        target.classList.add("av__gallery-item--select");
-                        const bodyElement = hasClosestByClassName(target, "av__body") as HTMLElement;
-                        updateAVRowSelect(bodyElement, target.dataset.id, true);
-                        setAVItemAnchor(blockElement, target);
-                    }
+                    const isSelected = target.classList.contains("av__gallery-item--select");
+                    const groupID = (hasClosestByClassName(target, "av__body") as HTMLElement).dataset.groupId;
+                    const selectIds = isSelected ? getAVSelectedItemPoints(blockElement).map(item =>
+                        item.itemID + (item.groupID ? `@${item.groupID}` : "")) :
+                        [target.dataset.id + (groupID ? `@${groupID}` : "")];
                     const ghostElement = document.createElement("div");
                     ghostElement.className = "protyle-wysiwyg protyle-wysiwyg--attr";
                     const isKanban = blockElement.getAttribute("data-av-type") === "kanban";
@@ -1059,7 +1248,8 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                     }
                     let galleryElement: HTMLElement;
                     let cloneGalleryElement = document.createElement("div");
-                    const selectElements = blockElement.querySelectorAll(".av__gallery-item--select");
+                    const selectElements = isSelected ?
+                        Array.from(blockElement.querySelectorAll(".av__gallery-item--select")) : [target];
                     selectElements.forEach(item => {
                         if (!galleryElement || !galleryElement.contains(item)) {
                             galleryElement = item.parentElement;
@@ -1095,8 +1285,6 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                         });
                     }
                     window.siyuan.dragElement = target;
-                    const selectIds = getAVSelectedItemPoints(blockElement).map(item =>
-                        item.itemID + (item.groupID ? `@${item.groupID}` : ""));
                     event.dataTransfer.setData(`${Constants.SIYUAN_DROP_GUTTER}NodeAttributeView${Constants.ZWSP}GalleryItem${Constants.ZWSP}${selectIds}`,
                         ghostElement.outerHTML);
                 }
@@ -1125,9 +1313,10 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
     };
     const getAdjustedDragTarget = (event: DragEvent) => {
         const contentRect = protyle.contentElement.getBoundingClientRect();
-        const editorLeft = contentRect.left + (parseInt(editorElement.style.paddingLeft) || 0);
+        const editorStyle = getComputedStyle(editorElement);
+        const editorLeft = contentRect.left + (parseFloat(editorStyle.paddingLeft) || 0);
         const editorRight = contentRect.left + protyle.contentElement.clientWidth -
-            (parseInt(editorElement.style.paddingRight) || 0);
+            (parseFloat(editorStyle.paddingRight) || 0);
         const x = event.clientX < editorLeft ? editorLeft :
             (event.clientX >= editorRight ? editorRight - 6 : event.clientX);
         return document.elementFromPoint(x, event.clientY);
@@ -1162,14 +1351,14 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
         }
         const range = getRangeByPoint(event.clientX, event.clientY);
         if (!range || isAttributeViewTitleDrop(event, range) ||
-            hasClosestByAttribute(range.startContainer, "data-type", "NodeBlockQueryEmbed")) {
+            isBlockRefDropTargetDisabled([event.target as Node, range.startContainer])) {
             return false;
         }
         focusByRange(range);
         return true;
     };
     const renderBlockRefDragover = (event: DragEvent) => {
-        cleanupDragIndicators(editorElement);
+        clearBlockDragoverTarget();
         editorElement.querySelectorAll("[select-start], [select-end]").forEach((item: HTMLElement) => {
             item.removeAttribute("select-start");
             item.removeAttribute("select-end");
@@ -1183,22 +1372,33 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
             event.preventDefault();
             return;
         }
+        if (range && isBlockRefDropTargetDisabled([event.target as Node, range.startContainer])) {
+            event.dataTransfer.dropEffect = "none";
+            hideDragTip();
+            hideCaretLine();
+            event.preventDefault();
+            return;
+        }
         if (isWithinEditor) {
             let caretLineShown = false;
-            if (range && !hasClosestByAttribute(range.startContainer, "data-type", "NodeBlockQueryEmbed")) {
-                const rect = range.getBoundingClientRect();
+            if (range) {
                 const eventCellElement = hasClosestByTag(event.target as Node, "TD") ||
                     hasClosestByTag(event.target as Node, "TH");
                 const rangeCellElement = hasClosestByTag(range.startContainer, "TD") ||
                     hasClosestByTag(range.startContainer, "TH");
                 const cellElement = (eventCellElement || rangeCellElement) as HTMLElement | false;
                 const cellRect = cellElement ? cellElement.getBoundingClientRect() : undefined;
+                const blockElement = hasClosestBlock(range.startContainer) || hasClosestBlock(event.target as HTMLElement);
+                const editableElement = hasClosestByAttribute(range.startContainer, "contenteditable", "true") ||
+                    getContenteditableElement(blockElement as HTMLElement);
+                const editableStyle = editableElement ? getComputedStyle(editableElement) : undefined;
+                const rect = getCaretRect(range, editableStyle?.direction === "rtl");
                 // 空单元格的 Range 可能返回整张表的矩形，需要确认光标矩形仍位于目标单元格内。
-                const rectInCell = !cellRect || (
+                const rectInCell = !cellRect || !rect || (
                     rect.left >= cellRect.left - 1 && rect.left <= cellRect.right + 1 &&
-                    rect.top >= cellRect.top - 1 && rect.bottom <= cellRect.bottom + 1
+                    rect.top >= cellRect.top - 1 && rect.top + rect.height <= cellRect.bottom + 1
                 );
-                if (rect.height > 0 && rectInCell) {
+                if (rect && rectInCell) {
                     showCaretLine(rect.left, rect.top, rect.height);
                     caretLineShown = true;
                 } else if (cellElement && cellRect) {
@@ -1230,20 +1430,14 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                         showCaretLine(left, top, height);
                         caretLineShown = true;
                     }
-                } else {
-                    const blockElement = hasClosestBlock(range.startContainer) || hasClosestBlock(event.target as HTMLElement);
-                    const editableElement = hasClosestByAttribute(range.startContainer, "contenteditable", "true") ||
-                        getContenteditableElement(blockElement as HTMLElement);
-                    if (editableElement) {
-                        const editableRect = editableElement.getBoundingClientRect();
-                        const editableStyle = getComputedStyle(editableElement);
-                        const lineHeight = parseFloat(editableStyle.lineHeight) || editableRect.height;
-                        const height = Math.min(lineHeight, editableRect.height);
-                        if (height > 0) {
-                            const left = editableStyle.direction === "rtl" ? editableRect.right - 2 : editableRect.left;
-                            showCaretLine(left, editableRect.top + (editableRect.height - height) / 2, height);
-                            caretLineShown = true;
-                        }
+                } else if (editableElement && editableStyle) {
+                    const editableRect = editableElement.getBoundingClientRect();
+                    const lineHeight = parseFloat(editableStyle.lineHeight) || editableRect.height;
+                    const height = Math.min(lineHeight, editableRect.height);
+                    if (height > 0) {
+                        const left = editableStyle.direction === "rtl" ? editableRect.right - 2 : editableRect.left;
+                        showCaretLine(left, editableRect.top + (editableRect.height - height) / 2, height);
+                        caretLineShown = true;
                     }
                 }
             }
@@ -1260,13 +1454,12 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
         event.preventDefault();
     };
     editorElement.addEventListener("drop", async (event: DragEvent & { target: HTMLElement }) => {
-        // lite 模式不落盘，拖拽块时强制复制语义（避免移动操作删除源块）。
-        const isCopyDrag = protyle.lite || event.ctrlKey;
+        const isCopyDrag = shouldCopyBlockDrag(event);
         counter = 0;
         hideDragTip();
         window.siyuan.dragTitle = "";
-        if (protyle.disabled || event.dataTransfer.getData(Constants.SIYUAN_DROP_EDITOR)) {
-            // 只读模式/编辑器内选中文字拖拽
+        if (protyle.disabled || isLiteTabDrag(event) || event.dataTransfer.getData(Constants.SIYUAN_DROP_EDITOR)) {
+            // 只读模式、lite 模式中的页签拖拽或编辑器内选中文字拖拽
             event.preventDefault();
             event.stopPropagation();
             return;
@@ -1278,7 +1471,7 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
             try {
                 const data = JSON.parse(event.dataTransfer.getData(Constants.SIYUAN_DROP_BLOCK_REF));
                 if (data.workspaceDir?.toLowerCase() !== window.siyuan.config.system.workspaceDir.toLowerCase()) {
-                    cleanupDragIndicators(editorElement);
+                    clearBlockDragoverTarget();
                     return;
                 }
                 ids = Array.from(new Set((Array.isArray(data.ids) ? data.ids : [])
@@ -1287,11 +1480,11 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                 console.warn("parse block reference drop data failed", e);
             }
             if (ids.length === 0 || hasClosestByClassName(event.target, "av") || !focusBlockRefDrop(event)) {
-                cleanupDragIndicators(editorElement);
+                clearBlockDragoverTarget();
                 return;
             }
             await insertBlockRefs(ids);
-            cleanupDragIndicators(editorElement);
+            clearBlockDragoverTarget();
             return;
         }
         let gutterType = "";
@@ -1376,14 +1569,20 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
             window.siyuan.dragElement = undefined;
             return;
         }
-        let targetElement = dragoverElement || editorElement.querySelector(
-            ".dragover__left, .dragover__right, .dragover__bottom, .dragover__top, .dragover__bottom--sibling, .dragover__top--sibling, .dragover__bottom--child, .dragover__top--child");
+        let targetElement = getBlockDragoverTarget(editorElement, dragoverElement);
         if (targetElement) {
             targetElement.classList.remove("dragover");
             targetElement.removeAttribute("select-start");
             targetElement.removeAttribute("select-end");
         }
         if (gutterType) {
+            // 片段中的临时块不能作为正文的引用或嵌入查询目标。
+            if ((event.altKey || event.shiftKey) && isFragmentBlockDrag(window.siyuan.dragElement)) {
+                event.preventDefault();
+                event.stopPropagation();
+                clearBlockDragoverTarget();
+                return;
+            }
             // gutter 或反链面板拖拽
             const sourceElements: Element[] = [];
             const gutterTypes = gutterType.replace(Constants.SIYUAN_DROP_GUTTER, "").split(Constants.ZWSP);
@@ -1394,7 +1593,7 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                 event.preventDefault();
                 event.stopPropagation();
                 hideCaretLine();
-                cleanupDragIndicators(editorElement);
+                clearBlockDragoverTarget();
                 return;
             }
             if (event.altKey || event.shiftKey) {
@@ -1407,23 +1606,20 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                         event.preventDefault();
                         event.stopPropagation();
                         hideCaretLine();
-                        cleanupDragIndicators(editorElement);
+                        clearBlockDragoverTarget();
                         return;
                     }
-                    if (hasClosestByAttribute(range.startContainer, "data-type", "NodeBlockQueryEmbed")) {
+                    if (isBlockRefDropTargetDisabled([event.target as Node, range.startContainer])) {
                         return;
                     } else {
-                        // 数据库和代码块的工具区不属于编辑内容，需按拖拽指示线将光标定位到可编辑区域开头或末尾。
-                        if (event.shiftKey && ["NodeAttributeView", "NodeCodeBlock"].includes(targetElement?.getAttribute("data-type"))) {
+                        // 嵌入块为块级插入，需按拖拽指示线统一目标与方向，避免光标命中块上半区时插入到下方。
+                        if (event.shiftKey && SHIFT_EMBED_INSERT_TARGET_TYPES.includes(targetElement?.getAttribute("data-type"))) {
                             const editableElement = getContenteditableElement(targetElement);
-                            const isBefore = targetElement.classList.contains("dragover__top") ||
-                                targetElement.classList.contains("dragover__left");
-                            const isAfter = targetElement.classList.contains("dragover__bottom") ||
-                                targetElement.classList.contains("dragover__right");
-                            if (editableElement && (isBefore || isAfter)) {
+                            const dragInsertPosition = getBlockDragInsertPosition(targetElement);
+                            if (editableElement && dragInsertPosition) {
                                 range.selectNodeContents(editableElement);
-                                range.collapse(isBefore);
-                                insertPosition = isBefore ? "before" : "after";
+                                range.collapse(dragInsertPosition === "before");
+                                insertPosition = dragInsertPosition;
                             }
                         }
                         focusByRange(range);
@@ -1459,12 +1655,19 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                     window.siyuan.dragElement.querySelectorAll(queryClass.substring(0, queryClass.length - 1)).forEach(elementItem => {
                         appendSourceElement(elementItem);
                     });
-                } else if (window.siyuan.config.system.workspaceDir.toLowerCase() === gutterTypes[3]) {
-                    // 跨窗口拖拽
+                }
+                const missingSourceIds = getMissingDragIds(selectedIds, sourceElementIds);
+                if (missingSourceIds.length > 0 &&
+                    window.siyuan.config.system.workspaceDir.toLowerCase() === gutterTypes[3]) {
+                    // 跨窗口拖拽或动态加载卸载源块时，从拖拽快照中补齐源块
                     // 不能跨工作区域拖拽 https://github.com/siyuan-note/siyuan/issues/13582
-                    const targetProtyleElement = document.createElement("template");
-                    targetProtyleElement.innerHTML = `<div>${event.dataTransfer.getData(gutterType)}</div>`;
-                    targetProtyleElement.content.querySelectorAll(queryClass.substring(0, queryClass.length - 1)).forEach(elementItem => {
+                    const dragData = parseBlockDragData(event.dataTransfer.getData(gutterType));
+                    const sourceProtyleElement = document.createElement("div");
+                    sourceProtyleElement.setAttribute(DRAG_SOURCE_NOTEBOOK_ID, dragData.notebookID);
+                    sourceProtyleElement.setAttribute(DRAG_SOURCE_ROOT_ID, dragData.rootID);
+                    sourceProtyleElement.innerHTML = dragData.html;
+                    const missingSourceSelector = missingSourceIds.map(id => `[data-node-id="${id}"]`).join(",");
+                    sourceProtyleElement.querySelectorAll(missingSourceSelector).forEach(elementItem => {
                         appendSourceElement(elementItem);
                     });
                 }
@@ -1551,10 +1754,15 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                         if (targetClass.includes("dragover__bottom")) {
                             previousID = targetElement.getAttribute("data-id") || "";
                         } else {
-                            previousID = targetElement.previousElementSibling?.getAttribute("data-id") || "";
+                            previousID = getAVPreviousItemID(
+                                hasClosestByClassName(targetElement, "av__body"), targetElement.getAttribute("data-id"));
                         }
                         const avID = blockElement.getAttribute("data-av-id");
                         if (gutterTypes[0] === "nodeattributeviewrowmenu") {
+                            if (dropSubItems(protyle, blockElement, targetElement as HTMLElement, selectedIds, targetClass)) {
+                                window.siyuan.dragElement = undefined;
+                                return;
+                            }
                             // 行内拖拽
                             const doOperations: IOperation[] = [];
                             const undoOperations: IOperation[] = [];
@@ -1563,7 +1771,10 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                                 const items = item.split("@");
                                 const id = items[0];
                                 const groupID = items[1] || "";
-                                const undoPreviousId = blockElement.querySelector(`.av__body${groupID ? `[data-group-id="${groupID}"]` : ""} .av__row[data-id="${id}"]`).previousElementSibling?.getAttribute("data-id") || "";
+                                const sourceRowElement = blockElement.querySelector(
+                                    `.av__body${groupID ? `[data-group-id="${groupID}"]` : ""} .av__row[data-id="${id}"]`);
+                                const undoPreviousId = getAVPreviousItemID(
+                                    hasClosestByClassName(sourceRowElement, "av__body"), id);
                                 if (previousID !== id && undoPreviousId !== previousID || (
                                     (undoPreviousId === "" && previousID === "" && targetGroupID !== groupID)
                                 )) {
@@ -1587,7 +1798,9 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                                     });
                                 }
                             });
-                            transaction(protyle, doOperations, undoOperations);
+                            sortAVRows(protyle, blockElement, selectedIds, targetGroupID, previousID,
+                                targetClass.includes("dragover__bottom") ? "" : targetElement.getAttribute("data-id") || "",
+                                doOperations, undoOperations);
                         } else {
                             const newUpdated = dayjs().format("YYYYMMDDHHmmss");
                             const bodyElement = hasClosestByClassName(targetElement, "av__body");
@@ -1644,7 +1857,8 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                                 const items = item.split("@");
                                 const id = items[0];
                                 const groupID = items[1] || "";
-                                const undoPreviousId = blockElement.querySelector(`.av__body[data-group-id="${groupID}"] .av__gallery-item[data-id="${id}"]`).previousElementSibling?.getAttribute("data-id") || "";
+                                const undoPreviousId = getAVPreviousItemID(
+                                    blockElement.querySelector<HTMLElement>(`.av__body[data-group-id="${groupID}"]`), id);
                                 if (previousID !== item && undoPreviousId !== previousID || (
                                     (undoPreviousId === "" && previousID === "" && targetGroupID !== groupID)
                                 )) {
@@ -1668,7 +1882,10 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                                     });
                                 }
                             });
-                            transaction(protyle, doOperations, undoOperations);
+                            sortAVRows(protyle, blockElement, selectedIds, targetGroupID, previousID,
+                                targetClass.includes("dragover__top") || targetClass.includes("dragover__left") ?
+                                    targetElement.getAttribute("data-id") || "" : "",
+                                doOperations, undoOperations);
                         } else {
                             const newUpdated = dayjs().format("YYYYMMDDHHmmss");
                             const bodyElement = hasClosestByClassName(targetElement, "av__body");
@@ -1705,6 +1922,11 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                         }
                     }
                 } else if (sourceElements.length > 0) {
+                    if (targetElement.classList.contains("tab-item-content")) {
+                        await dragSame(protyle, sourceElements, targetElement, false, isCopyDrag);
+                        dragoverElement = undefined;
+                        return;
+                    }
                     const isChild = targetClass.some((c: string) => c.indexOf("--child") > -1);
                     const isBottom = targetClass.some((c: string) => c.indexOf("dragover__bottom") === 0);
 
@@ -1769,12 +1991,10 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                         }
                     }
 
-                    // 列表块横向拖拽或在横排超级块内重排时，目标列表本身是列单元，需保留完整列表。
+                    // 完整列表的边界指示表示块间插入；列表项的同级、子级指示才表示合并到列表内。
                     const isColSbChildList = targetElement.parentElement?.getAttribute("data-type") === "NodeSuperBlock" &&
                         targetElement.parentElement?.getAttribute("data-sb-layout") === "col";
-                    const isHorizontalDrop = targetClass.includes("dragover__left") ||
-                        targetClass.includes("dragover__right");
-                    const keepListBlockTarget = shouldKeepListBlockDragTarget(gutterTypes[0], isHorizontalDrop,
+                    const keepListBlockTarget = shouldKeepListBlockDragTarget(gutterTypes[0], targetClass,
                         isColSbChildList);
                     if (isListItemSource && targetElement.classList.contains("list") &&
                         !keepListBlockTarget) {
@@ -1905,7 +2125,7 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                 event.preventDefault();
                 event.stopPropagation();
                 hideCaretLine();
-                cleanupDragIndicators(editorElement);
+                clearBlockDragoverTarget();
                 return;
             }
             if (!event.altKey && (!targetElement || (
@@ -1916,7 +2136,7 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                     event.preventDefault();
                     event.stopPropagation();
                     hideCaretLine();
-                    cleanupDragIndicators(editorElement);
+                    clearBlockDragoverTarget();
                     return;
                 }
                 await insertBlockRefs(ids);
@@ -1928,16 +2148,16 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                     // 拖拽到属性视图内
                     const blockElement = hasClosestBlock(targetElement);
                     if (blockElement) {
+                        const bodyElement = hasClosestByClassName(targetElement, "av__body");
                         let previousID = "";
                         if (targetElement.classList.contains("dragover__bottom") || targetElement.classList.contains("dragover__right")) {
                             previousID = targetElement.getAttribute("data-id") || "";
                         } else if (targetElement.classList.contains("dragover__top") || targetElement.classList.contains("dragover__left")) {
-                            previousID = targetElement.previousElementSibling?.getAttribute("data-id") || "";
+                            previousID = getAVPreviousItemID(bodyElement, targetElement.getAttribute("data-id"));
                         }
                         const avID = blockElement.getAttribute("data-av-id");
                         const newUpdated = dayjs().format("YYYYMMDDHHmmss");
                         const srcs: IOperationSrcs[] = [];
-                        const bodyElement = hasClosestByClassName(targetElement, "av__body");
                         const groupID = bodyElement && bodyElement.getAttribute("data-group-id");
                         ids.forEach(id => {
                             srcs.push({
@@ -1961,7 +2181,7 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                             data: newUpdated,
                         }], [{
                             action: "removeAttrViewBlock",
-                            srcIDs: ids,
+                            srcIDs: srcs.map(src => src.itemID),
                             avID,
                         }, {
                             action: "doUpdateUpdated",
@@ -2000,7 +2220,7 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                         }
                     }
 
-                    const getDocParam: IObject = {
+                    const getDocParam: FileTreeGetDocRequestInput = {
                         id: protyle.block.id,
                         size: window.siyuan.config.editor.dynamicLoadBlocks,
                     };
@@ -2036,44 +2256,55 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
             // https://github.com/siyuan-note/siyuan/issues/9544
             const avElement = hasClosestByClassName(event.target, "av");
             if (!avElement) {
-                focusByRange(getRangeByPoint(event.clientX, event.clientY));
-                if (event.dataTransfer.types.includes("Files") && !isBrowser()) {
-                    const files: ILocalFiles[] = [];
-                    for (let i = 0; i < event.dataTransfer.files.length; i++) {
-                        const filePath = webUtils.getPathForFile(event.dataTransfer.files[i]);
-                        if (filePath) {
-                            files.push({
-                                path: filePath,
-                                size: event.dataTransfer.files[i].size
-                            });
-                        } else {
-                            paste(protyle, event);
-                            break;
-                        }
-                    }
-                    if (files.length > 0) {
-                        uploadLocalFiles(files, protyle, !event.altKey);
+                const range = getRangeByPoint(event.clientX, event.clientY);
+                protyle.toolbar.range = range;
+                focusByRange(range);
+                if (event.dataTransfer.types.includes("Files") && !isBrowser() &&
+                    getHostCapabilities().localFileSystem) {
+                    const files = getLocalDropFiles(event.dataTransfer.files, file => webUtils.getPathForFile(file));
+                    if (!files) {
+                        paste(protyle, event, {
+                            htmlAsIframe: window.siyuan.config.editor.dragHTMLFileToIframe && !event.altKey,
+                        });
+                    } else if (files.length > 0) {
+                        uploadLocalFiles(files, protyle, !event.altKey, {
+                            htmlAsIframe: window.siyuan.config.editor.dragHTMLFileToIframe && !event.altKey,
+                            source: "drop",
+                            target: "editor",
+                            position: {x: event.clientX, y: event.clientY},
+                        });
                     }
                 } else {
-                    paste(protyle, event);
+                    paste(protyle, event, {
+                        htmlAsIframe: event.dataTransfer.types.includes("Files") &&
+                            window.siyuan.config.editor.dragHTMLFileToIframe && !event.altKey,
+                    });
                 }
                 clearSelect(["av", "img"], protyle.wysiwyg.element);
             } else {
                 const cellElement = hasClosestByClassName(event.target, "av__cell");
                 if (cellElement) {
-                    if (getTypeByCellElement(cellElement) === "mAsset" && event.dataTransfer.types[0] === "Files") {
+                    if (getTypeByCellElement(cellElement) === "mAsset" && hasDataTransferFiles(event.dataTransfer.types)) {
                         /// #if !BROWSER
-                        const files: ILocalFiles[] = [];
-                        for (let i = 0; i < event.dataTransfer.files.length; i++) {
-                            files.push({
-                                path: webUtils.getPathForFile(event.dataTransfer.files[i]),
-                                size: event.dataTransfer.files[i].size
-                            });
+                        if (!getHostCapabilities().localFileSystem) {
+                            focusBlock(hasClosestBlock(cellElement) as HTMLElement);
+                            dragUploadFiles(event.dataTransfer.files, protyle, cellElement,
+                                {x: event.clientX, y: event.clientY});
+                        } else {
+                            const files = getLocalDropFiles(event.dataTransfer.files,
+                                file => webUtils.getPathForFile(file));
+                            if (!files) {
+                                focusBlock(hasClosestBlock(cellElement) as HTMLElement);
+                                dragUploadFiles(event.dataTransfer.files, protyle, cellElement,
+                                    {x: event.clientX, y: event.clientY});
+                            } else {
+                                dragUpload(files, protyle, cellElement, {x: event.clientX, y: event.clientY});
+                            }
                         }
-                        dragUpload(files, protyle, cellElement);
                         /// #else
                         focusBlock(hasClosestBlock(cellElement) as HTMLElement);
-                        uploadFiles(protyle, event.dataTransfer.files, undefined);
+                        dragUploadFiles(event.dataTransfer.files, protyle, cellElement,
+                            {x: event.clientX, y: event.clientY});
                         /// #endif
                     }
                 }
@@ -2086,52 +2317,19 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
         // Clean up all drag indicators unconditionally after drop/cancel
         clearKanbanGroupDragover();
         kanbanGroupDragHeight = "";
-        cleanupDragIndicators(document);
-        dragoverElement = undefined;
+        clearBlockDragoverTarget(document);
     });
-    let dragoverElement: Element;
-    let dragCache: { nodeId: string, indent: number, rgb: { r: number, g: number, b: number }, guides: string };
+    const getListDragTarget = createListDragTarget();
     let disabledPosition: string;
+    const getDragTargetText = (element: HTMLElement) => {
+        const text = getContenteditableElement(element)?.textContent?.trim() || "";
+        const characters = Array.from(text);
+        return characters.length > 20 ? characters.slice(0, 20).join("") + "..." : text;
+    };
     // 列表项目标的插入点与提示处理：设置 class、CSS 变量、showDragTip
     const applyLiTarget = (htmlTarget: HTMLElement, event: DragEvent, canDropAsSibling = true): void => {
-        cleanupDragIndicators(editorElement);
-        const nodeId = htmlTarget.getAttribute("data-node-id");
-        // Cache expensive computations per target element (never changes while hovering same element)
-        if (!dragCache || dragCache.nodeId !== nodeId) {
-            const contentBlock = Array.from(htmlTarget.children).find(c => c.hasAttribute("data-node-id")) as HTMLElement;
-            const indent = contentBlock ? parseFloat(getComputedStyle(contentBlock).marginLeft) || 34 : 34;
-            const depth = getListDepth(htmlTarget);
-            const computedColor = getComputedStyle(htmlTarget).getPropertyValue("--b3-theme-primary-lighter").trim();
-            const rgb = parseHexColor(computedColor) || {r: 53, g: 115, b: 217};
-            let siblingGuides = "";
-            for (let n = 1; n <= depth; n++) {
-                if (siblingGuides) siblingGuides += ", ";
-                // guide 竖线透明度从 0.5（最近）渐变到 0.1（最远），均低于插入线（0.6）以突出目标位置
-                const opacity = depth <= 1 ? 0.3 : 0.5 - (n - 1) / (depth - 1) * 0.4;
-                siblingGuides += `${-n * indent}px 0 0 0 rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${opacity.toFixed(2)})`;
-            }
-            dragCache = {nodeId, indent, rgb, guides: siblingGuides || "none"};
-        }
-        const {indent, rgb, guides} = dragCache;
-
-        const liRect = htmlTarget.getBoundingClientRect();
-        const isRTL = getComputedStyle(htmlTarget).direction === "rtl";
-        const offsetX = isRTL ? (liRect.right - event.clientX) : (event.clientX - liRect.left);
-        // 用内容块（不含子列表）的 rect 判断上下半，避免有子列表时下半区域过小难以命中
-        const contentBlockForRect = Array.from(htmlTarget.children).find(c =>
-            c.hasAttribute("data-node-id") && !c.classList.contains("list")) as HTMLElement;
-        const contentRect = contentBlockForRect ? contentBlockForRect.getBoundingClientRect() : liRect;
-        const isBottom = event.clientY > contentRect.top + contentRect.height / 2;
-        // 列表首项的上半保留顶部插入点；其余列表项整个区域统一使用底部插入点，避免下半区域过小难以命中
-        const isFirstLi = !htmlTarget.previousElementSibling || !htmlTarget.previousElementSibling.classList.contains("li");
-        let position = "bottom";
-        if (isFirstLi && !isBottom) {
-            position = "top";
-        }
-        // 有子列表时鼠标无法到达子列表区域（elementFromPoint 会命中子项的 .li），
-        // 因此有子列表的列表项内容区域全部作为 sibling（在目标后插入同级），无子列表时用 offsetX 判断 child/sibling
-        const hasChildList = !!Array.from(htmlTarget.children).find(c => c.classList.contains("list"));
-        const isChild = position === "bottom" && !hasChildList && offsetX >= indent;
+        clearBlockDragoverTarget();
+        const {position, isChild, apply} = getListDragTarget(htmlTarget, event);
         if (!canDropAsSibling && !isChild) {
             hideDragTip();
             return;
@@ -2144,52 +2342,44 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
             (!isChild && position === "bottom" && source === htmlTarget.nextElementSibling) ||  // 底部同级：源原本就在目标后面
             (position === "top" && source === htmlTarget.previousElementSibling));              // 顶部同级：源原本就在目标前面
         if (isNoOp) {
-            cleanupDragIndicators(editorElement);
+            clearBlockDragoverTarget();
             hideDragTip();
             return;
         }
-        const className = `dragover__${position}--${isChild ? "child" : "sibling"}`;
 
-        htmlTarget.classList.add(className);
-        htmlTarget.style.setProperty("--drag-indent", `${indent}px`);
-        htmlTarget.style.setProperty("--drag-line-left", isChild ? `${indent}px` : "0");
-        // guide 竖线在 sibling 和 child 时都显示（sibling 时 ::before 为 transparent 不会与 guide 线重叠）
-        htmlTarget.style.setProperty("--drag-guides", guides);
-        // ::before 目标标记仅在成为子项时显示，sibling 时由横线独占该区域避免半透明叠加变深
-        htmlTarget.style.setProperty("--drag-base-bg",
-            isChild ? `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.6)` : "transparent");
-        // 横向插入线使用独立颜色，始终显示
-        htmlTarget.style.setProperty("--drag-line-bg",
-            `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.6)`);
+        apply();
+        dragoverElement = htmlTarget;
         highlightByLevel(editorElement, htmlTarget);
         // 提示文案：修饰键显示对应操作，无修饰键显示插入位置
-        const targetText = (getContenteditableElement(htmlTarget)?.textContent?.trim() || "").slice(0, 20);
+        const targetText = getDragTargetText(htmlTarget);
         let action: string;
         if (event.altKey || (event.shiftKey && protyle.lite)) {
             // Alt=引用；lite 模式 Shift 也为引用
             action = window.siyuan.languages.dragTipRef;
         } else if (event.shiftKey) {
             action = window.siyuan.languages.dragTipEmbed;
-        } else if (event.ctrlKey || protyle.lite) {
-            // Ctrl=创建副本；lite 模式无修饰键也为复制
-            action = window.siyuan.languages.duplicate;
+        } else if (shouldCopyBlockDrag(event)) {
+            action = window.siyuan.languages.duplicateCopy;
         } else if (isChild) {
-            action = window.siyuan.languages.dragTipListItemChild.replace("${x}", targetText);
+            action = window.siyuan.languages.dragTipListItemChild;
         } else {
             const key = position === "bottom" ? "dragTipListItemAfter" : "dragTipListItemBefore";
-            action = window.siyuan.languages[key].replace("${x}", targetText);
+            action = window.siyuan.languages[key];
         }
-        showDragTip(window.siyuan.dragTitle || "", action, event.clientX, event.clientY);
+        showDragTip(window.siyuan.dragTitle || "", action, event.clientX, event.clientY, targetText);
     };
     // 缓存当前目标的文本和列布局判断，避免优化路径每次 dragover 重复计算
     let cachedTargetText = "";
     let cachedIsCol = false;
     editorElement.addEventListener("dragover", (event: DragEvent & { target: HTMLElement }) => {
-        if (protyle.disabled || event.dataTransfer.types.includes(Constants.SIYUAN_DROP_EDITOR)) {
+        if (protyle.disabled || isLiteTabDrag(event) ||
+            ((event.altKey || event.shiftKey) && isFragmentBlockDrag(window.siyuan.dragElement)) ||
+            event.dataTransfer.types.includes(Constants.SIYUAN_DROP_EDITOR)) {
             event.preventDefault();
             event.stopPropagation();
             event.dataTransfer.dropEffect = "none";
             hideDragTip();
+            clearBlockDragoverTarget();
             return;
         }
         if (event.dataTransfer.types.includes(Constants.SIYUAN_DROP_BLOCK_REF)) {
@@ -2197,7 +2387,7 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                 event.preventDefault();
                 event.dataTransfer.dropEffect = "none";
                 hideDragTip();
-                cleanupDragIndicators(editorElement);
+                clearBlockDragoverTarget();
                 return;
             }
             event.dataTransfer.dropEffect = "copy";
@@ -2293,14 +2483,17 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
         // 操作提示：上半=操作对象名称，下半=操作文案
         const attributeViewTarget = getAttributeViewDropTarget(event);
         const isAvTarget = attributeViewTarget.isItem;
-        if (event.dataTransfer.types.includes(Constants.SIYUAN_DROP_FILE)) {
+        const isFileTreeDrag = event.dataTransfer.types.includes(Constants.SIYUAN_DROP_FILE);
+        const fileTreeIds = isFileTreeDrag ? window.siyuan.dragElement?.innerText ||
+            event.dataTransfer.getData(Constants.SIYUAN_DROP_FILE) : "";
+        if (isFileTreeDrag) {
             // 文档面板拖拽文档到编辑器
             if (attributeViewTarget.isAttributeView && !isAvTarget) {
                 event.preventDefault();
                 event.dataTransfer.dropEffect = "none";
                 hideDragTip();
                 hideCaretLine();
-                cleanupDragIndicators(editorElement);
+                clearBlockDragoverTarget();
                 return;
             }
             showDragTip(window.siyuan.dragTitle || "",
@@ -2315,13 +2508,12 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                 // 拖到数据库视图：绑定为记录
                 action = window.siyuan.languages.addToDatabase;
             } else if (event.altKey || (event.shiftKey && protyle.lite)) {
-                // Alt=引用；lite 模式 Shift 也为引用（原嵌入块改为引用）
+                // Alt=引用；lite 模式 Shift 也为引用
                 action = window.siyuan.languages.dragTipRef;
             } else if (event.shiftKey) {
                 action = window.siyuan.languages.dragTipEmbed;
-            } else if (event.ctrlKey || protyle.lite) {
-                // Ctrl=创建副本；lite 模式无修饰键也为复制（不移动源块）
-                action = window.siyuan.languages.duplicate;
+            } else if (shouldCopyBlockDrag(event)) {
+                action = window.siyuan.languages.duplicateCopy;
             } else {
                 action = window.siyuan.languages.move;
             }
@@ -2353,16 +2545,15 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
             return;
         }
 
-        if (!gutterType && !window.siyuan.dragElement) {
+        if (!gutterType && !window.siyuan.dragElement && !fileTreeIds) {
             // https://github.com/siyuan-note/siyuan/issues/6436
             event.preventDefault();
             return;
         }
-        const fileTreeIds = (event.dataTransfer.types.includes(Constants.SIYUAN_DROP_FILE) && window.siyuan.dragElement) ? window.siyuan.dragElement.innerText : "";
         const isFileTreeRef = fileTreeIds.indexOf("-") > -1 && !event.altKey && !isAvTarget;
         if (isFileTreeRef || (event.altKey && fileTreeIds.indexOf("-") === -1)) {
             // 插入引用（行级）时走光标定位语义，清除全部块级拖拽指示。
-            // 复用 cleanupDragIndicators 以覆盖列表专属指示类（--sibling/--child）与 --drag-* 变量，
+            // 统一清理列表专属指示类（--sibling/--child）、--drag-* 变量和缓存目标，
             // 否则切换到引用语义时列表指示线会冻结在原处不动（仅清通用类不足以移除列表指示）。
             // 块标拖拽时保留源块 .protyle-wysiwyg--select 不移除——该类仅在 dragstart 添加一次，
             // 移除后永不恢复；松开修饰键回到普通拖拽时，no-op 守卫需靠它识别源块，
@@ -2374,7 +2565,9 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
         hideCaretLine();
         // 编辑器内文字拖拽或资源文件拖拽或按住 alt/shift 拖拽反链图标进入编辑器时不能运行 event.preventDefault()， 否则无光标; 需放在 !window.siyuan.dragElement 之后
         event.preventDefault();
-        targetElement = hasClosestByClassName(event.target, "av__gallery-item") || hasClosestByClassName(event.target, "av__gallery-add") ||
+        const superBlockResizeElement = hasClosestByClassName(event.target, "sb__resize");
+        const superBlockResizeTarget = getSuperBlockResizeDropTarget(superBlockResizeElement);
+        targetElement = superBlockResizeTarget || hasClosestByClassName(event.target, "av__gallery-item") || hasClosestByClassName(event.target, "av__gallery-add") ||
             hasClosestByClassName(event.target, "av__row") || hasClosestByClassName(event.target, "av__row--util") ||
             hasClosestBlock(event.target);
         targetElement = getAVRowDropTarget(targetElement);
@@ -2383,7 +2576,8 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
             // 拖拽到属性视图 gallery 内，但没选中 item
             return;
         }
-        const point = {x: event.clientX, y: event.clientY, className: ""};
+        // 横排超级块的调整手柄位于两个直接子块之间，拖拽块经过时表示插入到前一列之后。
+        const point = {x: event.clientX, y: event.clientY, className: superBlockResizeTarget ? "dragover__right" : ""};
 
         // 超级块中有a，b两个段落块，移动到 ab 之间的间隙 targetElement 会变为超级块，需修正为 a
         if (targetElement && (targetElement.classList.contains("bq") || targetElement.classList.contains("sb") || targetElement.classList.contains("list") || targetElement.classList.contains("li"))) {
@@ -2406,9 +2600,10 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                 point.className = "dragover__top";
             } else {
                 const contentRect = protyle.contentElement.getBoundingClientRect();
+                const editorStyle = getComputedStyle(editorElement);
                 const editorPosition = {
-                    left: contentRect.left + parseInt(editorElement.style.paddingLeft),
-                    right: contentRect.left + protyle.contentElement.clientWidth - parseInt(editorElement.style.paddingRight)
+                    left: contentRect.left + parseFloat(editorStyle.paddingLeft),
+                    right: contentRect.left + protyle.contentElement.clientWidth - parseFloat(editorStyle.paddingRight)
                 };
                 if (event.clientX < editorPosition.left) {
                     // 左侧
@@ -2490,17 +2685,13 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                 if (bodyElement) {
                     const blockElement = hasClosestBlock(bodyElement) as HTMLElement;
                     const groupID = bodyElement.getAttribute("data-group-id");
-                    // 模板、创建时间、更新时间 字段作为分组方式时不允许跨分组拖拽 https://github.com/siyuan-note/siyuan/issues/15553
-                    const isTCU = ["template", "created", "updated"].includes(bodyElement.getAttribute("data-dtype"));
-                    // 排序只能夸组拖拽
-                    const hasSort = blockElement.querySelector('.block__icon[data-type="av-sort"]')?.classList.contains("block__icon--active");
+                    // 模板渲染结果及无法回填的字段作为分组方式时不允许跨分组拖拽
+                    // https://github.com/siyuan-note/siyuan/issues/15553
+                    const isTCU = getAVData(blockElement)?.view.group?.valueSource === "rendered" ||
+                        hasAVKeyGroup(bodyElement.getAttribute("data-dtype"), "renderAutoFill");
                     gutterTypes[2].split(",").find(item => {
                         const sourceGroupID = item ? item.split("@")[1] : "";
                         if (sourceGroupID !== groupID && isTCU) {
-                            targetElement = false;
-                            return true;
-                        }
-                        if (sourceGroupID === groupID && hasSort) {
                             targetElement = false;
                             return true;
                         }
@@ -2518,17 +2709,13 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                 if (bodyElement) {
                     const blockElement = hasClosestBlock(bodyElement) as HTMLElement;
                     const groupID = bodyElement.getAttribute("data-group-id");
-                    // 模板、创建时间、更新时间 字段作为分组方式时不允许跨分组拖拽 https://github.com/siyuan-note/siyuan/issues/15553
-                    const isTCU = ["template", "created", "updated"].includes(bodyElement.getAttribute("data-dtype"));
-                    // 排序只能夸组拖拽
-                    const hasSort = blockElement.querySelector('.block__icon[data-type="av-sort"]')?.classList.contains("block__icon--active");
+                    // 模板渲染结果及无法回填的字段作为分组方式时不允许跨分组拖拽
+                    // https://github.com/siyuan-note/siyuan/issues/15553
+                    const isTCU = getAVData(blockElement)?.view.group?.valueSource === "rendered" ||
+                        hasAVKeyGroup(bodyElement.getAttribute("data-dtype"), "renderAutoFill");
                     gutterTypes[2].split(",").find(item => {
                         const sourceGroupID = item ? item.split("@")[1] : "";
                         if (sourceGroupID !== groupID && isTCU) {
-                            targetElement = false;
-                            return true;
-                        }
-                        if (sourceGroupID === groupID && hasSort) {
                             targetElement = false;
                             return true;
                         }
@@ -2537,11 +2724,30 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
             }
         }
 
+        if (targetElement && gutterType && !isAvSubType && gutterTypes[0] !== "nodetabitem") {
+            // 页签标题栏和空白正文区指向当前页签的正文块，避免把普通块移为页签项的兄弟。
+            targetElement = getTabsContentDropTarget(targetElement, event.target);
+        }
+
         if (!targetElement) {
-            editorElement.querySelectorAll(".dragover__bottom, .dragover__top, .dragover, .dragover__left, .dragover__right").forEach((item: HTMLElement) => {
-                item.classList.remove("dragover__top", "dragover__bottom", "dragover", "dragover__left", "dragover__right");
-            });
+            clearBlockDragoverTarget();
             hideDragTip();
+            return;
+        }
+        const subItemsBlock = hasClosestBlock(targetElement);
+        if (gutterTypes[0] === "nodeattributeviewrowmenu" && targetElement.classList.contains("av__row") &&
+            subItemsBlock && subItemsBlock.hasAttribute("data-sub-items-nested")) {
+            const rect = targetElement.getBoundingClientRect();
+            const position = event.clientY - rect.top;
+            const className = position < rect.height / 4 ? "dragover__top" :
+                position > rect.height * 3 / 4 ? "dragover__bottom" : "dragover__bottom--child";
+            clearBlockDragoverTarget();
+            targetElement.classList.add(className);
+            dragoverElement = targetElement;
+            const tip = className === "dragover__bottom--child" ? "dragTipListItemChild" :
+                className === "dragover__top" ? "dragTipListItemBefore" : "dragTipListItemAfter";
+            const targetText = targetElement.querySelector('.av__cell[data-dtype="block"] .av__celltext')?.textContent?.trim() || "";
+            showDragTip(window.siyuan.dragTitle || "", window.siyuan.languages[tip], event.clientX, event.clientY, targetText);
             return;
         }
         // 不允许拖拽到嵌入块中（嵌入块本身或其内部任意内容均不可作为拖拽目标）
@@ -2554,11 +2760,28 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                 event.clientY > targetElement.getBoundingClientRect().bottom) {
                 point.className = "dragover__bottom";
             } else {
-                clearDragoverElement(dragoverElement);
+                clearBlockDragoverTarget();
+                hideDragTip();
                 return;
             }
         } else if (isInEmbedBlock(targetElement)) {
-            clearDragoverElement(dragoverElement);
+            clearBlockDragoverTarget();
+            hideDragTip();
+            return;
+        }
+        if (targetElement.classList.contains("tab-item-content")) {
+            const isSelf = !event.ctrlKey && !event.shiftKey && !event.altKey && gutterTypes[2]?.split(",").some(id =>
+                id && hasClosestByAttribute(targetElement as HTMLElement, "data-node-id", id));
+            if (isSelf) {
+                clearBlockDragoverTarget();
+                hideDragTip();
+                return;
+            }
+            if (dragoverElement !== targetElement || !targetElement.classList.contains("dragover__bottom")) {
+                clearBlockDragoverTarget();
+                targetElement.classList.add("dragover__bottom");
+                dragoverElement = targetElement;
+            }
             return;
         }
         const isNotAvItem = !targetElement.classList.contains("av__row") &&
@@ -2608,7 +2831,7 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
             if (sourceSelected && (sourceSelected.classList.contains("li") || sourceSelected.classList.contains("list"))) {
                 // 源列表项/列表块在目标列表容器内部时无操作
                 if (targetElement.classList.contains("list") && targetElement.contains(sourceSelected)) {
-                    cleanupDragIndicators(editorElement);
+                    clearBlockDragoverTarget();
                     hideDragTip();
                     return;
                 }
@@ -2633,7 +2856,7 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                             if (current.parentElement === editorElement) {
                                 break;
                             }
-                            cleanupDragIndicators(editorElement);
+                            clearBlockDragoverTarget();
                             hideDragTip();
                             return;
                         }
@@ -2655,7 +2878,7 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
             const sourceSelected = editorElement.querySelector(".protyle-wysiwyg--select");
             // 源在目标列表容器内部（子列表项/列表块拖到父列表），无操作
             if (sourceSelected && targetElement.contains(sourceSelected)) {
-                cleanupDragIndicators(editorElement);
+                clearBlockDragoverTarget();
                 hideDragTip();
                 return;
             }
@@ -2669,7 +2892,7 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
             const isNoOpList = (isListBottom && lastLi && sourceIds.includes(lastLi.getAttribute("data-node-id"))) ||
                 (!isListBottom && firstLi && sourceIds.includes(firstLi.getAttribute("data-node-id")));
             if (isNoOpList) {
-                cleanupDragIndicators(editorElement);
+                clearBlockDragoverTarget();
                 hideDragTip();
                 return;
             }
@@ -2684,7 +2907,7 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
             if (gutterTypes[0] === "nodelistitem") {
                 // 列表项拖拽：右侧边缘不触发超级块（清理后 return），左侧边缘和中间走 applyLiTarget
                 if (isRightEdge) {
-                    cleanupDragIndicators(editorElement);
+                    clearBlockDragoverTarget();
                     return;
                 }
                 applyLiTarget(liTarget as HTMLElement, event);
@@ -2736,7 +2959,7 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                     let displayText = cachedTargetText;
                     if (!displayText && targetElement.classList.contains("list")) {
                         const firstLi = targetElement.querySelector(":scope > .li");
-                        displayText = getContenteditableElement(firstLi as HTMLElement)?.textContent?.trim() || "";
+                        displayText = getDragTargetText(firstLi as HTMLElement);
                     }
                     // 默认移动（无修饰键、非 AV 目标、普通块源、非超级块本身）时，更新下半为带目标名的位置文案
                     if (!event.altKey && !event.shiftKey && !event.ctrlKey && gutterType && !isAvSubType && !isAvTarget && !targetElement.classList.contains("sb")) {
@@ -2748,8 +2971,8 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                             const key = (isHorizontal || cachedIsCol)
                                 ? (isFront ? window.siyuan.languages.dragTipMoveTargetFront : window.siyuan.languages.dragTipMoveTargetBack)
                                 : (isFront ? window.siyuan.languages.dragTipMoveTargetAbove : window.siyuan.languages.dragTipMoveTargetBelow);
-                            showDragTip(window.siyuan.dragTitle || "", key.replace("${x}", displayText),
-                                event.clientX, event.clientY);
+                            showDragTip(window.siyuan.dragTitle || "", key,
+                                event.clientX, event.clientY, displayText);
                         }
                     }
                 }
@@ -2809,13 +3032,13 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                     targetElement.classList.add(edgeClass);
                     addDragover(targetElement);
                     const sbFirstBlock = targetElement.querySelector("[data-node-id]") as HTMLElement;
-                    const sbText = getContenteditableElement(sbFirstBlock)?.textContent?.trim() || "";
+                    const sbText = getDragTargetText(sbFirstBlock);
                     if (!event.altKey && !event.shiftKey && !event.ctrlKey && gutterType && !isAvSubType && !isAvTarget && sbText) {
                         const key = isSbLeftEdge
                             ? window.siyuan.languages.dragTipMoveTargetFront
                             : window.siyuan.languages.dragTipMoveTargetBack;
-                        showDragTip(window.siyuan.dragTitle || "", key.replace("${x}", sbText),
-                            event.clientX, event.clientY);
+                        showDragTip(window.siyuan.dragTitle || "", key,
+                            event.clientX, event.clientY, sbText);
                     }
                     return;
                 }
@@ -2831,8 +3054,8 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                 // 默认移动时，更新下半为带目标名的位置文案（超级块本身跳过）
                 if (!event.altKey && !event.shiftKey && !event.ctrlKey && gutterType && !isAvSubType && !isAvTarget && !targetElement.classList.contains("sb") && cachedTargetText) {
                     showDragTip(window.siyuan.dragTitle || "",
-                        window.siyuan.languages.dragTipMoveTargetFront.replace("${x}", cachedTargetText),
-                        event.clientX, event.clientY);
+                        window.siyuan.languages.dragTipMoveTargetFront,
+                        event.clientX, event.clientY, cachedTargetText);
                 }
             } else if (event.clientX > nodeRect.right - 32 && event.clientX < nodeRect.right &&
                 !targetElement.classList.contains("av__row")) {
@@ -2841,8 +3064,8 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                 // 默认移动时，更新下半为带目标名的位置文案（超级块本身跳过）
                 if (!event.altKey && !event.shiftKey && !event.ctrlKey && gutterType && !isAvSubType && !isAvTarget && !targetElement.classList.contains("sb") && cachedTargetText) {
                     showDragTip(window.siyuan.dragTitle || "",
-                        window.siyuan.languages.dragTipMoveTargetBack.replace("${x}", cachedTargetText),
-                        event.clientX, event.clientY);
+                        window.siyuan.languages.dragTipMoveTargetBack,
+                        event.clientX, event.clientY, cachedTargetText);
                 }
             } else if (targetElement.classList.contains("av__row--header")) {
                 targetElement.classList.add("dragover__bottom");
@@ -2853,8 +3076,8 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                     // 默认移动时，更新下半为带目标名的位置文案（超级块本身跳过）
                     if (!event.altKey && !event.shiftKey && !event.ctrlKey && gutterType && !isAvSubType && !isAvTarget && !targetElement.classList.contains("sb") && cachedTargetText) {
                         showDragTip(window.siyuan.dragTitle || "",
-                            (cachedIsCol ? window.siyuan.languages.dragTipMoveTargetBack : window.siyuan.languages.dragTipMoveTargetBelow).replace("${x}", cachedTargetText),
-                            event.clientX, event.clientY);
+                            cachedIsCol ? window.siyuan.languages.dragTipMoveTargetBack : window.siyuan.languages.dragTipMoveTargetBelow,
+                            event.clientX, event.clientY, cachedTargetText);
                     }
                 } else if (disabledPosition !== "top") {
                     targetElement.classList.add("dragover__top");
@@ -2862,8 +3085,8 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                     // 默认移动时，更新下半为带目标名的位置文案（超级块本身跳过）
                     if (!event.altKey && !event.shiftKey && !event.ctrlKey && gutterType && !isAvSubType && !isAvTarget && !targetElement.classList.contains("sb") && cachedTargetText) {
                         showDragTip(window.siyuan.dragTitle || "",
-                            (cachedIsCol ? window.siyuan.languages.dragTipMoveTargetFront : window.siyuan.languages.dragTipMoveTargetAbove).replace("${x}", cachedTargetText),
-                            event.clientX, event.clientY);
+                            cachedIsCol ? window.siyuan.languages.dragTipMoveTargetFront : window.siyuan.languages.dragTipMoveTargetAbove,
+                            event.clientX, event.clientY, cachedTargetText);
                     }
                 }
             }
@@ -2872,8 +3095,7 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
 
         if (fileTreeIds.indexOf("-") > -1) {
             if (fileTreeIds.split(",").includes(protyle.block.rootID) && isNotAvItem && event.altKey) {
-                dragoverElement = undefined;
-                cleanupDragIndicators(editorElement);
+                clearBlockDragoverTarget();
                 editorElement.querySelectorAll("[select-start], [select-end]").forEach((item: HTMLElement) => {
                     item.removeAttribute("select-start");
                     item.removeAttribute("select-end");
@@ -2890,12 +3112,14 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
             // 排除自己及子孙
             if (gutterTypes[0] === "nodeattributeview" && gutterTypes[1] === "col" && targetElement.getAttribute("data-id") === gutterTypes[2]) {
                 // 表头不能拖到自己上
-                clearDragoverElement(dragoverElement);
+                clearBlockDragoverTarget();
+                hideDragTip();
                 return;
             }
             if (gutterTypes[0] === "nodeattributeviewrowmenu" && gutterTypes[2].split("@")[0] === targetElement.getAttribute("data-id")) {
                 // 行不能拖到自己上
-                clearDragoverElement(dragoverElement);
+                clearBlockDragoverTarget();
+                hideDragTip();
                 return;
             }
             const isSelf = gutterTypes[2].split(",").find((item: string) => {
@@ -2905,7 +3129,8 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
             });
             if (isSelf && "nodeattributeviewrowmenu" !== gutterTypes[0] && !event.ctrlKey && !event.shiftKey && !event.altKey) {
                 // 拖到自身/子孙且为纯移动时无操作；Ctrl(复制)/Shift(嵌入)/Alt(引用) 允许落在源自身位置（创建副本/嵌入块/引用），不拦截
-                clearDragoverElement(dragoverElement);
+                clearBlockDragoverTarget();
+                hideDragTip();
                 return;
             }
             if (gutterTypes[0] === "nodelistitem" && "NodeListItem" === targetElement.getAttribute("data-type")) {
@@ -2916,13 +3141,15 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                     }
                 });
                 if (notLiItem) {
-                    clearDragoverElement(dragoverElement);
+                    clearBlockDragoverTarget();
+                    hideDragTip();
                     return;
                 }
             }
             if (!["nodelistitem", "nodelist"].includes(gutterTypes[0]) && targetElement.getAttribute("data-type") === "NodeListItem") {
                 // 非列表项不能拖入列表项周围
-                clearDragoverElement(dragoverElement);
+                clearBlockDragoverTarget();
+                hideDragTip();
                 return;
             }
             if (gutterTypes[0] === "nodelistitem" && targetElement.parentElement.classList.contains("li") &&
@@ -2946,13 +3173,13 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
             }
             dragoverElement = targetElement;
             // 目标变化时更新缓存
-            cachedTargetText = getContenteditableElement(targetElement as HTMLElement)?.textContent?.trim() || "";
+            cachedTargetText = getDragTargetText(targetElement as HTMLElement);
             cachedIsCol = !!hasClosestByAttribute(targetElement as HTMLElement, "data-sb-layout", "col");
             highlightColColumn(targetElement as HTMLElement);
         }
         // 默认移动（无修饰键、非 AV 目标、普通块源）时，更新下半为带目标名的位置文案
         if (!event.altKey && !event.shiftKey && !event.ctrlKey && gutterType && !isAvSubType && targetElement && !isAvTarget && point.className) {
-            const targetText = getContenteditableElement(targetElement as HTMLElement)?.textContent?.trim() || "";
+            const targetText = getDragTargetText(targetElement as HTMLElement);
             const isFront = point.className === "dragover__top" || point.className === "dragover__left";
             const isBack = point.className === "dragover__bottom" || point.className === "dragover__right";
             if (targetText && (isFront || isBack)) {
@@ -2960,8 +3187,8 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
                 const key = isCol
                     ? (isFront ? window.siyuan.languages.dragTipMoveTargetFront : window.siyuan.languages.dragTipMoveTargetBack)
                     : (isFront ? window.siyuan.languages.dragTipMoveTargetAbove : window.siyuan.languages.dragTipMoveTargetBelow);
-                showDragTip(window.siyuan.dragTitle || "", key.replace("${x}", targetText),
-                    event.clientX, event.clientY);
+                showDragTip(window.siyuan.dragTitle || "", key,
+                    event.clientX, event.clientY, targetText);
             }
         }
     });
@@ -2975,16 +3202,20 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
         counter--;
         if (counter === 0) {
             clearKanbanGroupDragover();
-            cleanupDragIndicators(editorElement);
-            dragoverElement = undefined;
+            clearBlockDragoverTarget();
             hideDragTip();
         }
     });
-    editorElement.addEventListener("dragenter", (event) => {
+    editorElement.addEventListener("dragenter", (event: DragEvent) => {
         event.preventDefault();
+        if (!event.isTrusted) {
+            // 合成拖拽会在动态加载后重新命中节点，不依赖已被移除节点的 dragleave 来平衡计数。
+            counter = 0;
+        }
         counter++;
     });
     editorElement.addEventListener("dragend", () => {
+        counter = 0;
         if (window.siyuan.dragElement) {
             window.siyuan.dragElement.style.opacity = "";
             window.siyuan.dragElement = undefined;
@@ -2993,8 +3224,7 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
         // Clean up all drag indicators on cancel
         clearKanbanGroupDragover();
         kanbanGroupDragHeight = "";
-        cleanupDragIndicators(editorElement);
-        dragoverElement = undefined;
+        clearBlockDragoverTarget();
         hideDragTip();
         window.siyuan.dragTitle = "";
     });
@@ -3002,63 +3232,8 @@ export const dropEvent = (protyle: IProtyle, editorElement: HTMLElement) => {
     document.addEventListener("dragend", () => {
         clearKanbanGroupDragover();
         kanbanGroupDragHeight = "";
-        cleanupDragIndicators(document);
+        clearBlockDragoverTarget(document);
     }, {once: true});
-};
-
-const cleanupDragIndicators = (scope: ParentNode) => {
-    scope.querySelectorAll(".dragover__top, .dragover__bottom, .dragover__left, .dragover__right, .dragover__top--sibling, .dragover__bottom--sibling, .dragover__top--child, .dragover__bottom--child, .dragover, [style*=\"--drag-indent\"]").forEach((item: HTMLElement) => {
-        item.classList.remove("dragover__top", "dragover__bottom", "dragover__left", "dragover__right", "dragover",
-            "dragover__top--sibling", "dragover__bottom--sibling", "dragover__top--child", "dragover__bottom--child");
-        item.style.removeProperty("--drag-indent");
-        item.style.removeProperty("--drag-guides");
-        item.style.removeProperty("--drag-line-left");
-        item.style.removeProperty("--drag-base-bg");
-        item.style.removeProperty("--drag-line-bg");
-        item.style.removeProperty("--b3-av-kanban-drag-height");
-    });
-};
-
-const getListDepth = (liElement: Element): number => {
-    let depth = 0;
-    let list = liElement.parentElement;
-    while (list && list.classList.contains("list")) {
-        const parentLi = list.parentElement;
-        if (parentLi && parentLi.classList.contains("li")) {
-            depth++;
-            list = parentLi.parentElement;
-        } else {
-            break;
-        }
-    }
-    return depth;
-};
-
-const parseHexColor = (color: string): { r: number, g: number, b: number } | null => {
-    if (!color) return null;
-    const hexMatch = color.match(/^#([0-9a-f]{3,8})$/i);
-    if (hexMatch) {
-        let hex = hexMatch[1];
-        if (hex.length === 3) {
-            hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
-        }
-        if (hex.length >= 6) {
-            return {
-                r: parseInt(hex.slice(0, 2), 16),
-                g: parseInt(hex.slice(2, 4), 16),
-                b: parseInt(hex.slice(4, 6), 16),
-            };
-        }
-    }
-    const rgbMatch = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-    if (rgbMatch) {
-        return {
-            r: parseInt(rgbMatch[1]),
-            g: parseInt(rgbMatch[2]),
-            b: parseInt(rgbMatch[3]),
-        };
-    }
-    return null;
 };
 
 const highlightByLevel = (editorElement: HTMLElement, liElement: HTMLElement) => {
@@ -3084,18 +3259,4 @@ const highlightColColumn = (element: HTMLElement) => {
     if (element.getAttribute("data-sb-layout") === "col") {
         element.classList.add("dragover");
     }
-};
-
-// https://github.com/siyuan-note/siyuan/issues/12651
-const clearDragoverElement = (element: Element) => {
-    if (element) {
-        element.classList.remove("dragover__top", "dragover__bottom", "dragover", "dragover__left", "dragover__right", "dragover__top--sibling", "dragover__bottom--sibling", "dragover__top--child", "dragover__bottom--child");
-        (element as HTMLElement).style.removeProperty("--drag-indent");
-        (element as HTMLElement).style.removeProperty("--drag-guides");
-        (element as HTMLElement).style.removeProperty("--drag-line-left");
-        (element as HTMLElement).style.removeProperty("--drag-base-bg");
-        element = undefined;
-    }
-    // 拖拽被限制（不允许插入）时隐藏提示，避免残留"移动"文字
-    hideDragTip();
 };

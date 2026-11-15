@@ -29,12 +29,13 @@ export const addClearButton = (options: {
     width?: string,
     height?: number
     className?: string
+    icon?: string
 }) => {
     const contenteditable = !!options.inputElement.getAttribute("contenteditable");
     options.inputElement.dataset.oldPaddingRight = options.inputElement.style.paddingRight;
     options.inputElement.insertAdjacentHTML("afterend",
         `<svg class="${options.className || "b3-form__icon-clear"} ariaLabel" aria-label="${window.siyuan.languages.clear}" style="${options.right ? "right: " + options.right + "px;" : ""}${options.height ? "height:" + options.height + "px;" : ""}${options.width ? "width:" + options.width : ""}">
-<use xlink:href="#iconCloseRound"></use></svg>`);
+<use xlink:href="#${options.icon || "iconCloseRound"}"></use></svg>`);
     const clearElement = options.inputElement.nextElementSibling;
     clearElement.addEventListener("click", () => {
         if (contenteditable) {
@@ -49,6 +50,9 @@ export const addClearButton = (options: {
         }
     });
     options.inputElement.addEventListener("input", () => {
+        update(options.inputElement, clearElement, options.right, contenteditable);
+    });
+    options.inputElement.addEventListener("change", () => {
         update(options.inputElement, clearElement, options.right, contenteditable);
     });
     // contenteditable 剪切不会触发 input

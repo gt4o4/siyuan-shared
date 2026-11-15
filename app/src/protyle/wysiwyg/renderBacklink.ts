@@ -1,3 +1,4 @@
+import type {FileTreeGetDocRequestInput} from "../../types/api";
 import {getIconByType} from "../../editor/getIcon";
 import {removeLoading} from "../ui/initUI";
 import {fetchPost} from "../../util/fetch";
@@ -7,10 +8,26 @@ import {highlightRender} from "../render/highlightRender";
 import {blockRender} from "../render/blockRender";
 import {disabledForeverProtyle, disabledProtyle} from "../util/onGet";
 import {avRender} from "../render/av/render";
-import {hasClosestByAttribute} from "../util/hasClosest";
+import {improveBreadcrumbAppearance} from "../breadcrumb/appearance";
 import {isEncryptedBox} from "../../util/pathName";
+import {decodeHTML, escapeAttr, escapeHtml, escapeSearchHighlight} from "../../util/escape";
+import {
+    applyViewFoldStates,
+    clearViewFoldDefaults,
+    clearViewFoldOccurrenceState,
+    markViewFoldDefault,
+} from "../util/viewFold";
+import {normalizeHTMLAssetIFrameBlockDOM} from "../../asset/html";
+import {IBacklinkAVTarget, prepareBacklinkAV} from "../render/av/backlink";
+import {captureBacklinkAVSources, reuseBacklinkAVSources} from "../render/av/backlinkReuse";
+import {captureBacklinkImageSources, reuseBacklinkImageSources} from "../render/backlinkImageReuse";
+import {markBacklinkReference, updateBacklinkReferenceVisibility} from "./backlinkReference";
+import {setBacklinkTypeFoldExpandHandler, updateBacklinkTypeFolds} from "./backlinkTypeFold";
 
 interface IBacklinkData {
+    type?: string,
+    referenceBlockID?: string,
+    attributeViewTargets?: IBacklinkAVTarget[],
     id?: string,
     revision?: string,
     blockPaths: IBreadcrumb[],
@@ -19,8 +36,12 @@ interface IBacklinkData {
 }
 
 interface IBacklinkDOMRecord {
+    referenceBlockID: string,
     revision: string,
     anchor: HTMLElement,
+    targets: IBacklinkAVTarget[],
+    databases: ReturnType<typeof captureBacklinkAVSources>,
+    images: ReturnType<typeof captureBacklinkImageSources>,
 }
 
 const backlinkDOMRecords = new WeakMap<IProtyle, Map<string, IBacklinkDOMRecord>>();
@@ -43,33 +64,42 @@ const removeBacklinkDOMRecord = (record: IBacklinkDOMRecord) => {
     getBacklinkDOMNodes(record.anchor).forEach(item => item.parentNode?.removeChild(item));
 };
 
-const createBacklinkDOMRecord = (item: IBacklinkData, index: number, id: string) => {
+const createBacklinkDOMRecord = (item: IBacklinkData, index: number, id: string, showDocument: boolean) => {
     const template = document.createElement("template");
-    template.innerHTML = genBreadcrumb(item.blockPaths, false, index, id) + setBacklinkFold(item.dom, item.expand);
+    template.innerHTML = genBreadcrumb(item.blockPaths, showDocument, index, id) + setBacklinkFold(item.dom, item.expand);
+    markBacklinkReference(template.content, item.referenceBlockID);
     const nodes = Array.from(template.content.childNodes);
+    (nodes[0] as HTMLElement).setAttribute("data-backlink-revision", item.revision || "");
+    (nodes[0] as HTMLElement).setAttribute("data-backlink-type", item.type || "");
     return {
         record: {
+            referenceBlockID: item.referenceBlockID || "",
             revision: item.revision || "",
             anchor: nodes[0] as HTMLElement,
+            targets: item.attributeViewTargets || [],
+            databases: captureBacklinkAVSources(nodes, item.attributeViewTargets || []),
+            images: captureBacklinkImageSources(nodes),
         },
         nodes,
     };
 };
 
-const renderBacklinkDOMNodes = (protyle: IProtyle, nodes: Node[]) => {
-    nodes.forEach(item => {
+const renderBacklinkDOMNodes = (protyle: IProtyle, nodes: Node[], record: IBacklinkDOMRecord) => {
+    return Promise.all(nodes.map(async item => {
         if (!(item instanceof HTMLElement)) {
             return;
         }
         improveBreadcrumbAppearance(item);
         processRender(item);
         highlightRender(item);
-        avRender(item, protyle);
+        prepareBacklinkAV(item, record.targets);
+        await avRender(item, protyle);
         blockRender(protyle, item);
-    });
+    }));
 };
 
 export const renderBacklink = (protyle: IProtyle, backlinkData: IBacklinkData[]) => {
+    updateBacklinkReferenceVisibility(protyle);
     protyle.block.showAll = true;
     const element = protyle.wysiwyg.element;
     let records = backlinkDOMRecords.get(protyle);
@@ -78,16 +108,24 @@ export const renderBacklink = (protyle: IProtyle, backlinkData: IBacklinkData[])
         backlinkDOMRecords.set(protyle, records);
         element.replaceChildren();
     }
+    setBacklinkTypeFoldExpandHandler(protyle, id => {
+        const record = records.get(id);
+        if (record) {
+            // 展开后重新计算数据库等内容的布局，避免沿用隐藏时的尺寸。
+            void renderBacklinkDOMNodes(protyle, getBacklinkDOMNodes(record.anchor), record);
+        }
+    });
 
     const ids = new Set(backlinkData.map((item, index) => item.id || `legacy-${index}`));
     records.forEach((record, id) => {
         if (!ids.has(id)) {
+            clearViewFoldOccurrenceState(protyle, id);
             removeBacklinkDOMRecord(record);
             records.delete(id);
         }
     });
 
-    const changedNodes: Node[][] = [];
+    const changedNodes: {nodes: Node[], record: IBacklinkDOMRecord}[] = [];
     const orderedRecords: IBacklinkDOMRecord[] = [];
     backlinkData.forEach((item, index) => {
         const id = item.id || `legacy-${index}`;
@@ -97,16 +135,20 @@ export const renderBacklink = (protyle: IProtyle, backlinkData: IBacklinkData[])
             record = undefined;
         }
         if (!record || !item.revision || record.revision !== item.revision) {
-            const created = createBacklinkDOMRecord(item, index, id);
+            clearViewFoldDefaults(protyle, id);
+            const created = createBacklinkDOMRecord(item, index, id, protyle.element.hasAttribute("data-backlink-show-document"));
             if (record) {
+                const restoreAVScroll = reuseBacklinkAVSources(created.nodes, created.record.databases, record.databases);
+                reuseBacklinkImageSources(created.record.images, record.images);
                 created.nodes.forEach(node => element.insertBefore(node, record.anchor));
                 removeBacklinkDOMRecord(record);
+                restoreAVScroll();
             } else {
                 created.nodes.forEach(node => element.appendChild(node));
             }
             record = created.record;
             records.set(id, record);
-            changedNodes.push(created.nodes);
+            changedNodes.push({nodes: created.nodes, record});
         }
         orderedRecords.push(record);
     });
@@ -127,24 +169,45 @@ export const renderBacklink = (protyle: IProtyle, backlinkData: IBacklinkData[])
             }
         }
     });
-    changedNodes.forEach(nodes => renderBacklinkDOMNodes(protyle, nodes));
+    const applyPromises: Promise<void>[] = [];
+    changedNodes.forEach(({nodes, record}) => {
+        applyPromises.push(renderBacklinkDOMNodes(protyle, nodes, record).then(async () => {
+            await Promise.all(nodes.map(node => {
+                if (node instanceof HTMLElement) {
+                    return applyViewFoldStates(protyle, node);
+                }
+            }));
+        }));
+    });
     removeLoading(protyle);
     if (window.siyuan.config.readonly || window.siyuan.config.editor.readOnly) {
         disabledProtyle(protyle);
     }
+    updateBacklinkTypeFolds(protyle);
+    return Promise.all(applyPromises).then(() => {
+        updateBacklinkTypeFolds(protyle);
+    });
 };
 
 // 传递型折叠处理
-export const foldPassiveType = (expand: boolean, element: HTMLElement | DocumentFragment) => {
+export const foldPassiveType = (expand: boolean, element: HTMLElement | DocumentFragment, viewOnly = false) => {
     if (element.firstElementChild.classList.contains("li")) {
         if (expand) {
             element.querySelectorAll(".li .li").forEach(item => {
                 if (item.childElementCount > 3) {
-                    item.setAttribute("fold", "1");
+                    if (viewOnly) {
+                        markViewFoldDefault(item, true);
+                    } else {
+                        item.setAttribute("fold", "1");
+                    }
                 }
             });
         } else {
-            element.firstElementChild.setAttribute("fold", "1");
+            if (viewOnly) {
+                markViewFoldDefault(element.firstElementChild, true);
+            } else {
+                element.firstElementChild.setAttribute("fold", "1");
+            }
         }
     } else if (element.firstElementChild.getAttribute("data-type") === "NodeHeading") {
         Array.from(element.children).forEach((item, index) => {
@@ -161,12 +224,12 @@ export const foldPassiveType = (expand: boolean, element: HTMLElement | Document
 const setBacklinkFold = (html: string, expand: boolean) => {
     const tempDom = document.createElement("template");
     tempDom.innerHTML = html;
-    foldPassiveType(expand, tempDom.content);
+    foldPassiveType(expand, tempDom.content, true);
     return tempDom.innerHTML;
 };
 
 export const loadBreadcrumb = (protyle: IProtyle, element: HTMLElement) => {
-    const getDocParam: IObject = {
+    const getDocParam: FileTreeGetDocRequestInput = {
         id: element.getAttribute("data-id"),
         size: Constants.SIZE_GET_MAX,
     };
@@ -174,6 +237,9 @@ export const loadBreadcrumb = (protyle: IProtyle, element: HTMLElement) => {
         getDocParam.notebook = protyle.notebookId;
     }
     fetchPost("/api/filetree/getDoc", getDocParam, getResponse => {
+        if (getResponse.code !== 0) {
+            return;
+        }
         element.parentElement.querySelector(".protyle-breadcrumb__item--active").classList.remove("protyle-breadcrumb__item--active");
         element.classList.add("protyle-breadcrumb__item--active");
         let nextElement = element.parentElement.nextElementSibling;
@@ -182,10 +248,21 @@ export const loadBreadcrumb = (protyle: IProtyle, element: HTMLElement) => {
             nextElement = nextElement.nextElementSibling;
             tempElement.remove();
         }
-        element.parentElement.insertAdjacentHTML("afterend", setBacklinkFold(getResponse.data.content, true));
+        element.parentElement.insertAdjacentHTML("afterend",
+            normalizeHTMLAssetIFrameBlockDOM(setBacklinkFold(getResponse.data.content, true)));
+        clearViewFoldDefaults(protyle, element.parentElement.getAttribute("data-backlink-id"));
         processRender(element.parentElement.parentElement);
+        const record = backlinkDOMRecords.get(protyle)?.get(element.parentElement.dataset.backlinkId);
+        getBacklinkDOMNodes(element.parentElement).forEach(node => {
+            if (node instanceof HTMLElement) {
+                markBacklinkReference(node, record?.referenceBlockID);
+                prepareBacklinkAV(node, record?.targets || []);
+            }
+        });
         avRender(element.parentElement.parentElement, protyle);
         blockRender(protyle, element.parentElement.parentElement);
+        void applyViewFoldStates(protyle);
+        updateBacklinkTypeFolds(protyle);
         if (getResponse.data.isSyncing) {
             disabledForeverProtyle(protyle);
         } else if (window.siyuan.config.readonly || window.siyuan.config.editor.readOnly) {
@@ -216,45 +293,11 @@ export const genBreadcrumb = (blockPaths: IBreadcrumb[], renderFirst: boolean, p
         }
         html += `<span class="protyle-breadcrumb__item${index === blockPaths.length - 1 ? " protyle-breadcrumb__item--active" : ""}" data-id="${item.id}">
     <svg class="popover__block" data-id="${item.id}"><use xlink:href="#${getIconByType(item.type, item.subType)}"></use></svg>
-    ${item.name ? `<span class="protyle-breadcrumb__text" title="${item.name}">${item.name}</span>` : ""}
+    ${item.name ? `<span class="protyle-breadcrumb__text" title="${escapeAttr(escapeHtml(decodeHTML(item.name)))}">${escapeSearchHighlight(item.name)}</span>` : ""}
 </span>`;
         if (index !== blockPaths.length - 1) {
             html += '<svg class="protyle-breadcrumb__arrow"><use xlink:href="#iconRight"></use></svg>';
         }
     });
     return `<div${backlinkAttr} contenteditable="false" class="protyle-breadcrumb__bar protyle-breadcrumb__bar--nowrap">${html}</div>`;
-};
-
-export const improveBreadcrumbAppearance = (element: HTMLElement) => {
-    const elements: HTMLElement[] = [];
-    if (element.classList.contains("protyle-breadcrumb__bar")) {
-        elements.push(element);
-    }
-    elements.push(...Array.from(element.querySelectorAll(".protyle-breadcrumb__bar")) as HTMLElement[]);
-    elements.forEach((item: HTMLElement) => {
-        item.classList.remove("protyle-breadcrumb__bar--nowrap");
-        const itemElements = Array.from(item.querySelectorAll(".protyle-breadcrumb__text"));
-        if (itemElements.length === 0) {
-            return;
-        }
-        let jump = false;
-        const isEmbed = hasClosestByAttribute(item, "data-type", "NodeBlockQueryEmbed");
-        while (item.scrollHeight > 30 && !jump && itemElements.length > 1) {
-            itemElements.find((item, index) => {
-                if (index > (isEmbed ? 0 : -1)) {
-                    if (!item.classList.contains("protyle-breadcrumb__text--ellipsis")) {
-                        item.classList.add("protyle-breadcrumb__text--ellipsis");
-                        return true;
-                    }
-                    if (index === itemElements.length - 1 && item.classList.contains("protyle-breadcrumb__text--ellipsis")) {
-                        jump = true;
-                    }
-                }
-            });
-        }
-        item.classList.add("protyle-breadcrumb__bar--nowrap");
-        if (item.lastElementChild) {
-            item.scrollLeft = (item.lastElementChild as HTMLElement).offsetLeft - item.clientWidth + 14;
-        }
-    });
 };

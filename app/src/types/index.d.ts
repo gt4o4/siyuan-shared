@@ -3,105 +3,18 @@ type TDockPosition = "Left" | "Right" | "Bottom"
 type TWS = "main" | "filetree" | "protyle" | "backlink" | "bookmark" | "graph" | "outline" | "tag" | "agentChat"
 type TDock = "file" | "outline" | "inbox" | "bookmark" | "tag" | "graph" | "globalGraph" | "backlink" | "agentChat"
 type TTab = "Outline" | "Graph" | "Backlink" | "Asset" | "Editor" | "Search" | "siyuan-card"
-type TOperation =
-    "insert"
-    | "restoreCreatedDoc"
-    | "removeCreatedDoc"
-    | "update"
-    | "delete"
-    | "move"
-    | "foldHeading"
-    | "unfoldHeading"
-    | "setAttrs"
-    | "updateAttrs"
-    | "append"
-    | "insertAttrViewBlock"
-    | "removeAttrViewBlock"
-    | "addAttrViewCol"
-    | "removeAttrViewCol"
-    | "addFlashcards"
-    | "removeFlashcards"
-    | "updateAttrViewCell"
-    | "updateAttrViewCol"
-    | "updateAttrViewColTemplate"
-    | "sortAttrViewRow"
-    | "sortAttrViewCol"
-    | "sortAttrViewKey"
-    | "setAttrViewColPin"
-    | "setAttrViewColHidden"
-    | "setAttrViewColWrap"
-    | "setAttrViewColWidth"
-    | "setAttrViewColsWidth"
-    | "setAttrViewColAlign"
-    | "updateAttrViewColOptions"
-    | "removeAttrViewColOption"
-    | "updateAttrViewColOption"
-    | "setAttrViewName"
-    | "setAttrViewNewItemTemplates"
-    | "doUpdateUpdated"
-    | "duplicateAttrViewKey"
-    | "setAttrViewColIcon"
-    | "setAttrViewFilters"
-    | "setAttrViewColRelationFilters"
-    | "setAttrViewColRollupFilters"
-    | "setAttrViewSorts"
-    | "setAttrViewColCalc"
-    | "updateAttrViewColNumberFormat"
-    | "setAttrViewColDateFormat"
-    | "replaceAttrViewBlock"
-    | "addAttrViewView"
-    | "setAttrViewViewName"
-    | "removeAttrViewView"
-    | "setAttrViewViewIcon"
-    | "duplicateAttrViewView"
-    | "duplicateAttrViewRow"
-    | "setAttrViewBlockVisibleViews"
-    | "sortAttrViewView"
-    | "setAttrViewPageSize"
-    | "updateAttrViewColRelation"
-    | "moveOutlineHeading"
-    | "updateAttrViewColRollup"
-    | "hideAttrViewName"
-    | "setAttrViewCardSize"
-    | "setAttrViewCardWidth"
-    | "setAttrViewCardAspectRatio"
-    | "setAttrViewCardAspectRatioValue"
-    | "setAttrViewCardLayout"
-    | "setAttrViewColFullRow"
-    | "setAttrViewCoverFrom"
-    | "setAttrViewCoverFromAssetKeyID"
-    | "setAttrViewCardCoverPosition"
-    | "setAttrViewFitImage"
-    | "setAttrViewShowIcon"
-    | "setAttrViewWrapField"
-    | "setAttrViewColDateFillCreated"
-    | "setAttrViewColDateFillSpecificTime"
-    | "setAttrViewViewDesc"
-    | "setAttrViewColDesc"
-    | "setAttrViewBlockView"
-    | "setAttrViewGroup"
-    | "removeAttrViewGroup"
-    | "hideAttrViewAllGroups"
-    | "syncAttrViewTableColWidth"
-    | "hideAttrViewGroup"
-    | "sortAttrViewGroup"
-    | "foldAttrViewGroup"
-    | "foldAttrViewGroups"
-    | "setAttrViewDisplayFieldName"
-    | "setAttrViewDisplayEmptyFields"
-    | "setAttrViewFillColBackgroundColor"
-    | "setAttrViewUpdatedIncludeTime"
-    | "setAttrViewCreatedIncludeTime"
+type TOperation = IOperation["action"];
 type TBazaarType = "templates" | "icons" | "widgets" | "themes" | "plugins"
+type TBazaarPackageInvalidReason = "missing-manifest" | "invalid-manifest" | "name-mismatch"
 type TCardType = "doc" | "notebook" | "all"
 type TEventBus = "ws-main" | "sync-start" | "sync-end" | "sync-fail" |
     "click-blockicon" | "click-editorcontent" | "click-pdf" | "click-editortitleicon" | "click-flashcard-action" |
     "open-noneditableblock" |
     "open-menu-blockref" | "open-menu-fileannotationref" | "open-menu-tag" | "open-menu-link" | "open-menu-image" |
     "open-menu-av" | "open-menu-content" | "open-menu-breadcrumbmore" | "open-menu-doctree" | "open-menu-inbox" |
-    "open-siyuan-url-plugin" | "open-siyuan-url-block" | "opened-notebook" |
+    "open-siyuan-url-plugin" | "open-siyuan-url-block" | "open-asset" | "open-link" | "opened-notebook" |
     "closed-notebook" |
-    "paste" |
+    "paste" | "before-upload-assets" | "before-search-results-render" |
     "input-search" |
     "loaded-protyle-dynamic" | "loaded-protyle-static" |
     "switch-protyle" | "switch-protyle-mode" |
@@ -109,49 +22,16 @@ type TEventBus = "ws-main" | "sync-start" | "sync-end" | "sync-fail" |
     "lock-screen" |
     "mobile-keyboard-show" | "mobile-keyboard-hide" |
     "code-language-update" | "code-language-change" |
-    "kernel-plugin-state-change"
-type TAVView = "table" | "gallery" | "kanban"
+    "kernel-plugin-state-change" |
+    "before-show-tooltip" | "before-hide-tooltip" |
+    "common-menu-open" | "common-menu-closed"
+type TAVView = "table" | "list" | "gallery" | "kanban" | "calendar";
 type TAVAlign = "" | "left" | "center" | "right"
-type TAVDateFormat = "" | "full" | "month-day-year" | "day-month-year" | "year-month-day"
-type TAVCol =
-    "text"
-    | "date"
-    | "number"
-    | "relation"
-    | "rollup"
-    | "select"
-    | "block"
-    | "mSelect"
-    | "url"
-    | "email"
-    | "phone"
-    | "mAsset"
-    | "template"
-    | "created"
-    | "updated"
-    | "checkbox"
-    | "lineNumber"
-type TAVFilterOperator =
-    "="
-    | "!="
-    | ">"
-    | ">="
-    | "<"
-    | "<="
-    | "Contains"
-    | "Does not contains"
-    | "Contains any item"
-    | "Does not contain any item"
-    | "Is empty"
-    | "Is not empty"
-    | "Starts with"
-    | "Ends with"
-    | "Is between"
-    | "Is relative to today"
-    | "Is true"
-    | "Is false"
+type TAVDateFormat = "" | "full" | "month-day-year" | "day-month-year" | "year-month-day" | "lunar"
+type TAVCol = import("./av").AVKeyType;
+type TAVFilterOperator = import("./av").AVFilterOperator;
 
-type TRecentDocsSort = "viewedAt" | "closedAt" | "openAt" | "updated"
+type TRecentDocsSort = "viewedAt" | "closedAt" | "openAt" | "created" | "updated"
 type TPublishAccessLevel = "public" | "protected" | "hidden" | "private" | "forbidden";
 
 /**
@@ -176,20 +56,6 @@ type TJsonRpcHandler<T = any> = (...args: TJsonRpcMethodParams) => Promise<T> | 
 
 declare module "blueimp-md5"
 
-declare class Highlight {
-    constructor(...range: Range[]);
-
-    add(range: Range): void
-
-    clear(): void
-
-    forEach(callbackfn: (value: Range, key: number) => void): void;
-}
-
-declare namespace CSS {
-    const highlights: Map<string, Highlight>;
-}
-
 interface CSSStyleDeclarationElectron extends CSSStyleDeclaration {
     WebkitAppRegion: string;
 }
@@ -212,6 +78,7 @@ interface Window {
         };
         dispose(element: Element): void;
         getInstanceById(id: string): {
+            setTheme: (theme: string) => void
             resize: () => void
             clear: () => void
             getOption: () => { series: { type: string }[] }
@@ -223,13 +90,39 @@ interface Window {
         }): void;
     };
     MathJax: {
+        loader?: {
+            paths: {[key: string]: string}
+        }
+        output?: {
+            font: string
+            fontPath: string
+            linebreaks?: {
+                inline: boolean
+            }
+        }
+        options?: {
+            enableMenu: boolean
+            enableEnrichment: boolean
+            enableSpeech: boolean
+            enableBraille: boolean
+            enableExplorer: boolean
+            menuOptions?: {
+                settings: {
+                    enrich: boolean
+                    speech: boolean
+                    braille: boolean
+                }
+            }
+        }
         svg: {
             fontCache: string
         }
         startup?: {
-            promise: Promise<void>
+            promise?: Promise<void>
+            typeset?: boolean
         }
         tex2svg?(math: string, options: { display: boolean }): HTMLElement
+        tex2svgPromise?(math: string, options: { display: boolean }): Promise<HTMLElement>
     };
     hljs: {
         listLanguages(): string[];
@@ -248,7 +141,7 @@ interface Window {
             displayMode: boolean;
             output: string;
             macros: IObject;
-            trust: boolean;
+            trust: boolean | ((context: {command: string; url?: string; protocol?: string}) => boolean);
             strict: (errorCode: string) => "ignore" | "warn";
         }): string;
     };
@@ -256,7 +149,7 @@ interface Window {
     mermaidTidyTree: object[],
     mermaid: {
         initialize(options: any): void,
-        render(id: string, text: string): Promise<{ svg: string }>,
+        render(id: string, text: string, container?: HTMLElement): Promise<{ svg: string }>,
         registerExternalDiagrams(ex: object[]): Promise<void>,
         registerLayoutLoaders(layouts: object[]): void,
         registerIconPacks(options: {
@@ -271,6 +164,12 @@ interface Window {
     webkit: {
         nativeCallbacks: { [key: string]: (id: number) => void },
         messageHandlers: {
+            openMarkdownEditor?: { postMessage: (data: string) => void }
+            finishKeyboardComposition?: { postMessage: (data: string) => Promise<boolean> }
+            showTextMenu?: { postMessage: (data: string) => Promise<boolean> }
+            pickPhotos?: { postMessage: (data: string) => Promise<Array<{
+                name: string, mimeType: string, data: string, pair: string, kind: "photo" | "video"
+            }>> }
             saveExportFile: { postMessage: (url: string) => void }
             saveExportFileV2?: { postMessage: (data: {uri: string, requestID: string}) => void }
             openLink: { postMessage: (url: string) => void }
@@ -294,11 +193,16 @@ interface Window {
         }
     };
     htmlToImage: {
+        getFontEmbedCSS: (element: Element, options?: IHtmlToImageOptions) => Promise<string>
         toCanvas: (element: Element, options?: IHtmlToImageOptions) => Promise<HTMLCanvasElement>
         toBlob: (element: Element, options?: IHtmlToImageOptions) => Promise<Blob>
     };
+    modernScreenshot: {
+        domToBlob: (element: Element, options?: IModernScreenshotOptions) => Promise<Blob>
+    };
     siyuan: ISiyuan;
     JSAndroid: {
+        openMarkdownEditor?(): void
         openAuthURL(url: string): void
         returnDesktop(): void
         openExternal(url: string): void
@@ -320,11 +224,15 @@ interface Window {
         getScreenWidthPx(): number
         exit(): void
         setWebViewFocusable(enable: boolean): void
+        getWordSelection?(text: string, start: number, end: number): string
+        prepareWordSelection?(word: string, startAdjust: number, endAdjust: number): boolean
         sendNotification(channel: string, title: string, body: string, delayInSeconds: number): number
         cancelNotification(id: number): void
         logInputEvent?(details: string): void
     };
     JSHarmony: {
+        openMarkdownEditor?(): void
+        getSystemFonts?(): Promise<string>
         openAuthURL(url: string): void
         showKeyboard(): void
         hideKeyboard(): void
@@ -333,9 +241,9 @@ interface Window {
         saveExportFile(url: string): void
         saveExportFileV2?(url: string, requestID: string): void
         changeStatusBarColor(color: string, mode: number): void
-        writeClipboard(text: string): void
-        writeHTMLClipboard(text: string, html: string): void
-        writeSiYuanHTMLClipboard(text: string, html: string, siyuanHTML: string): void
+        writeClipboard(text: string): boolean | void
+        writeHTMLClipboard(text: string, html: string): boolean | void
+        writeSiYuanHTMLClipboard(text: string, html: string, siyuanHTML: string): boolean | void
         readClipboard(): string
         readHTMLClipboard(): string
         readSiYuanHTMLClipboard(): string
@@ -373,15 +281,108 @@ interface Window {
 
 interface ILocalFiles {
     path: string,
-    size: number
+    size: number | null,
+    isDir?: boolean
+}
+
+type TAssetUploadSource = "paste" | "drop" | "file-picker" | "programmatic"
+type TAssetUploadTarget = "editor" | "av-cell" | "background" | "pdf-annotation"
+type TAssetUploadStatus = "success" | "partial" | "failed" | "canceled"
+type TAssetUploadRejectionReason = "name-empty" | "size-limit" | "type-not-accepted"
+
+interface IAssetUploadPosition {
+    x: number,
+    y: number
+}
+
+type IAssetUploadInput = {
+    kind: "files",
+    files: File[]
+} | {
+    kind: "local-files",
+    files: ILocalFiles[]
+}
+
+type IAssetUploadDecision = {
+    action: "replace",
+    /** 必须保持各项的逻辑顺序；需要逐项回填的上传会按下标关联原资源。 */
+    input: IAssetUploadInput
+} | {
+    /** 取消当前资源写入；未取得全部资源路径时，HTML 粘贴将停止正文提交。 */
+    action: "cancel"
+}
+
+interface IAssetUploadRejection {
+    index: number,
+    name: string,
+    reasons: TAssetUploadRejectionReason[]
+}
+
+interface IAssetUploadSuccess {
+    index: number,
+    name: string,
+    path: string
+}
+
+interface IAssetUploadFailure {
+    index: number,
+    name: string,
+    error: string
+}
+
+interface IAssetUploadResult {
+    requestId: string,
+    status: TAssetUploadStatus,
+    /** 插件链处理结束后的完整输入。 */
+    input: IAssetUploadInput,
+    /** 通过前端校验并实际提交上传的输入。 */
+    acceptedInput?: IAssetUploadInput,
+    /** 被前端校验拒绝的文件及其在完整输入中的位置。 */
+    rejected?: IAssetUploadRejection[],
+    /** 按 acceptedInput 中的索引记录明确报告成功的结果，可区分同名文件；需要逐项确认时以该字段为准。 */
+    succFiles?: IAssetUploadSuccess[],
+    /** 按 acceptedInput 中的索引记录明确报告失败的结果；可能不包含未尝试或未逐项报告的项。 */
+    failedFiles?: IAssetUploadFailure[],
+    succMap?: Record<string, string>,
+    errFiles?: string[],
+    error?: string
+}
+
+/** 不得在该事件上调用 `preventDefault()`，取消上传应使用 `respondWith({action: "cancel"})`；未取得全部资源路径时，HTML 粘贴将停止正文提交。 */
+interface IBeforeUploadAssetsDetail {
+    requestId: string,
+    /** PDF 标注等无编辑器上传场景不提供该字段。 */
+    protyle?: IProtyle,
+    source: TAssetUploadSource,
+    target: TAssetUploadTarget,
+    position?: IAssetUploadPosition,
+    /** 替换输入必须保持的精确文件数量；各项还须与原输入按下标一一对应。 */
+    requiredFileCount?: number,
+    /** 当前目标支持的输入类型；未提供时支持 files 和 local-files。 */
+    allowedInputKinds?: Array<IAssetUploadInput["kind"]>,
+    input: IAssetUploadInput,
+    /**
+     * 插件处理阶段的取消信号；自定义 upload.handler 执行期间也会在编辑器销毁或超时时触发。
+     * 标准传输开始后不再因编辑器销毁触发。
+     */
+    signal: AbortSignal,
+    /** 必须同步调用且每次事件只允许调用一次；替换项须保持逻辑顺序，异步处理应传入 Promise，每个插件默认 120 秒超时。 */
+    respondWith(response: IAssetUploadDecision | PromiseLike<IAssetUploadDecision>): void,
+    /**
+     * 必须同步注册，经思源前端上传协调层发起的资源写入成功、失败或取消时执行一次。
+     * 注册该回调的插件卸载后不再执行。
+     * 回调结果不表示父级正文或属性视图已完成写入，也不覆盖 HTTP API、CLI、MCP、同步、导入、历史恢复等内核写入。
+     */
+    onComplete(callback: (result: IAssetUploadResult) => void): void
 }
 
 interface IClipboardData {
     textHTML?: string,
     textPlain?: string,
     siyuanHTML?: string,
-    files?: File[],
+    files?: FileList | DataTransferItemList | File[],
     localFiles?: ILocalFiles[],
+    preserveSourceFormat?: boolean,
 }
 
 interface IRefDefs {
@@ -394,7 +395,10 @@ interface IRefDefs {
 
 interface IFilesPath {
     notebookId: string,
-    openPaths: string[]
+    openPaths: string[],
+    version?: 2,
+    expandedIDs?: {id: string, kind: "document" | "notebook"}[],
+    scrollAnchor?: {id: string, offset: number},
 }
 
 interface IPosition {
@@ -553,9 +557,9 @@ interface INotebook {
     icon: string;
     sort: number;
     subFileCount: number;
-    dueFlashcardCount?: string;
-    newFlashcardCount?: string;
-    flashcardCount?: string;
+    dueFlashcardCount?: number;
+    newFlashcardCount?: number;
+    flashcardCount?: number;
     sortMode: number;
     encrypted?: boolean;
     unlocked?: boolean;
@@ -563,6 +567,7 @@ interface INotebook {
 }
 
 interface ISiyuan {
+    /** 当前内核的只读文档标题能力，普通构建默认为 2，不持久化为用户设置。 */
     zIndex: number
     isReady?: boolean
     storage?: {
@@ -648,6 +653,7 @@ interface ISiyuan {
     },
     dragElement?: HTMLElement,
     dragTitle?: string,
+    dragTab?: ITabDragData,
     currentDragOverTabHeadersElement?: HTMLElement
     touchDragActive?: boolean,
     touchDragGhost?: HTMLElement | null,
@@ -685,37 +691,13 @@ interface ISiyuan {
     isPublish?: boolean;
 }
 
-interface IOperation {
-    action: TOperation, // move， delete 不需要传 data
-    id?: string,
-    context?: Record<string, string>,  // focusId, message, ignoreProcess, setRange
-    blockID?: string,
-    isTwoWay?: boolean, // 是否双向关联
-    backRelationKeyID?: string, // 双向关联的目标关联列 ID
-    avID?: string,  // av
-    format?: string // 属性视图字段格式化
-    keyID?: string // updateAttrViewCell 专享
-    rowID?: string // updateAttrViewCell 专享
-    data?: any, // updateAttr 时为  { old: IObject, new: IObject }, updateAttrViewCell 时为 {TAVCol: {content: string}}
-    parentID?: string
-    previousID?: string
-    retData?: any
-    nextID?: string // insert 专享
-    isDetached?: boolean // insertAttrViewBlock 专享
-    srcIDs?: string[] // removeAttrViewBlock 专享
-    srcs?: IOperationSrcs[] // insertAttrViewBlock 专享
-    ignoreDefaultFill?: boolean // insertAttrViewBlock 专享
-    viewID?: string // 多个属性视图操作使用，用于推送时不影响其他视图
-    viewIDs?: string[] // setAttrViewColHidden 批量指定数据库视图
-    name?: string // addAttrViewCol 专享
-    type?: TAVCol // addAttrViewCol 专享
-    deckID?: string // add/removeFlashcards 专享
-    blockIDs?: string[] // add/removeFlashcards 专享
-    removeDest?: boolean // removeAttrViewCol 专享
-    layout?: string // addAttrViewView 专享
-    groupID?: string // insertAttrViewBlock, sortAttrViewRow 专享
-    targetGroupID?: string // sortAttrViewRow 专享
-}
+/**
+ * convertList 必须通过 /api/transactions 作为单笔、单操作事务提交，blockIDs 为选中的列表、列表项或文本块。
+ * data.type 为 heading、paragraph 或 remove；heading 的 level 为 1 至 6，其他类型忽略 level。
+ * data.recursively 仅展开同类型子列表；列表项绑定迁移到首块并保留行身份和字段，歧义绑定整批拒绝。
+ * 成功后 retData 返回 rootIDs、removedIDs 和 focusID；撤销状态由内核管理，无需提交 undoOperations。
+ */
+type IOperation = Exclude<import("./api").TransactionOperationRequest, {action: import("./api").UnknownTransactionAction}>;
 
 interface IAVFilterOperation {
     action: "setAttrViewColRelationFilters" | "setAttrViewColRollupFilters";
@@ -744,6 +726,16 @@ interface IHtmlToImageOptions {
     onImageErrorHandler?: (event: Event) => void;
 }
 
+interface IModernScreenshotOptions {
+    [key: string]: unknown;
+    type?: string;
+    scale?: number;
+    maximumCanvasSize?: number;
+    fetch?: {
+        placeholderImage?: string;
+    };
+}
+
 interface ILayoutJSON extends ILayoutOptions {
     scrollAttr?: IScrollAttr,
     instance?: string,
@@ -761,6 +753,7 @@ interface ILayoutJSON extends ILayoutOptions {
     icon?: string
     rootId?: string
     databaseRowId?: string
+    databaseRow?: import("../protyle/render/av/openDatabaseRow").IDatabaseRowOpenData
     active?: boolean
     pin?: boolean
     isPreview?: boolean
@@ -770,24 +763,44 @@ interface ILayoutJSON extends ILayoutOptions {
     children?: ILayoutJSON[] | ILayoutJSON
 }
 
+interface ICommandContext {
+    source: "commandPanel" | "shortcut" | "editorShortcut" | "fileTreeShortcut" | "dockShortcut" |
+        "globalShortcut" | "keymap" | "menu" | "api",
+    focus: "global" | "editor" | "fileTree" | "dock",
+    protyle?: IProtyle,
+    range?: Range,
+    fileTree?: import("../layout/dock/Files").Files,
+    dock?: HTMLElement,
+}
+
 interface ICommand {
     langKey: string, // 用于区分不同快捷键的 key, 同时作为 i18n 的字段名
     langText?: string, // 显示的文本, 指定后不再使用 langKey 对应的 i18n 文本
     hotkey?: string, // 快捷键，默认为空字符串
     customHotkey?: string,
-    callback?: () => void   // 其余回调存在时将不会触发
-    globalCallback?: () => void // 焦点不在应用内时执行的回调
-    fileTreeCallback?: (file: import("../layout/dock/Files").Files) => void // 焦点在文档树上时执行的回调
-    editorCallback?: (protyle: IProtyle) => void     // 焦点在编辑器上时执行的回调
-    dockCallback?: (element: HTMLElement) => void    // 焦点在 dock 上时执行的回调
+    hotkeys?: string[], // 默认快捷键列表，优先于 hotkey
+    when?: (context: ICommandContext) => boolean,
+    enabled?: (context: ICommandContext) => boolean,
+    execute?: (context: ICommandContext) => void | Promise<void>
+    callback?: (context?: ICommandContext) => void   // 其余回调存在时将不会触发
+    globalCallback?: (context?: ICommandContext) => void // 焦点不在应用内时执行的回调
+    /** 文档树命令接收 Files 实例；通过 getSelectedItems() 获取完整选择，避免通过可视区 DOM 枚举。 */
+    fileTreeCallback?: (
+        file: import("../layout/dock/Files").Files,
+        context?: ICommandContext
+    ) => void // 焦点在文档树上时执行的回调
+    editorCallback?: (protyle: IProtyle, context?: ICommandContext) => void // 焦点在编辑器上时执行的回调
+    dockCallback?: (element: HTMLElement, context?: ICommandContext) => void // 焦点在 dock 上时执行的回调
 }
 
 interface IPluginData {
+    /** 内核已验证 plugin.json 的设置窗口运行声明；省略时不在设置窗口加载 */
+    settingsWindow?: boolean,
     displayName: string,
     name: string,
     js: string,
     css: string,
-    i18n: Record<string, string>
+    i18n: Record<string, import("./api").JSONValue>
 }
 
 interface IPluginDockTab {
@@ -826,14 +839,16 @@ interface IOpenFileOptions {
     rootIcon?: string, // 文档图标
     id?: string,  // file 必填
     rootID?: string, // file 必填
+    notebookId?: string,
     position?: string, // file 或者 asset，打开位置
     page?: number | string, // asset
     mode?: TEditorMode // file
     action?: TProtyleAction[]
-    keepCursor?: boolean // file，是否跳转到新 tab 上
+    keepCursor?: boolean // file 或 asset，是否跳转到新 tab 上
     zoomIn?: boolean // 是否缩放
     removeCurrentTab?: boolean // 在当前页签打开时需移除原有页签
     openNewTab?: boolean // 使用新页签打开
+    forceCurrentWindow?: boolean // 仅在当前桌面窗口中打开
     keepAVPanel?: boolean // 打开时保留数据库面板
     afterOpen?: (model?: import("../layout/Model").Model) => void // 打开后回调
 }
@@ -852,6 +867,15 @@ interface ITab {
     title?: string;
     panel?: string;
     callback?: (tab: import("../layout/Tab").Tab) => void;
+}
+
+interface ITabDragData {
+    title?: string;
+    icon?: string;
+    docIcon?: string;
+    pin: boolean;
+    focus: boolean;
+    unupdate: boolean;
 }
 
 interface IWebSocketData {
@@ -891,6 +915,7 @@ interface IGraphCommon {
 }
 
 interface IKeymapItem {
+    bindings?: Config.IKey["bindings"],
     default: string,
     custom: string
 }
@@ -904,25 +929,37 @@ interface IFile {
     path: string;
     name: string;
     titleEmpty?: boolean;
+    titleFormat?: "plain" | "inline-ast";
+    titleRevision?: string;
+    specTooNew?: boolean;
     hMtime: string;
     hCtime: string;
     hSize: string;
-    dueFlashcardCount?: string;
-    newFlashcardCount?: string;
-    flashcardCount?: string;
+    dueFlashcardCount?: number;
+    newFlashcardCount?: number;
+    flashcardCount?: number;
     id: string;
     count: number;
     subFileCount: number;
+    childrenSortMode?: number | null;
+}
+
+interface IFileTreeList {
+    files: IFile[];
+    box: string;
+    path: string;
+    effectiveSortMode?: number;
 }
 
 interface IBlockTree {
-    box: string,
+    box?: string,
     revision?: string,
     number?: string,
-    nodeType: string,
-    hPath: string,
-    subType: string,
+    nodeType?: string,
+    hPath?: string,
+    subType?: string,
     name: string,
+    nameIsHTML?: boolean,
     type: string,
     depth: number,
     url?: string,
@@ -1001,11 +1038,30 @@ interface IMenu {
     warning?: boolean
 }
 
+interface IBazaarFundingLink {
+    label: string;
+    url: string;
+}
+
 interface IBazaarFunding {
     openCollective?: string;
     patreon?: string;
     github?: string;
     custom?: string[];
+    links?: IBazaarFundingLink[];
+}
+
+type TBazaarRatingDistribution = [number, number, number, number, number];
+
+interface IBazaarRating {
+    average: number;
+    count: number;
+    distribution: TBazaarRatingDistribution;
+}
+
+interface IBazaarPackageChoice {
+    packageType: string;
+    name: string;
 }
 
 interface IBazaarItem {
@@ -1015,14 +1071,22 @@ interface IBazaarItem {
     kernels: string[];
     backends: string[];
     frontends: string[];
+    bootAppearances?: string[];
     keywords: string[];
     preferredDesc: string;
     preferredReadme: string;
+    deprecated?: boolean;
+    deprecatedReason?: Record<string, string>;
+    preferredDeprecatedReason?: string;
+    choices?: IBazaarPackageChoice[];
     iconURL: string;
     stars: number;
     author: string;
     updated: string;
+    created?: string;
     downloads: number;
+    ratingAvailable?: boolean;
+    rating?: IBazaarRating;
     disallowInstall: boolean;
     current: boolean;
     installed: boolean;
@@ -1030,6 +1094,7 @@ interface IBazaarItem {
     name: string;
     previewURL: string;
     repoHash: string;
+    repoRef?: string;
     repoURL: string;
     url: string;
     openIssues: number;
@@ -1044,9 +1109,13 @@ interface IBazaarItem {
     preferredFunding: string;
     disallowUpdate: boolean;
     updateRequiredMinAppVer?: string;
+    invalidReason?: TBazaarPackageInvalidReason;
     installedIncompatible?: boolean; // 仅插件/主题
     bazaarIncompatible?: boolean; // 仅插件/主题
+    bazaarVersionUnsupported?: boolean;
     enabled?: boolean; // 仅 plugin
+    userDisabledInPublish?: boolean; // 仅 plugin
+    hasStorageData?: boolean; // 仅插件
     modes?: string[]; // 仅 theme
 }
 
@@ -1060,7 +1129,47 @@ interface IBazaarPackageDetail {
     available?: IBazaarItem;
 }
 
+interface IAVColorTheme {
+    color: string;
+    backgroundColor: string;
+}
+
+interface IAVColor {
+    light: IAVColorTheme;
+    dark: IAVColorTheme;
+}
+
+interface IAVCustomColor extends IAVColor {
+    index: number;
+    hidden?: boolean;
+}
+
+interface IAVSubItemsConfig {
+    enabled: boolean;
+    parentKeyID: string;
+    childrenKeyID: string;
+}
+
+interface IAVNestedResult {
+    page: number;
+    pageSize: number;
+    rootCount: number;
+    rootLoaded: number;
+    matchedCount: number;
+    childPaging: Record<string, {page: number; pageSize: number; total: number; loaded: number}>;
+}
+
+interface IAVItemHierarchy {
+    parentID?: string;
+    depth: number;
+    childCount: number;
+    context: boolean;
+    expanded: boolean;
+}
+
 interface IAV {
+    pendingHTTPTemplates?: string[];
+    subItems?: IAVSubItemsConfig;
     id: string;
     name: string;
     view: IAVTable | IAVGallery;
@@ -1069,11 +1178,32 @@ interface IAV {
     views: IAVView[];
     isMirror?: boolean;
     newItemTemplates?: IAVNewItemTemplate[];
+    /** 关联选择面板新建也使用此默认模板；名称不同时可选择模板名称或输入名称，其他模板配置均保留。 */
     defaultTemplateID?: string;
+    customColors?: IAVCustomColor[];
+    colorOrder?: string[];
+    usedCustomColorIndexes?: number[];
+    contextFilter?: IAVContextFilter | null;
+    contextFilterFields?: IAVContextFilterField[];
     target?: IAVRenderTarget;
 }
 
+interface IAVContextFilter {
+    spec: 1;
+    /** 直接关联或目标为关联且显示原值/唯一值的汇总字段；汇总仅用于筛选，不回填新增条目 */
+    keyID: string;
+}
+
+interface IAVContextFilterField {
+    id: string;
+    name: string;
+    icon: string;
+    /** 最终关联目标数据库的 ID；汇总字段返回关联目标，而非中间数据库 */
+    targetAvID: string;
+}
+
 interface IAVRenderTarget {
+    ancestorIDs?: string[];
     status: "visible" | "filtered" | "itemNotFound" | "groupHidden";
     itemID: string;
     groupID?: string;
@@ -1098,6 +1228,7 @@ interface IAVNewItemFieldValue {
 interface IAVNewItemTemplate {
     id: string;
     name: string;
+    /** 游离条目和文档条目均支持预设图标。 */
     icon?: string;
     targetType: TAVNewItemTarget;
     primaryKeyTemplate?: string;
@@ -1105,26 +1236,48 @@ interface IAVNewItemTemplate {
     saveLocation?: IAVNewItemSaveLocation;
     contentTemplatePath?: string;
     hideInFileTree?: boolean;
+    /** 创建后打开条目；省略时仅日历自动打开，false 表示不打开。 */
+    openAfterCreate?: boolean;
+    /** 自动打开时使用当前分屏；省略或 false 时向右分屏打开。 */
+    openInCurrentTab?: boolean;
+}
+
+/** 单字段条件颜色规则按顺序匹配，默认背景同样占据优先级。 */
+interface IAVConditionalColorRule {
+    id: string;
+    filter: IAVFilter;
+    target: "item" | "property";
+    color: IAVCellSelectValue | null;
+    matchOption: boolean;
+}
+
+/** 渲染结果附在条目上，不写回字段值；前面的属性色优先于后面的整条目色。 */
+interface IAVItemConditionalColors {
+    background?: IAVCellSelectValue;
+    properties?: {[key: string]: IAVCellSelectValue};
 }
 
 interface IAVView {
-    name: string;
-    desc: string;
-    id: string;
-    type: TAVView;
-    icon: string;
-    hideAttrViewName: boolean;
-    pageSize: number;
-    showIcon: boolean;
-    wrapField: boolean;
+    subItemsDisplay?: "flat" | "nested";
+    nested?: IAVNestedResult;
+    conditionalColors?: IAVConditionalColorRule[];
+    name?: string;
+    desc?: string;
+    id?: string;
+    type?: TAVView;
+    icon?: string;
+    hideAttrViewName?: boolean;
+    pageSize?: number;
+    showIcon?: boolean;
+    wrapField?: boolean;
     groupHidden?: number,  // 0：显示，1：空白隐藏，2：手动隐藏
     groupFolded?: boolean,
-    filters: IAVFilter[],
-    sorts: IAVSort[],
-    groups: IAVView[]
-    group: IAVGroup
-    groupKey: IAVColumn
-    groupValue: IAVCellValue
+    filters?: IAVFilter[],
+    sorts?: IAVSort[],
+    groups?: IAVView[]
+    group?: IAVGroup
+    groupKey?: IAVColumn
+    groupValue?: IAVCellValue
 }
 
 interface IAVFieldView {
@@ -1135,7 +1288,64 @@ interface IAVFieldView {
     hidden: boolean;
 }
 
+/**
+ * 日历的持久化设置，也是 setAttrViewCalendar 事务的完整 data。
+ * 月周模式和当前浏览日期由各编辑器独立维护，不写入共享设置。
+ * 切换布局保留其他布局及分组设置；日历渲染不应用分组。
+ */
+interface IAVCalendarSettings {
+    /**
+     * 绑定一个 date、created 或 updated 字段；系统时间不支持通过日历拖动修改。
+     * date 字段设置显示模板时按模板结果排布，原始日期保持不变。
+     * 支持 YYYY-MM-DD、字段 dateFormat 指定的数字日期格式，以及当前语言的本地日期格式。
+     * 可附加 HH:mm[:ss]（以空格或 T 分隔），按日历请求时区解析，忽略首尾空白；斜杠日期不猜测日月顺序。
+     * 空值或无效结果不显示，也不进入待安排列表；计算日期不支持拖动、清空或按日期新建。
+     * 空字符串表示未绑定；字段缺失或类型变化时保留绑定，日历返回空行，不自动改绑或回填日期。
+     * createAttributeViewItem 的可选 calendarDate 是毫秒时间戳，仅支持绑定普通 date 字段的日历。
+     * 指定时按全天日期覆盖模板中该字段的值，与模板其他字段及条目创建共用一个可撤销事务。
+     * 系统时间源或带显示模板的日期字段拒绝指定 calendarDate；省略或传 null 时沿用常规创建流程。
+     */
+    dateKeyID: string;
+    /** 可选单选字段，使用已有选项颜色；空字符串表示不使用字段颜色。 */
+    colorKeyID: string;
+    /** 一周起始日，0 为星期日，1 为星期一，依次至 6 为星期六。 */
+    weekStart: number;
+    /** 月视图折叠前的条目行数：3、5、10 或 -1（全部）；省略或 0 使用 3，周视图显示全部，不影响查询范围。 */
+    rowLimit?: number;
+    /** 在日历条目中显示非主键字段的名称，默认关闭；按视图保存，支持撤销和重做。 */
+    displayFieldName?: boolean;
+}
+
+/**
+ * renderAttributeView、renderHistoryAttributeView 和 renderSnapshotAttributeView 的可选 calendarRange。
+ * 范围为毫秒时间戳的半开区间 [start, end)，必须满足 start < end，跨度不超过 63 * 24 小时。
+ * 仅作用于本次日历渲染，不写入共享视图、历史或快照；无效区间返回错误。
+ * 省略或传 null 时不限制日期范围，保留完整渲染及导出的调用兼容性。
+ * 日历在筛选和排序后按区间交集取行，不应用行分页；定位目标可额外包含区间外的匹配条目。
+ * 全天结束日期包含当天，带时间的结束端点不包含在区间内；缺少一个端点时按单点处理。
+ * 反向区间按开始端点显示，原值保持不变；无日期条目不显示。
+ * 发布读取继续过滤不可访问条目，日期范围和定位参数不扩大访问权限。
+ */
+interface IAVCalendarRange {
+    /** 范围起点，单位为毫秒，包含该时刻。 */
+    start: number;
+    /** 范围终点，单位为毫秒，不包含该时刻。 */
+    end: number;
+    /** 有效的客户端 IANA 时区，用于解释本地日期及夏令时。 */
+    timeZone: string;
+}
+
+// 表格、列表和日历共用行列结构，布局由 viewType 区分。
 interface IAVTable extends IAVView {
+    /** 仅日历布局返回的持久化字段设置。 */
+    calendar?: IAVCalendarSettings;
+    /** 回显本次请求的日期范围，省略范围的请求不返回此字段。 */
+    calendarRange?: IAVCalendarRange;
+    /**
+     * 可访问且通过筛选的定位条目的开始时间，单位为毫秒；无有效定位日期时省略。
+     * 发布读取先过滤不可访问条目，再重新计算此日期、定位行索引及 rowCount。
+     */
+    calendarTargetDate?: number;
     columns: IAVColumn[],
     rows: IAVRow[],
     rowCount: number,
@@ -1161,7 +1371,7 @@ interface IAVGallery extends IAVView {
     displayEmptyFields: boolean;
     fitImage: boolean;
     cards: IAVGalleryItem[],
-    desc: string
+    desc?: string
     fields: IAVColumn[]
     cardCount: number,
 }
@@ -1178,7 +1388,7 @@ interface IAVKanban extends IAVView {
     displayEmptyFields: boolean;
     fitImage: boolean;
     cards: IAVGalleryItem[],
-    desc: string
+    desc?: string
     fields: IAVColumn[]
     cardCount: number,
     fillColBackgroundColor: boolean
@@ -1186,7 +1396,8 @@ interface IAVKanban extends IAVView {
 
 interface IAVFilter {
     column?: string,                                  // 叶子节点：字段（列）ID
-    operator?: TAVFilterOperator,                     // 叶子节点：操作符
+    valueSource?: "stored" | "rendered",             // 叶子节点：值来源，默认为存储值
+    operator?: TAVFilterOperator | "",                     // 叶子节点：操作符
     quantifier?: string,                              // 叶子节点：量词
     value?: IAVCellValue,                             // 叶子节点：过滤值
     relativeDate?: IAVRelativeDate,                   // 叶子节点：相对时间
@@ -1204,6 +1415,7 @@ interface IAVRelativeDate {
 
 interface IAVGroup {
     field: string,
+    valueSource?: "stored" | "rendered",             // 值来源，默认为存储值
     method?: number //  0: 按值分组、1: 按数字范围分组、2: 按相对日期分组、3: 按天日期分组、4: 按周日期分组、5: 按月日期分组、6: 按年日期分组
     range?: {
         numStart: number // 数字范围起始值 0
@@ -1216,26 +1428,29 @@ interface IAVGroup {
 
 interface IAVSort {
     column: string,
-    order: "ASC" | "DESC",
+    valueSource?: "stored" | "rendered",             // 值来源，默认为存储值
+    order: "ASC" | "DESC" | "",
     dateEndpoint?: "start" | "end"
 }
 
 interface IAVColumn {
-    width: string,
-    align: TAVAlign,
-    icon: string,
-    id: string,
-    name: string,
-    desc: string,
-    wrap: boolean,
-    pin: boolean,
-    hidden: boolean,
+    attributePanelVisibility?: "" | "always" | "hide-empty" | "hide",
+    width?: string,
+    align?: TAVAlign,
+    icon?: string,
+    id?: string,
+    name?: string,
+    desc?: string,
+    wrap?: boolean,
+    pin?: boolean,
+    hidden?: boolean,
     fullRow?: boolean,
-    type: TAVCol,
-    numberFormat: string,
+    type?: TAVCol,
+    numberFormat?: string,
     dateFormat?: TAVDateFormat,
-    template: string,
-    calc: IAVCalc,
+    template?: string,
+    renderTemplate?: string,
+    calc?: IAVCalc,
     updated?: {
         includeTime: boolean
     }
@@ -1250,6 +1465,7 @@ interface IAVColumn {
     options?: {
         name: string,
         color: string,
+        resolvedColor?: IAVColor,
         desc?: string,
     }[],
     relation?: IAVColumnRelation,
@@ -1257,11 +1473,14 @@ interface IAVColumn {
 }
 
 interface IAVRow {
+    hierarchy?: IAVItemHierarchy;
+    conditionalColors?: IAVItemConditionalColors;
     id: string,
     cells: IAVCell[]
 }
 
 interface IAVGalleryItem {
+    conditionalColors?: IAVItemConditionalColors;
     coverURL?: string;
     coverContent?: string;
     coverPosition?: IAVCardCoverPosition;
@@ -1276,21 +1495,28 @@ interface IAVCardCoverPosition {
 }
 
 interface IAVCell {
-    id: string,
-    color: string,
-    bgColor: string,
-    value: IAVCellValue,
-    valueType: TAVCol,
+    id?: string,
+    color?: string,
+    bgColor?: string,
+    value?: IAVCellValue,
+    valueType?: TAVCol,
 }
 
 interface IAVCellValue {
     keyID?: string,
     id?: string,
     blockID?: string // 为 row id
-    type: TAVCol,
+    type?: TAVCol,
+    renderedContent?: string,
+    hasRenderTemplate?: boolean,
     isDetached?: boolean,
     text?: {
-        content: string
+        content: string,
+        rich?: {
+            spec: 1,
+            format: "kramdown",
+            content: string
+        } | null
     },
     number?: {
         content?: number,
@@ -1303,7 +1529,9 @@ interface IAVCellValue {
     block?: {
         content: string,
         id?: string,
-        icon?: string
+        /** 游离条目可独立设置图标；绑定条目与目标块共享图标，无图标的普通块在绑定时继承条目图标。 */
+        icon?: string,
+        refSubtype?: "s" | "d"
     }
     url?: {
         content: string
@@ -1311,6 +1539,7 @@ interface IAVCellValue {
     phone?: {
         content: string
     }
+    location?: IAVCellLocationValue
     email?: {
         content: string
     }
@@ -1330,6 +1559,18 @@ interface IAVCellValue {
     updated?: IAVCellDateValue
 }
 
+/**
+ * 坐标统一使用 WGS84，不自动转换；界面按经度、纬度显示，规范复制与导出文本按纬度、经度排列。
+ * 位置字段的文本筛选条件使用 IAVCellValue.text.content，不把查询词解析成坐标。
+ */
+interface IAVCellLocationValue {
+    name?: string;
+    latitude?: number | null;
+    longitude?: number | null;
+    /** 原始坐标输入仅作为来源信息，不参与判空、筛选和排序。 */
+    originalInput?: string;
+}
+
 interface IAVCellRelationValue {
     blockIDs: string[];
     contents?: IAVCellValue[];
@@ -1347,7 +1588,8 @@ interface IAVCellDateValue {
 
 interface IAVCellSelectValue {
     content: string,
-    color: string
+    color: string,
+    resolvedColor?: IAVColor
 }
 
 interface IAVCellAssetValue {
@@ -1357,6 +1599,11 @@ interface IAVCellAssetValue {
 }
 
 interface IAVColumnRelation {
+    detailView?: {
+        spec: number;
+        enabled: boolean;
+        viewID: string;
+    };
     avID?: string;
     backKeyID?: string;
     isTwoWay?: boolean;
@@ -1495,18 +1742,19 @@ interface ISiYuanUriBlockInfo {
 
     /**
      * 是否聚焦该块
-     * 
+     *
      * @defaultValue false
      */
     focus: boolean;
 
     /**
      * 是否全屏显示该块
-     * 
+     *
      * @defaultValue false
      */
     fullscreen: boolean;
     avItemID?: string;
     avViewID?: string;
     avGroupID?: string;
+    avStandalone?: boolean;
 }

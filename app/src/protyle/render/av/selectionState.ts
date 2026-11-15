@@ -1,3 +1,4 @@
+import {isAVReadonlyType} from "./capabilities";
 export interface IAVCellPoint {
     groupID: string;
     rowID: string;
@@ -34,6 +35,9 @@ interface IAVSelectionState {
 
 const selectionStates = new WeakMap<HTMLElement, IAVSelectionState>();
 
+export const getAVSelectionRoot = (element?: Element | null) =>
+    element?.closest<HTMLElement>("[data-av-id][data-av-type]") || undefined;
+
 export const findAVItemPointIndex = <T extends {itemID: string, groupID: string}>(
     items: T[], itemID?: string, groupID?: string) => {
     return items.findIndex(item => item.itemID === itemID && item.groupID === groupID);
@@ -59,7 +63,9 @@ export const getAVCellSelection = (blockElement: HTMLElement) => {
 };
 
 export const setAVCellSelection = (blockElement: HTMLElement, selection: IAVCellSelection) => {
-    getState(blockElement).cell = selection;
+    const state = getState(blockElement);
+    state.cell = selection;
+    delete state.item;
 };
 
 export const clearAVCellSelectionState = (blockElement: HTMLElement) => {
@@ -107,6 +113,7 @@ export const getAVItemSelection = (blockElement: HTMLElement) => {
 
 export const setAVItemAnchorState = (blockElement: HTMLElement, itemID: string, groupID: string) => {
     const state = getState(blockElement);
+    delete state.cell;
     state.item = {
         anchorID: itemID,
         anchorGroupID: groupID,
@@ -116,7 +123,9 @@ export const setAVItemAnchorState = (blockElement: HTMLElement, itemID: string, 
 };
 
 export const setAVItemSelectionState = (blockElement: HTMLElement, selection: IAVItemSelection) => {
-    getState(blockElement).item = selection;
+    const state = getState(blockElement);
+    state.item = selection;
+    delete state.cell;
 };
 
 export const clearAVItemSelectionState = (blockElement: HTMLElement) => {
@@ -126,50 +135,52 @@ export const clearAVItemSelectionState = (blockElement: HTMLElement) => {
     }
 };
 
+const findAVSelectionView = (view: IAVView, groupID: string): IAVView | undefined => {
+    if ((!groupID && !view.groups?.length) || view.id === groupID) {
+        return view;
+    }
+    for (const group of view.groups || []) {
+        const result = findAVSelectionView(group, groupID);
+        if (result) {
+            return result;
+        }
+    }
+};
+
+export const resolveAVSelectedCell = (data: IAV, point: IAVCellPoint): IAVSelectedCell | undefined => {
+    const view = findAVSelectionView(data.view, point.groupID);
+    if (!view) {
+        return;
+    }
+    const sourceColumns = (view as IAVTable).columns || (view as IAVGallery).fields || [];
+    const rows: Array<IAVRow | IAVGalleryItem> = (view as IAVTable).rows || (view as IAVGallery).cards || [];
+    const columns = sourceColumns.filter(column => !column.hidden);
+    const rowIndex = rows.findIndex(row => row.id === point.rowID);
+    const colIndex = columns.findIndex(column => column.id === point.colID);
+    const sourceColIndex = sourceColumns.findIndex(column => column.id === point.colID);
+    const row = rows[rowIndex];
+    const cell = row && ("cells" in row ? row.cells : row.values)[sourceColIndex];
+    if (!cell || colIndex < 0) {
+        return;
+    }
+    return {
+        groupID: point.groupID,
+        rowID: point.rowID,
+        colID: point.colID,
+        rowIndex,
+        colIndex,
+        cell,
+        column: columns[colIndex],
+    };
+};
+
 export const refreshAVCellSelection = (blockElement: HTMLElement, data: IAV) => {
     const selection = getAVCellSelection(blockElement);
     if (!selection) {
         return true;
     }
-    const findView = (view: IAVView): IAVView | undefined => {
-        if ((!selection.anchor.groupID && !view.groups?.length) || view.id === selection.anchor.groupID) {
-            return view;
-        }
-        for (const group of view.groups || []) {
-            const result = findView(group);
-            if (result) {
-                return result;
-            }
-        }
-    };
-    const view = findView(data.view) as IAVTable;
-    if (!view?.rows || !view.columns) {
-        clearAVCellSelectionState(blockElement);
-        return false;
-    }
-    const columns = view.columns.filter(column => !column.hidden);
-    const rowIndexes = new Map(view.rows.map((row, index) => [row.id, index]));
-    const colIndexes = new Map(columns.map((column, index) => [column.id, index]));
-    const sourceColIndexes = new Map(view.columns.map((column, index) => [column.id, index]));
-    const cells: IAVSelectedCell[] = [];
-    selection.cells.forEach(selectedCell => {
-        const rowIndex = rowIndexes.get(selectedCell.rowID);
-        const colIndex = colIndexes.get(selectedCell.colID);
-        const sourceColIndex = sourceColIndexes.get(selectedCell.colID);
-        const cell = typeof rowIndex === "number" && typeof sourceColIndex === "number" ?
-            view.rows[rowIndex]?.cells[sourceColIndex] : undefined;
-        if (cell && typeof colIndex === "number" && typeof rowIndex === "number") {
-            cells.push({
-                groupID: selection.anchor.groupID,
-                rowID: selectedCell.rowID,
-                colID: selectedCell.colID,
-                rowIndex,
-                colIndex,
-                cell,
-                column: columns[colIndex],
-            });
-        }
-    });
+    const cells = selection.cells.map(selectedCell => resolveAVSelectedCell(data, selectedCell)).
+        filter((cell): cell is IAVSelectedCell => Boolean(cell));
     if (cells.length !== selection.cells.length) {
         clearAVCellSelectionState(blockElement);
         return false;
@@ -201,7 +212,7 @@ export const restoreAVCellSelection = (blockElement: HTMLElement) => {
         }
         if (groupID === selection.focus.groupID && rowElement.dataset.id === selection.focus.rowID &&
             cellElement.dataset.colId === selection.focus.colID &&
-            !["template", "rollup", "lineNumber", "created", "updated"].includes(cellElement.dataset.dtype)) {
+            !isAVReadonlyType(cellElement.dataset.dtype)) {
             cellElement.insertAdjacentHTML("beforeend",
                 `<div aria-label="${window.siyuan.languages.dragFill}" class="av__drag-fill ariaLabel"></div>`);
         }

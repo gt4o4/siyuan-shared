@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package util
 
@@ -26,32 +14,43 @@ import (
 )
 
 // MarkdownSettings 运行时 Markdown 配置。
-var MarkdownSettings = &Markdown{
-	InlineAsterisk:      true,
-	InlineUnderscore:    true,
-	InlineSup:           true,
-	InlineSub:           true,
-	InlineTag:           true,
-	InlineMath:          true,
-	InlineStrikethrough: true,
-	InlineMark:          true,
-	CodeBlockMiddleDot:  new(true),
+var MarkdownSettings = NewAtomicValue(NewMarkdown())
+
+// NewMarkdown 返回独立的默认语法配置，不引用运行时设置。
+func NewMarkdown() *Markdown {
+	return &Markdown{
+		InlineAsterisk:               true,
+		InlineUnderscore:             true,
+		InlineSup:                    true,
+		InlineSub:                    true,
+		InlineTag:                    true,
+		InlineMath:                   true,
+		InlineStrikethrough:          true,
+		InlineFullWidthStrikethrough: false,
+		BlockFullWidthTaskList:       new(true),
+		InlineMark:                   true,
+		CodeBlockMiddleDot:           new(true),
+	}
 }
 
 type Markdown struct {
-	InlineAsterisk      bool  `json:"inlineAsterisk"`      // 是否启用行级 * 语法
-	InlineUnderscore    bool  `json:"inlineUnderscore"`    // 是否启用行级 _ 语法
-	InlineSup           bool  `json:"inlineSup"`           // 是否启用行级上标
-	InlineSub           bool  `json:"inlineSub"`           // 是否启用行级下标
-	InlineTag           bool  `json:"inlineTag"`           // 是否启用行级标签
-	InlineMath          bool  `json:"inlineMath"`          // 是否启用行级公式
-	InlineStrikethrough bool  `json:"inlineStrikethrough"` // 是否启用行级删除线
-	InlineMark          bool  `json:"inlineMark"`          // 是否启用行级标记
-	CodeBlockMiddleDot  *bool `json:"codeBlockMiddleDot"`  // 是否启用中点代码块快捷输入
+	InlineAsterisk               bool  `json:"inlineAsterisk"`               // 是否启用行级 * 语法
+	InlineUnderscore             bool  `json:"inlineUnderscore"`             // 是否启用行级 _ 语法
+	InlineSup                    bool  `json:"inlineSup"`                    // 是否启用行级上标
+	InlineSub                    bool  `json:"inlineSub"`                    // 是否启用行级下标
+	InlineTag                    bool  `json:"inlineTag"`                    // 是否启用行级标签
+	InlineMath                   bool  `json:"inlineMath"`                   // 是否启用行级公式
+	InlineStrikethrough          bool  `json:"inlineStrikethrough"`          // 是否启用行级删除线
+	InlineFullWidthStrikethrough bool  `json:"inlineFullWidthStrikethrough"` // 是否启用全角行级删除线
+	BlockFullWidthTaskList       *bool `json:"blockFullWidthTaskList"`       // 是否启用全角任务列表快捷输入
+	InlineMark                   bool  `json:"inlineMark"`                   // 是否启用行级标记
+	CodeBlockMiddleDot           *bool `json:"codeBlockMiddleDot"`           // 是否启用中点代码块快捷输入
 }
 
 func NewLute() (ret *lute.Lute) {
 	ret = lute.New()
+	// 文本标记以 HTML 实体保存正文，解析时保留转义，避免渲染时将尖括号正文识别为标签。
+	ret.ParseOptions.KeepEscaped = true
 	ret.SetTextMark(true)
 	ret.SetProtyleWYSIWYG(true)
 	ret.SetBlockRef(true)
@@ -59,16 +58,19 @@ func NewLute() (ret *lute.Lute) {
 	ret.SetKramdownIAL(true)
 	ret.SetTag(true)
 	ret.SetSuperBlock(true)
+	ret.SetCustomBlock(true)
 	ret.SetImgPathAllowSpace(true)
 	ret.SetGitConflict(true)
-	ret.SetInlineAsterisk(MarkdownSettings.InlineAsterisk)
-	ret.SetInlineUnderscore(MarkdownSettings.InlineUnderscore)
-	ret.SetSup(MarkdownSettings.InlineSup)
-	ret.SetSub(MarkdownSettings.InlineSub)
-	ret.SetTag(MarkdownSettings.InlineTag)
-	ret.SetInlineMath(MarkdownSettings.InlineMath)
-	ret.SetGFMStrikethrough(MarkdownSettings.InlineStrikethrough)
-	ret.SetMark(MarkdownSettings.InlineMark)
+	markdown := MarkdownSettings.Load()
+	ret.SetInlineAsterisk(markdown.InlineAsterisk)
+	ret.SetInlineUnderscore(markdown.InlineUnderscore)
+	ret.SetSup(markdown.InlineSup)
+	ret.SetSub(markdown.InlineSub)
+	ret.SetTag(markdown.InlineTag)
+	ret.SetInlineMath(markdown.InlineMath)
+	ret.SetGFMStrikethrough(markdown.InlineStrikethrough)
+	ret.SetFullWidthStrikethrough(markdown.InlineFullWidthStrikethrough)
+	ret.SetMark(markdown.InlineMark)
 	ret.SetInlineMathAllowDigitAfterOpenMarker(true)
 	ret.SetGFMStrikethrough1(false)
 	ret.SetFootnotes(false)
@@ -84,6 +86,7 @@ func NewLute() (ret *lute.Lute) {
 	ret.SetSanitize(true)
 	ret.SetUnorderedListMarker("-")
 	ret.SetCallout(true)
+	ret.SetTabs(true)
 	ret.SetDataTask(true)
 	ret.SetArbitraryTaskListItemMarker(true)
 	ret.SetExportNormalizeTaskListMarker(false) // 只有导出 Markdown 的场景才将其设置为 true
@@ -93,6 +96,7 @@ func NewLute() (ret *lute.Lute) {
 
 func NewStdLute() (ret *lute.Lute) {
 	ret = lute.New()
+	ret.SetCustomBlock(true)
 	ret.SetFootnotes(false)
 	ret.SetToC(false)
 	ret.SetIndentCodeBlock(true) // 导入 Markdown 时支持缩进代码块语法 Support indented code block syntax when importing Markdown https://github.com/siyuan-note/siyuan/issues/14429
@@ -107,13 +111,15 @@ func NewStdLute() (ret *lute.Lute) {
 
 	// 导入 Markdown 时遵循编辑器 Markdown 语法设置
 	// Follow editor Markdown syntax settings when importing Markdown https://github.com/siyuan-note/siyuan/issues/14731
-	ret.SetInlineAsterisk(MarkdownSettings.InlineAsterisk)
-	ret.SetInlineUnderscore(MarkdownSettings.InlineUnderscore)
-	ret.SetSup(MarkdownSettings.InlineSup)
-	ret.SetSub(MarkdownSettings.InlineSub)
-	ret.SetTag(MarkdownSettings.InlineTag)
-	ret.SetInlineMath(MarkdownSettings.InlineMath)
-	ret.SetGFMStrikethrough(MarkdownSettings.InlineStrikethrough)
+	markdown := MarkdownSettings.Load()
+	ret.SetInlineAsterisk(markdown.InlineAsterisk)
+	ret.SetInlineUnderscore(markdown.InlineUnderscore)
+	ret.SetSup(markdown.InlineSup)
+	ret.SetSub(markdown.InlineSub)
+	ret.SetTag(markdown.InlineTag)
+	ret.SetInlineMath(markdown.InlineMath)
+	ret.SetGFMStrikethrough(markdown.InlineStrikethrough)
+	ret.SetFullWidthStrikethrough(markdown.InlineFullWidthStrikethrough)
 	ret.SetGFMStrikethrough1(false)
 	return
 }

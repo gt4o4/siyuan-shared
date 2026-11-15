@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package conf
 
@@ -34,6 +22,9 @@ type NotebookCrypto struct {
 	CreatedAt int64  `json:"createdAt,omitempty"` // 备份创建/更新时间（unix 秒）
 	Checksum  string `json:"checksum,omitempty"`  // SHA-256 校验和
 	KEKMAC    []byte `json:"kekMAC,omitempty"`    // KEK HMAC-SHA256（需主密码验证）
+
+	// 历次 KEK 由当前 KEK 认证加密，用于恢复本机、其他设备或离线快照中尚未重新包络的笔记本。
+	HistoryKEKs [][]byte `json:"historyKEKs,omitempty"`
 }
 
 // NewNotebookCrypto 创建带默认 Argon2id 参数的 NotebookCrypto。

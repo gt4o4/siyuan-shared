@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package api
 
@@ -34,8 +22,8 @@ func TestSpinBlockDOMAuthorization(t *testing.T) {
 
 	previousConf := model.Conf
 	model.Conf = model.NewAppConf()
-	model.Conf.Editor = &conf.Editor{}
-	model.Conf.Export = &conf.Export{}
+	model.Conf.Editor.Store(&conf.Editor{})
+	model.Conf.Export.Store(&conf.Export{})
 	t.Cleanup(func() {
 		model.Conf = previousConf
 	})
@@ -93,8 +81,8 @@ func TestSpinBlockDOMInputSizeLimit(t *testing.T) {
 
 	previousConf := model.Conf
 	model.Conf = model.NewAppConf()
-	model.Conf.Editor = &conf.Editor{}
-	model.Conf.Export = &conf.Export{}
+	model.Conf.Editor.Store(&conf.Editor{})
+	model.Conf.Export.Store(&conf.Export{})
 	t.Cleanup(func() {
 		model.Conf = previousConf
 	})
@@ -116,7 +104,22 @@ func TestSpinBlockDOMInputSizeLimit(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	engine.ServeHTTP(recorder, request)
 
-	if recorder.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("unexpected status code: got %d, want %d", recorder.Code, http.StatusRequestEntityTooLarge)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("unexpected status code: got %d, want %d", recorder.Code, http.StatusOK)
+	}
+
+	response := &struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	}{}
+	if err := json.Unmarshal(recorder.Body.Bytes(), response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("unexpected response code: got %d, want %d", response.Code, http.StatusRequestEntityTooLarge)
+	}
+	const expectedMessage = "dom input exceeds the maximum permitted size"
+	if response.Msg != expectedMessage {
+		t.Fatalf("unexpected response message: got %q, want %q", response.Msg, expectedMessage)
 	}
 }

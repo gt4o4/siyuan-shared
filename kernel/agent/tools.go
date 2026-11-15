@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package agent
 
@@ -28,22 +16,6 @@ import (
 	kernelModel "github.com/siyuan-note/siyuan/kernel/model"
 )
 
-func convertMCPToolsToOpenAI() []openai.Tool {
-	allTools := tools.GetAllTools()
-	result := make([]openai.Tool, 0, len(allTools))
-	for _, t := range allTools {
-		result = append(result, openai.Tool{
-			Type: openai.ToolTypeFunction,
-			Function: &openai.FunctionDefinition{
-				Name:        t.Name,
-				Description: t.Description,
-				Parameters:  convertSchema(t.InputSchema),
-			},
-		})
-	}
-	return result
-}
-
 type executedToolResult struct {
 	Text             string
 	ModelAttachments []tools.ModelAttachment
@@ -51,31 +23,48 @@ type executedToolResult struct {
 	ExecutionUnknown bool
 }
 
-// validateToolCallInput 在确认和快照之前校验工具调用，避免无效调用被误判为写操作。
-func validateToolCallInput(ctx context.Context, toolName string, args map[string]any) (*tools.Tool, *tools.ToolValidator, error) {
-	t, validator := tools.LookupToolWithValidator(toolName)
-	if t == nil {
-		return nil, nil, fmt.Errorf("unknown tool: %s", toolName)
+func validateCapabilityCall(ctx context.Context, registration *capabilityRegistration, args map[string]any) error {
+	if registration == nil {
+		return fmt.Errorf("capability was not exposed in this model round")
 	}
-	if t.ContextHandler == nil && t.Handler == nil {
-		return nil, nil, fmt.Errorf("tool handler unavailable: %s", toolName)
+	if !capabilityStillExecutable(registration, args) {
+		return fmt.Errorf("capability is disabled or no longer available: %s", registration.ID)
 	}
 	if ctx.Err() != nil {
-		return nil, nil, fmt.Errorf("tool execution was cancelled before it started")
+		return fmt.Errorf("capability execution was cancelled before it started")
 	}
-	if err := validator.ValidateInputContext(ctx, args); err != nil {
-		return nil, nil, fmt.Errorf("invalid tool arguments: %w", err)
+	if registration.Validator == nil {
+		return fmt.Errorf("capability validator unavailable: %s", registration.ID)
 	}
-	return t, validator, nil
+	if err := registration.Validator.ValidateInputContext(ctx, args); err != nil {
+		return fmt.Errorf("invalid capability arguments: %w", err)
+	}
+	if registration.Tool != nil && (registration.Tool.Source == "native" || registration.Tool.Source == "") {
+		if err := validatePluginWorkflowTool(ctx, registration.Tool.Name, args); err != nil {
+			return err
+		}
+	}
+	if !registration.isBrowser() &&
+		(registration.Tool == nil || registration.Tool.ContextHandler == nil && registration.Tool.Handler == nil) {
+		return fmt.Errorf("capability handler unavailable: %s", registration.ID)
+	}
+	return nil
 }
 
-// executeTool 执行单次工具调用。
-func executeTool(ctx context.Context, tc openai.ToolCall, sessionID string) executedToolResult {
-	args := parseToolArgs(tc.Function.Arguments)
-	t, validator, err := validateToolCallInput(ctx, tc.Function.Name, args)
+func executeCapability(ctx context.Context, tc openai.ToolCall, sessionID string,
+	registration *capabilityRegistration) executedToolResult {
+	if registration != nil && registration.Tool != nil && (registration.Tool.Source == "native" || registration.Tool.Source == "") {
+		ctx = pluginWorkflowContext(ctx, sessionID)
+	}
+	args, err := parseToolArgs(tc.Function.Arguments)
 	if err != nil {
+		return executedToolResult{Text: "invalid capability arguments: " + err.Error(), IsError: true}
+	}
+	if err := validateCapabilityCall(ctx, registration, args); err != nil {
 		return executedToolResult{Text: err.Error(), IsError: true}
 	}
+	t := registration.Tool
+	validator := registration.Validator
 	// _sessionID 和 _toolCallID 是原生工具专用的内部字段，用于关联会话状态和实现幂等操作。
 	// 仅注入给原生工具；MCP/插件工具的参数会原样转发给外部服务端，
 	// 严格校验（additionalProperties:false）的服务端（如 Flomo MCP）会因这个多余字段报错。
@@ -83,6 +72,9 @@ func executeTool(ctx context.Context, tc openai.ToolCall, sessionID string) exec
 	if t.Source == "native" || t.Source == "" {
 		args["_sessionID"] = sessionID
 		args["_toolCallID"] = tc.ID
+		if t.Name == "decision" {
+			preserveDecisionJSONData(args, tc.Function.Arguments)
+		}
 	}
 	type executionResult struct {
 		result tools.CallToolResult
@@ -304,22 +296,18 @@ func resultToString(result tools.CallToolResult) string {
 	return "(empty result)"
 }
 
-func parseToolArgs(argsJSON string) map[string]any {
-	args := map[string]any{}
-	if argsJSON == "" {
-		return args
+// parseToolArgs 在流结束后解析完整的工具参数，避免把损坏的 JSON 误报为缺少 schema 字段。
+func parseToolArgs(argsJSON string) (map[string]any, error) {
+	if strings.TrimSpace(argsJSON) == "" {
+		return map[string]any{}, nil
 	}
 
-	dec := json.NewDecoder(strings.NewReader(argsJSON))
-	dec.UseNumber()
-	_ = dec.Decode(&args)
-
-	for k, v := range args {
-		if num, ok := v.(json.Number); ok {
-			if f, err := num.Float64(); err == nil {
-				args[k] = f
-			}
-		}
+	var args map[string]any
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return nil, fmt.Errorf("tool arguments are not valid JSON: %w", err)
 	}
-	return args
+	if args == nil {
+		return nil, fmt.Errorf("tool arguments must be a JSON object")
+	}
+	return args, nil
 }

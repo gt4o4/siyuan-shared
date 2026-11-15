@@ -1,23 +1,14 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package tools
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/88250/lute/ast"
@@ -26,11 +17,14 @@ import (
 )
 
 var databaseActions = []string{
-	"search", "get", "render", "keys", "key_add", "key_remove", "item_add", "item_remove", "item_update", "unused", "clean",
+	"create", "search", "get", "render", "keys", "key_add", "key_update", "key_set_template", "key_remove", "item_add", "item_remove", "item_update",
+	"view_get", "view_add", "view_duplicate", "view_remove", "view_update", "view_move", "view_field_move", "view_visibility_set",
+	"view_filters_set", "view_sorts_set", "view_group_set", "view_layout_set", "unused", "clean",
+	"items_add", "items_update",
 }
 
 var databaseKeyTypes = []string{
-	"text", "number", "date", "select", "mSelect", "url", "email", "phone", "mAsset", "template", "created", "updated",
+	"text", "number", "date", "select", "mSelect", "url", "email", "phone", "location", "mAsset", "template", "created", "updated",
 	"checkbox", "relation", "rollup", "lineNumber",
 }
 
@@ -41,32 +35,90 @@ type databaseToolOutput struct {
 
 var DatabaseTool = &Tool{
 	Name:        "database",
-	Description: "Attribute view (database) operations. Every successful call returns {action, data}. Actions: search(keyword), get(id), render(id, viewID?, query?, page=1, pageSize=50), keys(id), key_add(id, name, type, icon?, prev?), key_remove(id, keyID, removeRelationDest?), item_add(id, blockID?, content?, viewID?, groupID?, previousID?, detached?, ignoreDefaultFill?), item_remove(id, itemIDs), item_update(id, keyID, itemID, value), unused(), clean(id?).",
+	Description: "Attribute view (database) operations. Every successful call returns {action, data}. Actions: create(parentID, name?, primaryKeyName?, layout=table, keys?, previousID?, nextID?), search(keyword), get(id), render(id, viewID?, query?, page=1, pageSize=50), keys(id), key_add(id, name, type, icon?, prev?), key_update(id, keyID, config), key_set_template(id, keyID, template), key_remove(id, keyID, removeRelationDest?), item_add(id, blockID?, content?, viewID?, groupID?, previousID?, detached?, ignoreDefaultFill?), item_remove(id, itemIDs), item_update(id, keyID, itemID, value), view_get(id, blockID, viewID), view_add(id, blockID, layout?, name?), view_duplicate(id, blockID, viewID, name?), view_remove(id, blockID, viewID), view_update(id, blockID, viewID, name?, icon?, desc?), view_move(id, blockID, viewID, previousID), view_field_move(id, blockID, viewID, keyID, previousID), view_visibility_set(id, blockID, viewIDs), view_filters_set(id, blockID, viewID, revision, filters), view_sorts_set(id, blockID, viewID, revision, sorts), view_group_set(id, blockID, viewID, revision, group), view_layout_set(id, blockID, viewID, revision, layout), unused(), clean(id?). view_field_move moves a field after previousID (empty string means first), preserving types, values, width and visibility; it changes only the specified view, shared by its mirrors. Read fieldIDs from view_get first and verify the returned fieldIDs. Across databases, match fields by name/type rather than reusing source IDs. view_get returns ordered fieldIDs (including hidden fields), metadata, ordered views and the carrier block's visibleViewIDs. view_update preserves omitted fields; empty icon or desc clears it. View metadata and order affect all mirrors; visibility affects only blockID and requires at least one visible view. Read view_get before replacing filters, sorts or visibleViewIDs, preserving unmodified entries. Pass its revision for filter, sort, group and layout changes. An empty filters or sorts array clears that setting. Supported layouts: table, list, gallery, kanban, calendar. The layout string is validated by the kernel. clean only removes unused databases returned by unused(); referenced databases are rejected.",
+	EffectScope: EffectScopeLocal,
+	ActionEffects: map[string]ToolEffects{
+		"create":              {LocalWrite: true},
+		"search":              {LocalRead: true},
+		"get":                 {LocalRead: true},
+		"render":              {LocalRead: true},
+		"keys":                {LocalRead: true},
+		"key_add":             {LocalWrite: true},
+		"key_update":          {LocalWrite: true},
+		"key_set_template":    {LocalWrite: true},
+		"key_remove":          {LocalWrite: true},
+		"item_add":            {LocalWrite: true},
+		"item_remove":         {LocalWrite: true},
+		"item_update":         {LocalWrite: true},
+		"items_add":           {LocalWrite: true},
+		"items_update":        {LocalWrite: true},
+		"view_get":            {LocalRead: true},
+		"view_add":            {LocalWrite: true},
+		"view_duplicate":      {LocalWrite: true},
+		"view_remove":         {LocalWrite: true},
+		"view_update":         {LocalWrite: true},
+		"view_move":           {LocalWrite: true},
+		"view_field_move":     {LocalWrite: true},
+		"view_visibility_set": {LocalWrite: true},
+		"view_filters_set":    {LocalWrite: true},
+		"view_sorts_set":      {LocalWrite: true},
+		"view_group_set":      {LocalWrite: true},
+		"view_layout_set":     {LocalWrite: true},
+		"unused":              {LocalRead: true},
+		"clean":               {LocalWrite: true},
+	},
 	InputSchema: ToolSchema{
 		Type: "object",
 		Properties: map[string]Property{
-			"action":             {Type: "string", Description: "Operation", Enum: databaseActions},
-			"keyword":            {Type: "string", Description: "Search keyword (for search)"},
-			"id":                 {Type: "string", Description: "Attribute view ID (for get, render, keys, key_add, key_remove, item_add, item_remove, item_update, clean)"},
-			"viewID":             {Type: "string", Description: "View ID (for render, item_add)"},
-			"query":              {Type: "string", Description: "Filter query (for render)"},
-			"page":               {Type: "integer", Description: "Page number (default 1)"},
-			"pageSize":           {Type: "integer", Description: "Results per page (default 50)"},
-			"name":               {Type: "string", Description: "Key name (for key_add)"},
+			"action":         {Type: "string", Description: "Operation", Enum: databaseActions},
+			"notebook":       {Type: "string", Description: "Notebook ID that owns the new database; required for encrypted notebooks"},
+			"keyword":        {Type: "string", Description: "Search keyword (for search)"},
+			"id":             {Type: "string", Description: "Attribute view ID for database and view actions"},
+			"parentID":       {Type: "string", Description: "Parent block ID for the new database (for create)"},
+			"nextID":         {Type: "string", Description: "Next sibling block ID for positioning the new database (for create, optional)"},
+			"viewID":         {Type: "string", Description: "Exact view ID (required for view_get, view_duplicate, view_remove, view_update, view_move, view_field_move and view setting changes)"},
+			"viewIDs":        {Type: "array", Description: "Complete visible view ID list for view_visibility_set on blockID; preserve other visible views from view_get and keep at least one", Items: &Property{Type: "string"}},
+			"query":          {Type: "string", Description: "Filter query (for render)"},
+			"page":           {Type: "integer", Description: "Page number (default 1)"},
+			"pageSize":       {Type: "integer", Description: "Results per page (default 50)"},
+			"name":           {Type: "string", Description: "Database name (create), key name (key_add), or view name (view_add, view_duplicate and view_update)"},
+			"primaryKeyName": {Type: "string", Description: "Primary key field name (for create, optional)"},
+			"layout":         {Type: "string", Description: "Layout identifier for create, view_add or view_layout_set; the kernel validates supported types"},
+			"keys": {
+				Type: "array", Description: "Ordered fields to create after the primary key (for create, optional)",
+				Items: &Property{
+					Type: "object",
+					Properties: map[string]Property{
+						"name": {Type: "string", Description: "Field name"},
+						"type": {Type: "string", Description: "Field type", Enum: databaseKeyTypes},
+						"icon": {Type: "string", Description: "Field icon (optional)"},
+					},
+					Required: []string{"name", "type"},
+				},
+			},
 			"type":               {Type: "string", Description: "Key type (for key_add)", Enum: databaseKeyTypes},
-			"icon":               {Type: "string", Description: "Key icon (for key_add, optional)"},
-			"prev":               {Type: "string", Description: "Previous key ID for ordering (for key_add, optional)"},
-			"keyID":              {Type: "string", Description: "Key ID (for key_remove, item_update)"},
+			"icon":               {Type: "string", Description: "Key icon (key_add) or view icon (view_update); an empty string clears the view icon"},
+			"desc":               {Type: "string", Description: "View description for view_update; an empty string clears it, omission preserves it"},
+			"prev":               {Type: "string", Description: "Previous key ID for ordering (for key_add; omit to append)"},
+			"keyID":              {Type: "string", Description: "Key ID (for key_update, key_set_template, key_remove, item_update, view_field_move)"},
+			"template":           {Type: "string", Description: "Formula for key_set_template on an existing template field, e.g. .action{add .Number 1}; empty string clears it. Use keys to inspect field names and IDs, then render to verify results. Do not write calculated template cells with item_update"},
+			"config":             databaseKeyConfigProperty,
 			"removeRelationDest": {Type: "boolean", Description: "Also remove related data in linked databases (for key_remove, optional)"},
-			"blockID":            {Type: "string", Description: "Block ID to bind (for item_add, optional)"},
+			"blockID":            {Type: "string", Description: "Block ID to bind (item_add), or the database carrier block ID (view actions)"},
+			"revision":           {Type: "string", Description: "Revision from view_get, required for view_filters_set, view_sorts_set, view_group_set and view_layout_set"},
+			"filters":            {Type: "array", Description: "Complete native ViewFilter tree for view_filters_set. Use one root group with combination and/or and a filters child array; leaf nodes have column (key ID), operator and typed value. Date leaves can also use relativeDate and relativeDate2. Copy unchanged nodes from view_get; [] clears filters", Items: &Property{Type: "object"}},
+			"sorts":              {Type: "array", Description: "Complete ordered native ViewSort list for view_sorts_set. Each rule has column (key ID) and order ASC or DESC. Copy unchanged rules from view_get; [] clears sorts", Items: &Property{Type: "object"}},
+			"group":              {Type: "object", Description: "Native ViewGroup for view_group_set with field (key ID), method, order and hideEmpty; number/date fields support additional methods. {} clears grouping outside kanban"},
 			"content":            {Type: "string", Description: "Block column text content (for item_add, optional)"},
 			"groupID":            {Type: "string", Description: "Group ID for positioning (for item_add, optional)"},
-			"previousID":         {Type: "string", Description: "Previous item ID for positioning (for item_add, optional)"},
+			"previousID":         {Type: "string", Description: "Previous sibling database block (create), previous item (item_add), previous view (view_move), or previous field (view_field_move); required for moves, empty string means first"},
 			"detached":           {Type: "boolean", Description: "Create detached row (for item_add, optional)"},
 			"ignoreDefaultFill":  {Type: "boolean", Description: "Skip filling default values (for item_add, optional)"},
 			"itemID":             {Type: "string", Description: "Item ID (for item_update)"},
 			"itemIDs":            {Type: "array", Description: "Item IDs (for item_remove)", Items: &Property{Type: "string"}},
-			"value":              {Type: "object", Description: "Typed cell value (for item_update)"},
+			"value":              databaseCellValueProperty,
+			"items":              databaseItemsProperty,
+			"updates":            databaseUpdatesProperty,
 		},
 		Required: []string{"action"},
 	},
@@ -82,12 +134,15 @@ var DatabaseTool = &Tool{
 }
 
 func init() {
+	DatabaseTool.Description += " Batch writes: items_add(id, items) creates 1-100 rows with optional typed values in one transaction; items_update(id, updates) updates up to 1000 cells in one transaction. Prefer these actions for multi-row work. Read keys first and inspect the returned saved values."
 	register(DatabaseTool)
 }
 
 func databaseHandler(args map[string]any) (CallToolResult, error) {
 	action, _ := args["action"].(string)
 	switch action {
+	case "create":
+		return databaseCreate(args)
 	case "search":
 		return databaseSearch(args)
 	case "get":
@@ -98,6 +153,10 @@ func databaseHandler(args map[string]any) (CallToolResult, error) {
 		return databaseKeys(args)
 	case "key_add":
 		return databaseKeyAdd(args)
+	case "key_set_template":
+		return databaseKeySetTemplate(args)
+	case "key_update":
+		return databaseKeyUpdate(args)
 	case "key_remove":
 		return databaseKeyRemove(args)
 	case "item_add":
@@ -106,6 +165,11 @@ func databaseHandler(args map[string]any) (CallToolResult, error) {
 		return databaseItemRemove(args)
 	case "item_update":
 		return databaseItemUpdate(args)
+	case "items_add", "items_update":
+		return databaseItemsWrite(args)
+	case "view_get", "view_add", "view_duplicate", "view_remove", "view_update", "view_move", "view_field_move", "view_visibility_set",
+		"view_filters_set", "view_sorts_set", "view_group_set", "view_layout_set":
+		return databaseViewAction(action, args)
 	case "unused":
 		return databaseUnused(args)
 	case "clean":
@@ -115,6 +179,66 @@ func databaseHandler(args map[string]any) (CallToolResult, error) {
 		Content: []ContentItem{{Type: "text", Text: "unknown action '" + action + "', expected one of: [" + strings.Join(databaseActions, ", ") + "]"}},
 		IsError: true,
 	}, nil
+}
+
+func databaseCreate(args map[string]any) (CallToolResult, error) {
+	parentID, _ := args["parentID"].(string)
+	if "" == parentID {
+		return CallToolResult{Content: []ContentItem{{Type: "text", Text: "parentID is required"}}, IsError: true}, nil
+	}
+	name, _ := args["name"].(string)
+	primaryKeyName, _ := args["primaryKeyName"].(string)
+	layoutValue, _ := args["layout"].(string)
+	if "" == layoutValue {
+		layoutValue = string(av.LayoutTypeTable)
+	}
+	previousID, _ := args["previousID"].(string)
+	nextID, _ := args["nextID"].(string)
+	_, release, scopeErr := beginBlockToolScope(args, true, parentID, previousID, nextID)
+	if nil != scopeErr {
+		return blockToolError(scopeErr.Error())
+	}
+	defer release()
+
+	keySpecs, keyErr := databaseCreateKeySpecs(args["keys"])
+	if nil != keyErr {
+		return CallToolResult{Content: []ContentItem{{Type: "text", Text: keyErr.Error()}}, IsError: true}, nil
+	}
+
+	result, err := model.CreateAttributeViewDatabase(parentID, previousID, nextID, name, primaryKeyName, av.LayoutType(layoutValue), keySpecs)
+	if nil != err {
+		return CallToolResult{Content: []ContentItem{{Type: "text", Text: "create database failed: " + err.Error()}}, IsError: true}, nil
+	}
+	return databaseSuccess("create", map[string]any{
+		"blockID":  result.BlockID,
+		"avID":     result.AvID,
+		"viewID":   result.ViewID,
+		"database": model.NewAttributeViewMetadata(result.AttributeView),
+	})
+}
+
+func databaseCreateKeySpecs(value any) (ret []*model.AttributeViewCreateKey, err error) {
+	if nil == value {
+		return []*model.AttributeViewCreateKey{}, nil
+	}
+	items, ok := value.([]any)
+	if !ok {
+		return nil, errors.New("keys must be an array")
+	}
+	for _, item := range items {
+		data, itemOK := item.(map[string]any)
+		if !itemOK {
+			return nil, errors.New("each key must be an object")
+		}
+		name, _ := data["name"].(string)
+		keyType, _ := data["type"].(string)
+		icon, _ := data["icon"].(string)
+		if "" == strings.TrimSpace(name) || "" == strings.TrimSpace(keyType) {
+			return nil, errors.New("each key requires name and type")
+		}
+		ret = append(ret, &model.AttributeViewCreateKey{Name: name, Type: keyType, Icon: icon})
+	}
+	return
 }
 
 func databaseSuccess(action string, data any) (CallToolResult, error) {
@@ -207,13 +331,20 @@ func databaseKeyAdd(args map[string]any) (CallToolResult, error) {
 		return CallToolResult{Content: []ContentItem{{Type: "text", Text: "id, name and type are required"}}, IsError: true}, nil
 	}
 	icon, _ := args["icon"].(string)
-	prev, _ := args["prev"].(string)
+	attrView := model.GetAttributeView(id)
+	if nil == attrView {
+		return CallToolResult{Content: []ContentItem{{Type: "text", Text: "attribute view not found: " + id}}, IsError: true}, nil
+	}
+	prev, prevErr := databasePreviousKeyID(attrView, args)
+	if nil != prevErr {
+		return CallToolResult{Content: []ContentItem{{Type: "text", Text: prevErr.Error()}}, IsError: true}, nil
+	}
 	keyID := ast.NewNodeID()
 	if err := model.AddAttributeViewKey(id, "", keyID, name, keyType, icon, prev, av.DateDisplayFormatFull); err != nil {
 		return CallToolResult{Content: []ContentItem{{Type: "text", Text: "add key failed: " + err.Error()}}, IsError: true}, nil
 	}
 	model.ReloadAttrView(id)
-	attrView := model.GetAttributeView(id)
+	attrView = model.GetAttributeView(id)
 	key := &av.Key{ID: keyID, Name: name, Type: av.KeyType(keyType), Icon: icon, DateFormat: av.DateDisplayFormatFull}
 	if nil != attrView {
 		if storedKey, getErr := attrView.GetKey(keyID); nil == getErr {
@@ -221,6 +352,45 @@ func databaseKeyAdd(args map[string]any) (CallToolResult, error) {
 		}
 	}
 	return databaseSuccess("key_add", map[string]any{"id": id, "key": key})
+}
+
+func databasePreviousKeyID(attrView *av.AttributeView, args map[string]any) (ret string, err error) {
+	view, err := attrView.GetFirstView()
+	if nil != err {
+		return "", err
+	}
+	fieldIDs := model.AttributeViewViewFieldIDs(view)
+	if value, specified := args["prev"]; specified {
+		prev, ok := value.(string)
+		if !ok {
+			return "", errors.New("prev must be a string")
+		}
+		if "" == prev {
+			return "", nil
+		}
+		if slices.Contains(fieldIDs, prev) {
+			return prev, nil
+		}
+		return "", fmt.Errorf("previous key not found in current view: %s", prev)
+	}
+	if 0 < len(fieldIDs) {
+		return fieldIDs[len(fieldIDs)-1], nil
+	}
+	return "", nil
+}
+
+func databaseKeySetTemplate(args map[string]any) (CallToolResult, error) {
+	id, _ := args["id"].(string)
+	keyID, _ := args["keyID"].(string)
+	templateContent, ok := args["template"].(string)
+	if "" == id || "" == keyID || !ok {
+		return CallToolResult{Content: []ContentItem{{Type: "text", Text: "id, keyID and template (string, may be empty) are required"}}, IsError: true}, nil
+	}
+	if err := model.SetAttributeViewKeyTemplate(id, keyID, templateContent); nil != err {
+		return CallToolResult{Content: []ContentItem{{Type: "text", Text: "set key template failed: " + err.Error()}}, IsError: true}, nil
+	}
+	model.ReloadAttrView(id)
+	return databaseSuccess("key_set_template", map[string]any{"id": id, "keyID": keyID, "template": templateContent})
 }
 
 func databaseKeyRemove(args map[string]any) (CallToolResult, error) {
@@ -270,7 +440,8 @@ func databaseItemAdd(args map[string]any) (CallToolResult, error) {
 		src["content"] = content
 	}
 	srcs := []map[string]any{src}
-	if err := model.AddAttributeViewBlock(nil, srcs, id, "", viewID, groupID, previousID, ignoreFill); err != nil {
+	if err := model.PerformAttributeViewOperations([]*model.Operation{{Action: "insertAttrViewBlock", Srcs: srcs,
+		AvID: id, ViewID: viewID, GroupID: groupID, PreviousID: previousID, IgnoreDefaultFill: ignoreFill}}); err != nil {
 		return CallToolResult{Content: []ContentItem{{Type: "text", Text: "add item failed: " + err.Error()}}, IsError: true}, nil
 	}
 	model.ReloadAttrView(id)
@@ -305,10 +476,24 @@ func databaseItemUpdate(args map[string]any) (CallToolResult, error) {
 	if id == "" || keyID == "" || itemID == "" || nil == valueData {
 		return CallToolResult{Content: []ContentItem{{Type: "text", Text: "id, keyID, itemID and value are required"}}, IsError: true}, nil
 	}
-	value, err := model.UpdateAttributeViewCell(nil, id, keyID, itemID, valueData)
+	err := model.PerformPreparedAttributeViewOperations(func() ([]*model.Operation, error) {
+		view, err := av.ParseAttributeView(id)
+		if err != nil {
+			return nil, err
+		}
+		if err = validateDatabaseCellValue(view, keyID, valueData); err != nil {
+			return nil, err
+		}
+		return []*model.Operation{{Action: "updateAttrViewCell", AvID: id, KeyID: keyID, RowID: itemID, Data: valueData}}, nil
+	})
 	if err != nil {
 		return CallToolResult{Content: []ContentItem{{Type: "text", Text: "update cell failed: " + err.Error()}}, IsError: true}, nil
 	}
+	view, err := av.ParseAttributeView(id)
+	if err != nil {
+		return CallToolResult{Content: []ContentItem{{Type: "text", Text: "read updated cell failed: " + err.Error()}}, IsError: true}, nil
+	}
+	value := view.GetValue(keyID, itemID)
 	model.ReloadAttrView(id)
 	return databaseSuccess("item_update", map[string]any{
 		"id":     id,
@@ -318,18 +503,26 @@ func databaseItemUpdate(args map[string]any) (CallToolResult, error) {
 	})
 }
 
-func databaseUnused(args map[string]any) (CallToolResult, error) {
-	items := model.UnusedAttributeViews(true)
+func databaseUnused(_ map[string]any) (CallToolResult, error) {
+	items, err := model.UnusedAttributeViews(true)
+	if err != nil {
+		return CallToolResult{Content: []ContentItem{{Type: "text", Text: err.Error()}}, IsError: true}, nil
+	}
 	return databaseSuccess("unused", map[string]any{"count": len(items), "items": items})
 }
 
 func databaseClean(args map[string]any) (CallToolResult, error) {
 	id, _ := args["id"].(string)
 	if id != "" {
-		model.RemoveUnusedAttributeView(id)
+		if err := model.RemoveUnusedAttributeView(id); err != nil {
+			return CallToolResult{Content: []ContentItem{{Type: "text", Text: err.Error()}}, IsError: true}, nil
+		}
 		return databaseSuccess("clean", map[string]any{"count": 1, "ids": []string{id}})
 	}
-	removed := model.RemoveUnusedAttributeViews()
+	removed, err := model.RemoveUnusedAttributeViews()
+	if err != nil {
+		return CallToolResult{Content: []ContentItem{{Type: "text", Text: err.Error()}}, IsError: true}, nil
+	}
 	return databaseSuccess("clean", map[string]any{"count": len(removed), "ids": removed})
 }
 

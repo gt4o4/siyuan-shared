@@ -18,7 +18,7 @@
 import { PasswordResponses } from "./pdfjs";
 
 /**
- * @typedef {Object} PasswordPromptOptions
+ * @typedef {object} PasswordPromptOptions
  * @property {HTMLDialogElement} dialog - The overlay's DOM element.
  * @property {HTMLParagraphElement} label - Label containing instructions for
  *                                          entering the password.
@@ -35,6 +35,8 @@ class PasswordPrompt {
   #updateCallback = null;
 
   #reason = null;
+
+  #openerElement = null;
 
   /**
    * @param {PasswordPromptOptions} options
@@ -57,6 +59,7 @@ class PasswordPrompt {
     this.input.addEventListener("keydown", e => {
       if (e.keyCode === /* Enter = */ 13) {
         this.#verify();
+        e.preventDefault();
       }
     });
 
@@ -68,6 +71,7 @@ class PasswordPrompt {
   async open() {
     await this.#activeCapability?.promise;
     this.#activeCapability = Promise.withResolvers();
+    this.#openerElement = document.activeElement;
 
     try {
       await this.overlayManager.open(this.dialog);
@@ -80,7 +84,7 @@ class PasswordPrompt {
       this.#reason === PasswordResponses.INCORRECT_PASSWORD;
 
     if (!this._isViewerEmbedded || passwordIncorrect) {
-      this.input.focus();
+      if (!this.overlayManager.focus(this.input)) this.input.focus();
     }
     // NOTE
     this.label.textContent = window.siyuan.languages[`password_${passwordIncorrect ? 'invalid' : 'label'}`]
@@ -91,9 +95,21 @@ class PasswordPrompt {
   }
 
   async close() {
-    if (this.overlayManager.active === this.dialog) {
-      this.overlayManager.close(this.dialog);
+    this.overlayManager.closeIfActive(this.dialog);
+  }
+
+  async finish() {
+    const capability = this.#activeCapability;
+    if (!capability) return;
+    await capability.promise;
+    if (this.#activeCapability !== capability) return;
+    const viewer = this.dialog.closest(".pdf-viewer--mobile")?.querySelector("#viewerContainer");
+    const active = document.activeElement;
+    // 密码校验结束后再归还阅读器焦点，错误密码重试仍由输入框接管键盘。
+    if (viewer?.isConnected && (active === document.body || active === this.#openerElement)) {
+      viewer.focus({preventScroll: true});
     }
+    this.#openerElement = null;
   }
 
   #verify() {

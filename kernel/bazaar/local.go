@@ -1,31 +1,22 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package bazaar
 
 import (
 	"archive/zip"
+	"bytes"
+	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/88250/gulu"
-	"github.com/siyuan-note/siyuan/kernel/util"
 )
 
 const (
@@ -44,11 +35,66 @@ var localPackageManifests = map[string]string{
 	"widget.json":   "widgets",
 }
 
+// IsValidPackageType 判断 pkgType 是否为集市支持的包类型（复数形式），以本地包清单映射为准。
+func IsValidPackageType(pkgType string) bool {
+	for _, t := range localPackageManifests {
+		if t == pkgType {
+			return true
+		}
+	}
+	return false
+}
+
 // ExtractLocalPackage 将本地集市包解压到临时目录并识别包类型。
 func ExtractLocalPackage(archivePath string) (pkgType string, pkg *Package, packagePath string, cleanup func(), err error) {
-	tempPath := filepath.Join(util.TempDir, "bazaar", "local", gulu.Rand.String(7))
+	pkgType, pkg, packagePath, _, cleanup, err = extractLocalPackageWithHash(context.Background(), archivePath, "")
+	return
+}
+
+// ExtractLocalPackageWithHash 从同一份已核验字节解压，不会在摘要验证后重新打开原始路径。
+func ExtractLocalPackageWithHash(archivePath, expectedHash string) (pkgType string, pkg *Package, packagePath, packageHash string, cleanup func(), err error) {
+	return ExtractLocalPackageWithHashContext(context.Background(), archivePath, expectedHash)
+}
+
+// ExtractLocalPackageWithHashContext 在核验与解压期间响应取消，未提交的临时内容会清理。
+// 解压始终落在 temp，校验通过后才由安装流程拷入 data。
+func ExtractLocalPackageWithHashContext(ctx context.Context, archivePath, expectedHash string) (pkgType string, pkg *Package, packagePath, packageHash string, cleanup func(), err error) {
+	return extractLocalPackageWithHash(ctx, archivePath, expectedHash)
+}
+
+func extractLocalPackageWithHash(ctx context.Context, archivePath, expectedHash string) (pkgType string, pkg *Package, packagePath, packageHash string, cleanup func(), err error) {
+	cleanup = func() {}
+	if err = ctx.Err(); err != nil {
+		return
+	}
+	if expectedHash != "" && !validInstallHash(expectedHash) {
+		err = errors.New("invalid package hash")
+		return
+	}
+	data, err := readInstallArchive(archivePath)
+	if err != nil {
+		return
+	}
+	packageHash = fmt.Sprintf("%x", sha256.Sum256(data))
+	if expectedHash != "" && packageHash != expectedHash {
+		err = ErrPackageHashConflict
+		return
+	}
+	if err = ctx.Err(); err != nil {
+		return
+	}
+	tempPath, err := makePackageExtractionDir("local", "extract-")
+	if err != nil {
+		return
+	}
 	cleanup = func() { _ = os.RemoveAll(tempPath) }
-	if err = extractLocalPackageArchive(archivePath, tempPath); err != nil {
+	reader, readerErr := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if readerErr != nil {
+		err = errors.New("invalid marketplace package archive")
+		cleanup()
+		return
+	}
+	if err = extractLocalPackageReaderContext(ctx, reader, tempPath); err != nil {
 		cleanup()
 		return
 	}
@@ -78,7 +124,13 @@ func ExtractLocalPackage(archivePath string) (pkgType string, pkg *Package, pack
 		return
 	}
 
-	pkg, err = ParsePackageJSON(manifestPath)
+	manifestData, readErr := os.ReadFile(manifestPath)
+	if readErr != nil {
+		err = readErr
+		cleanup()
+		return
+	}
+	pkg, err = parseInstallPackageManifest(manifestData)
 	if err != nil || pkg == nil {
 		err = errors.New("invalid marketplace package manifest")
 		cleanup()
@@ -86,13 +138,29 @@ func ExtractLocalPackage(archivePath string) (pkgType string, pkg *Package, pack
 	return
 }
 
-func extractLocalPackageArchive(archivePath, destination string) error {
-	reader, err := zip.OpenReader(archivePath)
-	if err != nil {
-		return errors.New("invalid marketplace package archive")
+func extractLocalPackageReaderContext(ctx context.Context, reader *zip.Reader, destination string) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	defer reader.Close()
+	if err := validateLocalPackageArchive(reader); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(destination, 0755); err != nil {
+		return err
+	}
+	var extractedTotal uint64
+	for _, item := range reader.File {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := extractLocalPackageItem(ctx, item, destination, &extractedTotal); err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
+}
 
+func validateLocalPackageArchive(reader *zip.Reader) error {
 	if len(reader.File) == 0 {
 		return errors.New("marketplace package archive is empty")
 	}
@@ -101,7 +169,31 @@ func extractLocalPackageArchive(archivePath, destination string) error {
 	}
 
 	var declaredTotal uint64
+	seen := map[string]bool{}
+	spellings := map[string]string{}
 	for _, item := range reader.File {
+		name := strings.TrimSuffix(item.Name, "/")
+		if err := validateInstallRelativePath(name); err != nil {
+			return err
+		}
+		key := strings.ToLower(name)
+		if seen[key] {
+			return errors.New("marketplace package contains duplicate or colliding paths")
+		}
+		seen[key] = true
+		parts := strings.Split(name, "/")
+		for i := range parts {
+			prefix := strings.Join(parts[:i+1], "/")
+			folded := strings.ToLower(prefix)
+			if previous, ok := spellings[folded]; ok && previous != prefix {
+				return errors.New("marketplace package contains colliding path components")
+			}
+			spellings[folded] = prefix
+		}
+		mode := item.Mode()
+		if mode&os.ModeSymlink != 0 || (!mode.IsRegular() && !mode.IsDir()) {
+			return errors.New("marketplace package contains an unsupported file")
+		}
 		if item.UncompressedSize64 > maxLocalPackageFileSize {
 			return errors.New("marketplace package contains a file that is too large")
 		}
@@ -114,19 +206,104 @@ func extractLocalPackageArchive(archivePath, destination string) error {
 		}
 	}
 
-	if err = os.MkdirAll(destination, 0755); err != nil {
-		return err
-	}
-	var extractedTotal uint64
-	for _, item := range reader.File {
-		if err = extractLocalPackageItem(item, destination, &extractedTotal); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
-func extractLocalPackageItem(item *zip.File, destination string, extractedTotal *uint64) error {
+func parseInstallPackageManifest(data []byte) (*Package, error) {
+	var pkg *Package
+	if err := gulu.JSON.UnmarshalJSON(data, &pkg); err != nil || pkg == nil {
+		return nil, errors.New("invalid marketplace package manifest")
+	}
+	pkg.URL = strings.TrimSuffix(pkg.URL, "/")
+	clearPackageDeprecationMetadata(pkg)
+	return pkg, nil
+}
+
+// InspectLocalPackageWithHash 只在内存中查看同一份归档字节，不创建解压目录或修改安装目标。
+func InspectLocalPackageWithHash(archivePath, expectedHash string) (pkgType string, pkg *Package, packageHash string, err error) {
+	if expectedHash != "" && !validInstallHash(expectedHash) {
+		return "", nil, "", errors.New("invalid package hash")
+	}
+	data, err := readInstallArchive(archivePath)
+	if err != nil {
+		return
+	}
+	packageHash = fmt.Sprintf("%x", sha256.Sum256(data))
+	if expectedHash != "" && packageHash != expectedHash {
+		err = ErrPackageHashConflict
+		return
+	}
+	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return
+	}
+	if err = validateLocalPackageArchive(reader); err != nil {
+		return
+	}
+	tops := map[string]bool{}
+	hasRootManifest := false
+	for _, item := range reader.File {
+		name := strings.TrimSuffix(item.Name, "/")
+		tops[strings.Split(name, "/")[0]] = true
+		if _, ok := localPackageManifests[name]; ok && item.Mode().IsRegular() {
+			hasRootManifest = true
+		}
+	}
+	prefix := ""
+	if !hasRootManifest {
+		if len(tops) != 1 {
+			err = errors.New("marketplace package manifest must be at the archive root or its only top-level directory")
+			return
+		}
+		for top := range tops {
+			prefix = top + "/"
+		}
+	}
+	var manifest *zip.File
+	for _, item := range reader.File {
+		name := strings.TrimPrefix(item.Name, prefix)
+		if kind, ok := localPackageManifests[name]; ok && item.Mode().IsRegular() {
+			if manifest != nil {
+				err = errors.New("multiple marketplace package manifests found")
+				return
+			}
+			manifest, pkgType = item, kind
+		}
+	}
+	if manifest == nil {
+		err = errors.New("marketplace package manifest not found")
+		return
+	}
+	stream, err := manifest.Open()
+	if err != nil {
+		return
+	}
+	defer stream.Close()
+	manifestData, err := io.ReadAll(io.LimitReader(stream, 1024*1024+1))
+	if err != nil {
+		return
+	}
+	if len(manifestData) > 1024*1024 {
+		err = errors.New("marketplace package manifest is too large")
+		return
+	}
+	pkg, err = parseInstallPackageManifest(manifestData)
+	return
+}
+
+type localPackageContextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (reader localPackageContextReader) Read(data []byte) (int, error) {
+	if err := reader.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return reader.reader.Read(data)
+}
+
+func extractLocalPackageItem(ctx context.Context, item *zip.File, destination string, extractedTotal *uint64) error {
 	name := strings.ReplaceAll(item.Name, "\\", "/")
 	if name == "" || strings.HasPrefix(name, "/") {
 		return errors.New("marketplace package contains an invalid path")
@@ -156,7 +333,7 @@ func extractLocalPackageItem(item *zip.File, destination string, extractedTotal 
 	if err != nil {
 		return err
 	}
-	written, copyErr := io.Copy(target, io.LimitReader(source, int64(maxLocalPackageFileSize)+1))
+	written, copyErr := io.Copy(target, io.LimitReader(localPackageContextReader{ctx: ctx, reader: source}, int64(maxLocalPackageFileSize)+1))
 	closeErr := target.Close()
 	if copyErr != nil {
 		return copyErr

@@ -1,4 +1,4 @@
-import {getAllModels} from "../getAll";
+import {getAllDocks, getAllModels} from "../getAll";
 import {Tab} from "../Tab";
 import {Graph} from "./Graph";
 import {Outline} from "./Outline";
@@ -13,6 +13,11 @@ import {Editor} from "../../editor";
 import {Constants} from "../../constants";
 import {getDocDisplayName, isEncryptedBox} from "../../util/pathName";
 import {showMessage} from "../../dialog/message";
+import {updateHotkeyTip} from "../../protyle/util/compatibility";
+import {getDockHotkey} from "./hotkey";
+import {syncDockBarVisibility} from "./barVisibility";
+
+export {adjustDockPadding} from "./barVisibility";
 
 export const openBacklink = async (options: {
     app: App,
@@ -87,7 +92,7 @@ export const openGraph = async (options: {
     useBlockId?: boolean,
 }) => {
     if (isEncryptedBox(options.notebookId)) {
-        showMessage(window.siyuan.languages._kernel[313]);
+        showMessage(window.siyuan.languages._kernel[392]);
         return;
     }
     const graph = getAllModels().graph.find(item => {
@@ -163,15 +168,17 @@ export const openOutline = async (options: {
     if (!wnd) {
         wnd = getWndByLayout(window.siyuan.layout.centerLayout);
     }
-    const newWnd = wnd.split("lr", false);
-
     if (!options.title) {
         const response = await fetchSyncPost("/api/block/getDocInfo", {
             id: options.rootId,
             notebook: isEncryptedBox(options.notebookId) ? options.notebookId : undefined,
         });
+        if (response.code !== 0) {
+            return;
+        }
         options.title = getDocDisplayName(response.data.name, response.data.ial[Constants.CUSTOM_SY_TITLE_EMPTY] === "true");
     }
+    const newWnd = wnd.split("lr", false);
     newWnd.element.style.width = "200px";
     newWnd.element.classList.remove("fn__flex-1");
     fixWndFlex1(newWnd.parent);
@@ -192,15 +199,33 @@ export const openOutline = async (options: {
 };
 
 export const resetFloatDockSize = () => {
-    if (!window.siyuan.layout.leftDock.pin && window.siyuan.layout.leftDock.layout.element.style.opacity === "1") {
+    if (window.siyuan.layout.leftDock.isFloating() && window.siyuan.layout.leftDock.layout.element.style.opacity === "1") {
         window.siyuan.layout.leftDock.showDock(true);
     }
-    if (!window.siyuan.layout.rightDock.pin && window.siyuan.layout.rightDock.layout.element.style.opacity === "1") {
+    if (window.siyuan.layout.rightDock.isFloating() && window.siyuan.layout.rightDock.layout.element.style.opacity === "1") {
         window.siyuan.layout.rightDock.showDock(true);
     }
-    if (!window.siyuan.layout.bottomDock.pin && window.siyuan.layout.bottomDock.layout.element.style.opacity === "1") {
+    if (window.siyuan.layout.bottomDock.isFloating() && window.siyuan.layout.bottomDock.layout.element.style.opacity === "1") {
         window.siyuan.layout.bottomDock.showDock(true);
     }
+};
+
+export const updateDockHotkeys = () => {
+    const docks = getAllDocks();
+    docks.forEach((item) => {
+        const hotkey = getDockHotkey(item);
+        document.querySelectorAll<HTMLElement>(`.dock__item[data-type="${CSS.escape(item.type)}"]`).forEach((element) => {
+            element.setAttribute("aria-label", `<span style='white-space:pre'>${element.dataset.title || ""} ${
+                hotkey ? updateHotkeyTip(hotkey) : ""
+            }${window.siyuan.languages.dockTip}</span>`);
+        });
+    });
+};
+
+export const getDockBarToggleTip = () => {
+    const label = window.siyuan.config.uiLayout.hideDock ? window.siyuan.languages.showDockBar : window.siyuan.languages.hideDockBar;
+    const hotkey = updateHotkeyTip(window.siyuan.config.keymap.general.toggleDock.custom);
+    return hotkey ? `${label} ${hotkey}` : label;
 };
 
 export const toggleDockBar = (useElement: Element) => {
@@ -211,16 +236,10 @@ export const toggleDockBar = (useElement: Element) => {
         useElement.setAttribute("xlink:href", "#iconHideDock");
     }
     window.siyuan.config.uiLayout.hideDock = dockIsShow;
-    document.querySelectorAll(".dock").forEach(item => {
-        if (dockIsShow) {
-            item.classList.add("fn__none");
-        } else if (item.querySelectorAll(".dock__item").length > 1) {
-            item.classList.remove("fn__none");
-        }
-    });
+    useElement.closest("#barDock")?.setAttribute("aria-label", getDockBarToggleTip());
+    syncDockBarVisibility();
     resizeTabs();
     resetFloatDockSize();
-    adjustDockPadding();
     setTabPosition();
 };
 
@@ -246,7 +265,7 @@ export const clearOBG = () => {
             }
             item.blockId = "";
             item.graphData = undefined;
-            item.onGraph(false);
+            item.onGraph();
         }
     });
     models.backlink.forEach(item => {
@@ -276,27 +295,7 @@ export const selectOpenTab = async () => {
             tab.model.editor.protyle.wysiwyg.element.blur();
             tab.model.editor.protyle.title.editElement.blur();
             await files.selectItem(tab.model.editor.protyle.notebookId, tab.model.editor.protyle.path);
-            files.lastSelectedElement = files.element.querySelector(".b3-list-item--focus");
         }
     }
     dockFile.toggleModel("file", true);
-};
-
-export const adjustDockPadding = () => {
-    const layoutElement = window.siyuan.layout.layout.children[0].element;
-    if (window.siyuan.layout.leftDock.elements[0].parentElement.classList.contains("fn__none")) {
-        layoutElement.style.marginLeft = "var(--b3-layout-space)";
-    } else {
-        layoutElement.style.marginLeft = "";
-    }
-    if (window.siyuan.layout.rightDock.elements[0].parentElement.classList.contains("fn__none")) {
-        layoutElement.style.marginRight = "var(--b3-layout-space)";
-    } else {
-        layoutElement.style.marginRight = "";
-    }
-    if (window.siyuan.config.appearance.hideStatusBar) {
-        layoutElement.style.marginBottom = "var(--b3-layout-space)";
-    } else {
-        layoutElement.style.marginBottom = "";
-    }
 };

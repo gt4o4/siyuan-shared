@@ -2,11 +2,19 @@ import {hasClosestByAttribute} from "../util/hasClosest";
 import {fetchPost, fetchSyncPost} from "../../util/fetch";
 import {processRender} from "../util/processCode";
 import {highlightRender} from "./highlightRender";
-import {genBreadcrumb, improveBreadcrumbAppearance} from "../wysiwyg/renderBacklink";
+import {genBreadcrumb} from "../wysiwyg/renderBacklink";
+import {improveBreadcrumbAppearance} from "../breadcrumb/appearance";
 import {avRender} from "./av/render";
-import {genRenderFrame} from "./util";
 import {isEncryptedBox} from "../../util/pathName";
 import {disabledWYSIWYG} from "../util/disabledWYSIWYG";
+import {normalizeHTMLAssetIFrameBlockDOM} from "../../asset/html";
+import {finishCustomEmbedRender, finishEmptyEmbedRender, IEmbedRenderLoadingState} from "./embedRenderState";
+import {getHostCapabilities} from "../../util/hostCapabilities";
+import {isDirectHeadingEmbed} from "./embedHeading";
+import {isFoldedRenderContent} from "./foldedContent";
+import {getEmbedBreadcrumbPaths, resolveEmbedBreadcrumbPreference} from "./embedBreadcrumb";
+import {Constants} from "../../constants";
+import {genEmbedRenderFrame, renderEmbedToolbarVisibility} from "../wysiwyg/embedToolbarVisibility";
 
 /**
  * 渲染嵌入块
@@ -23,15 +31,24 @@ export const blockRender = (protyle: IProtyle, element: Element, top?: number, o
         return;
     }
     blockElements.forEach((item: HTMLElement) => {
+        if (item.closest(".mindmap-view__preview-block") || isFoldedRenderContent(item)) {
+            return;
+        }
         const content = Lute.UnEscapeHTMLStr(item.getAttribute("data-content"));
         if (!content.trim()) {
+            genEmbedRenderFrame(item);
+            finishEmptyEmbedRender(item, onEmbedRender);
             return;
         }
         // 需置于请求返回前，否则快速滚动会导致重复加载 https://ld246.com/article/1666857862494?r=88250
         item.setAttribute("data-render", "true");
-        genRenderFrame(item);
+        genEmbedRenderFrame(item);
+        const loadingState: IEmbedRenderLoadingState = {
+            rotateElement: item.querySelector(":scope > .protyle-icons .protyle-action__reload .fn__rotate"),
+        };
         if (item.childElementCount > 3) {
-            item.style.height = (item.clientHeight - 4) + "px"; // 减少抖动 https://ld246.com/article/1668669380171
+            loadingState.height = (item.clientHeight - 4) + "px";
+            item.style.height = loadingState.height; // 减少抖动 https://ld246.com/article/1668669380171
             for (let i = 1; i < item.children.length - 1; i++) {
                 if (!item.children[i].classList.contains("protyle-cursor")) {
                     item.children[i].remove();
@@ -39,14 +56,14 @@ export const blockRender = (protyle: IProtyle, element: Element, top?: number, o
                 }
             }
         }
-        let breadcrumb: boolean | string = item.getAttribute("breadcrumb");
-        if (breadcrumb) {
-            breadcrumb = breadcrumb === "true";
-        } else {
-            breadcrumb = window.siyuan.config.editor.embedBlockBreadcrumb;
-        }
+        const breadcrumb = resolveEmbedBreadcrumbPreference(item.getAttribute("breadcrumb"), window.siyuan.config.editor.embedBlockBreadcrumb);
 
         if (content.startsWith("//!js")) {
+            // 安全模式下禁用 JS 查询嵌入块，与代码片段（CSS/JS snippet）的处理保持一致
+            if (window.siyuan.config.system.safeMode || getHostCapabilities().remoteKernel) {
+                renderEmbed([], protyle, item, top, window.siyuan.languages.safeModeJSTip, onEmbedRender);
+                return;
+            }
             const renderError = (error: unknown) => {
                 console.error(error);
                 renderEmbed([], protyle, item, top, String(error), onEmbedRender);
@@ -62,6 +79,7 @@ ${content}
 })();`)(fetchSyncPost, item, protyle, top);
                 includeIDsPromise.then((includeIDs: unknown) => {
                     if (!Array.isArray(includeIDs)) {
+                        finishCustomEmbedRender(item, loadingState, onEmbedRender);
                         return;
                     }
                     fetchPost("/api/search/getEmbedBlock", {
@@ -105,7 +123,9 @@ const renderEmbed = (blocks: {
     blocks.forEach((blocksItem, index) => {
         let breadcrumbHTML = "";
         if (blocksItem.blockPaths.length !== 0) {
-            breadcrumbHTML = genBreadcrumb(blocksItem.blockPaths, true);
+            breadcrumbHTML = genBreadcrumb(getEmbedBreadcrumbPaths(blocksItem.blockPaths, blocksItem.block.rootID,
+                resolveEmbedBreadcrumbPreference(item.getAttribute(Constants.CUSTOM_SY_EMBED_BREADCRUMB_PARENT_PATH),
+                    window.siyuan.config.editor.embedBlockBreadcrumbParentPath ?? true)), true);
         }
         let popover = "";
         if (index !== 0) {
@@ -118,18 +138,21 @@ const renderEmbed = (blocks: {
         }
         const childOperationAttr = blocksItem.allowChildOperation ? " data-allow-child-operation=\"true\"" : "";
         const rootIDAttr = blocksItem.block.rootID ? ` data-root-id="${blocksItem.block.rootID}"` : "";
-        html += `<div class="protyle-wysiwyg__embed" data-id="${blocksItem.block.id}"${rootIDAttr}${childOperationAttr}>
+        const headingAttr = blocks.length === 1 && isDirectHeadingEmbed(Lute.UnEscapeHTMLStr(item.getAttribute("data-content")),
+            blocksItem.block.id, blocksItem.block.type) ? " data-embed-heading=\"true\"" : "";
+        html += `<div class="protyle-wysiwyg__embed" data-id="${blocksItem.block.id}"${rootIDAttr}${childOperationAttr}${headingAttr}>
 ${popover}${breadcrumbHTML}${blocksItem.block.content}
 </div>`;
     });
     if (blocks.length > 0) {
-        item.firstElementChild.insertAdjacentHTML("afterend", html);
+        item.firstElementChild.insertAdjacentHTML("afterend", normalizeHTMLAssetIFrameBlockDOM(html));
         improveBreadcrumbAppearance(item.querySelector(".protyle-wysiwyg__embed"));
     } else {
         item.firstElementChild.insertAdjacentHTML("afterend", `<div class="protyle-wysiwyg__embed ft__smaller ft__secondary b3-form__space--small" contenteditable="false">${errorTip || window.siyuan.languages.refExpired}</div>`);
     }
 
     processRender(item);
+    renderEmbedToolbarVisibility(item);
     highlightRender(item);
     avRender(item, protyle);
     if (protyle.disabled) {

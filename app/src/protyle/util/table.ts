@@ -1,22 +1,30 @@
+import {mobileInputDialog} from "../../dialog/mobileInputDialog";
+import {escapeHtmlTextAndAttr} from "../../util/escape";
+import {Constants} from "../../constants";
+import {getTableRowOpeningHTML} from "./tableRowHeight";
 import {updateTransaction} from "../wysiwyg/transaction";
 import {
     focusBlock,
-    focusByRange,
     focusByWbr,
     getEditorRange,
-    getSelectionOffset,
-    getSelectionPosition,
+    getUndoFocusContext,
 } from "./selection";
+import {focusByRange, getSelectionOffset} from "./selectionOffsets";
 import {hasClosestBlock, hasClosestByClassName, hasClosestByTag} from "./hasClosest";
 import {matchHotKey} from "./hotKey";
 import {isNotCtrl} from "./compatibility";
+import {focusEditableAtGoalX, getCaretGoalX, isCaretAtVerticalBoundary} from "../wysiwyg/verticalCaret";
 import {scrollCenter} from "../../util/highlightById";
 import {insertEmptyBlock} from "../../block/util";
 import {removeBlock} from "../wysiwyg/remove";
 import {hasNextSibling, hasPreviousSibling} from "../wysiwyg/getBlock";
-import * as dayjs from "dayjs";
-import {Dialog} from "../../dialog";
-import {isMobile} from "../../util/functions";
+import dayjs from "dayjs";
+import {
+    getProjectedTableHeadRowCount,
+    getTableHeadRowCount,
+    projectTableCells,
+    transposeTableCells,
+} from "./tableSelection";
 
 const scrollToView = (nodeElement: Element, rowElement: HTMLElement, protyle: IProtyle) => {
     if (nodeElement.getAttribute("custom-pinthead") === "true") {
@@ -41,14 +49,85 @@ export const getColIndex = (cellElement: HTMLElement) => {
     return index;
 };
 
+export const getOrCreateTableBody = (tableElement: HTMLTableElement) => {
+    return tableElement.tBodies[0] || tableElement.createTBody();
+};
+
+export const replaceTableCellTag = (cell: HTMLTableCellElement, tag: "th" | "td") => {
+    if (cell.tagName.toLowerCase() === tag) {
+        return cell;
+    }
+    const newCell = document.createElement(tag);
+    Array.from(cell.attributes).forEach(attribute => newCell.setAttribute(attribute.name, attribute.value));
+    while (cell.firstChild) {
+        newCell.append(cell.firstChild);
+    }
+    cell.replaceWith(newCell);
+    return newCell;
+};
+
+export const normalizeTableSections = (table: HTMLTableElement, minimum = table.tHead?.rows.length || 1) => {
+    const rows = Array.from(table.rows);
+    // 表头必须覆盖完整的纵向合并范围，包括提升行中继续向下延伸的其他合并单元格。
+    const headRowCount = getTableHeadRowCount(buildTableGrid(table).cellInfos, rows.length, minimum);
+    const head = table.tHead || table.createTHead();
+    const body = getOrCreateTableBody(table);
+    rows.forEach((row, index) => {
+        const inHead = index < headRowCount;
+        Array.from(row.cells).forEach(cell => replaceTableCellTag(cell, inHead ? "th" : "td"));
+        (inHead ? head : body).append(row);
+    });
+    Array.from(table.tBodies).slice(1).forEach(item => item.remove());
+};
+
+export const splitTableCell = (cell: HTMLTableCellElement) => {
+    const table = cell.closest("table");
+    if (!table) {
+        return;
+    }
+    const info = buildTableGrid(table).cellInfos.find(item => item.cell === cell);
+    if (!info) {
+        return;
+    }
+    const rows = Array.from(table.rows);
+    for (let row = info.row; row < info.row + info.rowspan; row++) {
+        for (let col = info.col; col < info.col + info.colspan; col++) {
+            const current = rows[row]?.cells[col];
+            if (current && current !== cell) {
+                current.classList.remove("fn__none");
+                current.removeAttribute("rowspan");
+                current.removeAttribute("colspan");
+            }
+        }
+    }
+    cell.removeAttribute("rowspan");
+    cell.removeAttribute("colspan");
+    return info;
+};
+
 export const isTableHeaderEnabled = (nodeElement: Element, type: "row" | "column") => {
-    return type === "row" ? nodeElement.getAttribute("custom-sy-table-header-row") !== "false" :
-        nodeElement.getAttribute("custom-sy-table-header-column") === "true";
+    return type === "row" ? nodeElement.getAttribute(Constants.CUSTOM_SY_TABLE_HEADER_ROW) !== "false" :
+        nodeElement.getAttribute(Constants.CUSTOM_SY_TABLE_HEADER_COLUMN) === "true";
+};
+
+const setTableHeaderEnabled = (nodeElement: Element, type: "row" | "column", enabled: boolean) => {
+    const attribute = type === "row" ? Constants.CUSTOM_SY_TABLE_HEADER_ROW : Constants.CUSTOM_SY_TABLE_HEADER_COLUMN;
+    if (type === "row") {
+        if (enabled) {
+            nodeElement.removeAttribute(attribute);
+        } else {
+            nodeElement.setAttribute(attribute, "false");
+        }
+    } else if (enabled) {
+        nodeElement.setAttribute(attribute, "true");
+    } else {
+        nodeElement.removeAttribute(attribute);
+    }
 };
 
 export const toggleTableHeader = (protyle: IProtyle, nodeElement: Element, type: "row" | "column") => {
     const html = nodeElement.outerHTML;
-    const attribute = `custom-sy-table-header-${type}`;
+    const attribute = type === "row" ? Constants.CUSTOM_SY_TABLE_HEADER_ROW : Constants.CUSTOM_SY_TABLE_HEADER_COLUMN;
     if (isTableHeaderEnabled(nodeElement, type)) {
         if (type === "row") {
             nodeElement.setAttribute(attribute, "false");
@@ -88,38 +167,36 @@ const goPreviousCell = (cellElement: HTMLElement, range: Range, isSelected = tru
 };
 
 export const setTableAlign = (protyle: IProtyle, cellElements: HTMLElement[], nodeElement: Element, type: string,
-                              range: Range, clearCellStyle = false) => {
+                              range: Range, alignWholeTable = false) => {
     range.insertNode(document.createElement("wbr"));
     const html = nodeElement.outerHTML;
-
     const tableElement = nodeElement.querySelector("table");
-    if (clearCellStyle) {
-        tableElement.querySelectorAll<HTMLElement>("th, td").forEach(cell => {
+    const grid = buildTableGrid(tableElement);
+    const columns = new Set<number>();
+    grid.cellInfos.forEach(info => {
+        if (cellElements.includes(info.cell)) {
+            for (let column = info.col; column < info.col + info.colspan; column++) {
+                columns.add(column);
+            }
+        }
+    });
+    const cells = new Set<HTMLTableCellElement>();
+    grid.cellInfos.forEach(info => {
+        if (alignWholeTable || Array.from({length: info.colspan}, (_, index) => info.col + index).some(column => columns.has(column))) {
+            cells.add(info.cell);
+        }
+    });
+    cells.forEach(cell => {
+        cell.removeAttribute("align");
+        if (type) {
+            cell.style.setProperty("text-align", type);
+        } else {
             cell.style.removeProperty("text-align");
             if (!cell.getAttribute("style")) {
                 cell.removeAttribute("style");
             }
-        });
-    }
-    const columnCnt = tableElement.rows[0].cells.length;
-    const rowCnt = tableElement.rows.length;
-    const currentColumns: number[] = [];
-
-    for (let i = 0; i < rowCnt; i++) {
-        for (let j = 0; j < columnCnt; j++) {
-            if (tableElement.rows[i].cells[j] === cellElements[currentColumns.length]) {
-                currentColumns.push(j);
-            }
         }
-        if (currentColumns.length > 0) {
-            break;
-        }
-    }
-    for (let k = 0; k < rowCnt; k++) {
-        currentColumns.forEach(item => {
-            tableElement.rows[k].cells[item].setAttribute("align", type);
-        });
-    }
+    });
     updateTransaction(protyle, nodeElement, html);
     focusByWbr(tableElement, range);
 };
@@ -130,20 +207,20 @@ export const insertRow = (protyle: IProtyle, range: Range, cellElement: HTMLElem
     const html = nodeElement.outerHTML;
     wbrElement.remove();
 
+    const inHead = cellElement.parentElement.parentElement.tagName === "THEAD" &&
+        !!cellElement.parentElement.nextElementSibling;
+    const tag = inHead ? "th" : "td";
     let rowHTML = "";
     for (let m = 0; m < cellElement.parentElement.childElementCount; m++) {
-        rowHTML += `<td align="${cellElement.parentElement.children[m].getAttribute("align") || ""}"></td>`;
+        const source = cellElement.parentElement.children[m] as HTMLTableCellElement;
+        const align = source.style.textAlign || source.getAttribute("align");
+        rowHTML += `<${tag}${["left", "center", "right"].includes(align) ? ` style="text-align: ${align}"` : ""}></${tag}>`;
     }
     let newRowElement: HTMLTableRowElement;
-    if (cellElement.tagName === "TH") {
-        const tbodyElement = nodeElement.querySelector("tbody");
-        if (tbodyElement) {
-            tbodyElement.insertAdjacentHTML("afterbegin", `<tr>${rowHTML}</tr>`.repeat(count));
-            newRowElement = tbodyElement.firstElementChild as HTMLTableRowElement;
-        } else {
-            cellElement.parentElement.parentElement.insertAdjacentHTML("afterend", `<tbody>${`<tr>${rowHTML}</tr>`.repeat(count)}</tbody>`);
-            newRowElement = cellElement.parentElement.parentElement.nextElementSibling.firstElementChild as HTMLTableRowElement;
-        }
+    if (cellElement.tagName === "TH" && !inHead) {
+        const tbodyElement = getOrCreateTableBody(nodeElement.querySelector("table"));
+        tbodyElement.insertAdjacentHTML("afterbegin", `<tr>${rowHTML}</tr>`.repeat(count));
+        newRowElement = tbodyElement.firstElementChild as HTMLTableRowElement;
     } else {
         cellElement.parentElement.insertAdjacentHTML("afterend", `<tr>${rowHTML}</tr>`.repeat(count));
         newRowElement = cellElement.parentElement.nextElementSibling as HTMLTableRowElement;
@@ -155,7 +232,18 @@ export const insertRow = (protyle: IProtyle, range: Range, cellElement: HTMLElem
     scrollToView(nodeElement, newRowElement, protyle);
 };
 
-export const insertRowAbove = (protyle: IProtyle, range: Range, cellElement: HTMLElement, nodeElement: Element, count = 1) => {
+export const insertTableHeaderRow = (protyle: IProtyle, range: Range, cellElement: HTMLElement, nodeElement: Element) => {
+    if (protyle.disabled || cellElement.parentElement.parentElement.tagName !== "THEAD") {
+        return;
+    }
+    insertRowAbove(protyle, range, cellElement, nodeElement, 1, true);
+};
+
+export const insertRowAbove = (protyle: IProtyle, range: Range, cellElement: HTMLElement, nodeElement: Element,
+                               count = 1, header = false) => {
+    const colIndex = getColIndex(cellElement);
+    const replaceHeader = !header && cellElement.parentElement.parentElement.tagName === "THEAD" &&
+        !cellElement.parentElement.previousElementSibling;
     const wbrElement = document.createElement("wbr");
     range.insertNode(wbrElement);
     const html = nodeElement.outerHTML;
@@ -172,7 +260,8 @@ export const insertRowAbove = (protyle: IProtyle, range: Range, cellElement: HTM
         // 不需要空格，否则列宽调整后在空格后插入图片会换行 https://github.com/siyuan-note/siyuan/issues/7631
         const classAttr = className ? ` class="${className}"` : "";
         const tag = cellElement.tagName === "TH" ? "th" : "td";
-        rowHTML += `<${tag}${classAttr} colspan="${currentCellElement.colSpan}" align="${currentCellElement.getAttribute("align") || ""}"></${tag}>`;
+        const align = currentCellElement.style.textAlign || currentCellElement.getAttribute("align");
+        rowHTML += `<${tag}${classAttr} colspan="${currentCellElement.colSpan}"${["left", "center", "right"].includes(align) ? ` style="text-align: ${align}"` : ""}></${tag}>`;
     }
 
     if (hasNone) {
@@ -182,26 +271,20 @@ export const insertRowAbove = (protyle: IProtyle, range: Range, cellElement: HTM
             rowCount++;
             Array.from(previousTrElement.children).forEach((cell: HTMLTableCellElement) => {
                 if (cell.rowSpan >= rowCount && cell.rowSpan > 1) {
-                    cell.rowSpan = cell.rowSpan + 1;
+                    cell.rowSpan = cell.rowSpan + count;
                 }
             });
             previousTrElement = previousTrElement.previousElementSibling;
         }
     }
-    let newRowElement: HTMLTableRowElement;
-    if (cellElement.parentElement.parentElement.tagName === "THEAD" && !cellElement.parentElement.previousElementSibling) {
-        cellElement.parentElement.parentElement.insertAdjacentHTML("beforebegin", `<thead><tr>${rowHTML}</tr></thead>`);
-        newRowElement = nodeElement.querySelector("thead tr");
-        cellElement.parentElement.parentElement.nextElementSibling.insertAdjacentHTML("afterbegin", cellElement.parentElement.parentElement.innerHTML.replace(/<th/g, "<td").replace(/<\/th>/g, "</td>"));
-        if (count > 1) {
-            cellElement.parentElement.parentElement.nextElementSibling.insertAdjacentHTML("afterbegin", `<tr>${rowHTML.replace(/<th/g, "<td").replace(/<\/th>/g, "</td>")}</tr>`.repeat(count - 1));
-        }
-        cellElement.parentElement.parentElement.remove();
-    } else {
-        cellElement.parentElement.insertAdjacentHTML("beforebegin", `<tr>${rowHTML}</tr>`.repeat(count));
-        newRowElement = cellElement.parentElement.previousElementSibling as HTMLTableRowElement;
+    cellElement.parentElement.insertAdjacentHTML("beforebegin", `<tr>${rowHTML}</tr>`.repeat(count));
+    let newRowElement = cellElement.parentElement.previousElementSibling as HTMLTableRowElement;
+    if (replaceHeader) {
+        const table = nodeElement.querySelector("table");
+        normalizeTableSections(table, 1);
+        newRowElement = table.rows[0];
     }
-    range.selectNodeContents(newRowElement.cells[getColIndex(cellElement)]);
+    range.selectNodeContents(newRowElement.cells[colIndex]);
     range.collapse(true);
     focusByRange(range);
     updateTransaction(protyle, nodeElement, html);
@@ -239,67 +322,58 @@ export const insertColumn = (protyle: IProtyle, nodeElement: Element, cellElemen
 };
 
 export const deleteRow = (protyle: IProtyle, range: Range, cellElement: HTMLElement, nodeElement: Element) => {
-    if (cellElement.parentElement.parentElement.tagName !== "THEAD") {
-        const wbrElement = document.createElement("wbr");
-        range.insertNode(wbrElement);
-        const html = nodeElement.outerHTML;
-        wbrElement.remove();
-        const index = getColIndex(cellElement);
-        const tbodyElement = cellElement.parentElement.parentElement;
-        let previousTrElement = tbodyElement.previousElementSibling.lastElementChild as HTMLTableRowElement;
-        if (cellElement.parentElement.previousElementSibling) {
-            previousTrElement = cellElement.parentElement.previousElementSibling as HTMLTableRowElement;
-        }
-
-        if (tbodyElement.childElementCount === 1) {
-            tbodyElement.remove();
-        } else {
-            cellElement.parentElement.remove();
-        }
-        range.selectNodeContents(previousTrElement.cells[index]);
-        range.collapse(true);
-        focusByRange(range);
-        scrollToView(nodeElement, previousTrElement, protyle);
-        updateTransaction(protyle, nodeElement, html);
+    const tableElement = nodeElement.querySelector("table");
+    if (!tableElement) {
+        return;
     }
+    const info = buildTableGrid(tableElement).cellInfos.find(item => item.cell === cellElement);
+    if (!info) {
+        return;
+    }
+    deleteTableRows(protyle, nodeElement as HTMLElement,
+        Array.from({length: info.rowspan}, (_, index) => info.row + index), {
+            range,
+            row: info.row,
+            column: info.col,
+        });
 };
 
 export const deleteColumn = (protyle: IProtyle, range: Range, nodeElement: Element, cellElement: HTMLElement) => {
-    const wbrElement = document.createElement("wbr");
-    range.insertNode(wbrElement);
-    const html = nodeElement.outerHTML;
-    wbrElement.remove();
-    const index = getColIndex(cellElement);
-    const sideCellElement = (cellElement.previousElementSibling || cellElement.nextElementSibling) as HTMLElement;
-    if (sideCellElement) {
-        range.selectNodeContents(sideCellElement);
-        range.collapse(true);
-        // 滚动条横向定位
-        if (sideCellElement.offsetLeft + sideCellElement.clientWidth > nodeElement.firstElementChild.scrollLeft + nodeElement.firstElementChild.clientWidth) {
-            nodeElement.firstElementChild.scrollLeft = sideCellElement.offsetLeft + sideCellElement.clientWidth - nodeElement.firstElementChild.clientWidth;
-        }
-    } else {
-        nodeElement.classList.add("protyle-wysiwyg--select");
-        removeBlock(protyle, nodeElement, range, "remove");
+    const tableElement = nodeElement.querySelector("table");
+    if (!tableElement) {
         return;
     }
-    const tableElement = nodeElement.querySelector("table");
-    for (let i = 0; i < tableElement.rows.length; i++) {
-        const cells = tableElement.rows[i].cells;
-        if (cells.length === 1) {
-            tableElement.remove();
-            break;
-        }
-        cells[index].remove();
+    const info = buildTableGrid(tableElement).cellInfos.find(item => item.cell === cellElement);
+    if (!info) {
+        return;
     }
-    nodeElement.querySelectorAll("col")[index]?.remove();
-    updateTransaction(protyle, nodeElement, html);
-    focusByRange(range);
+    deleteTableColumns(protyle, nodeElement as HTMLElement,
+        Array.from({length: info.colspan}, (_, index) => info.col + index), {
+            range,
+            row: info.row,
+            column: info.col,
+        });
+};
+
+const getTableRowMoveTarget = (row: HTMLTableRowElement, offset: number) => {
+    const table = row.closest("table");
+    const target = table?.rows[row.rowIndex + offset];
+    if (!target) {
+        return;
+    }
+    const first = Math.min(row.rowIndex, target.rowIndex);
+    const last = Math.max(row.rowIndex, target.rowIndex);
+    if (buildTableGrid(table).cellInfos.some(info => info.rowspan > 1 &&
+        info.row <= last && info.row + info.rowspan > first)) {
+        return;
+    }
+    return target;
 };
 
 export const moveRowToUp = (protyle: IProtyle, range: Range, cellElement: HTMLElement, nodeElement: Element) => {
-    const rowElement = cellElement.parentElement;
-    if (rowElement.parentElement.tagName === "THEAD") {
+    const rowElement = cellElement.parentElement as HTMLTableRowElement;
+    const previousRow = getTableRowMoveTarget(rowElement, -1);
+    if (!previousRow) {
         return;
     }
     range.insertNode(document.createElement("wbr"));
@@ -307,17 +381,9 @@ export const moveRowToUp = (protyle: IProtyle, range: Range, cellElement: HTMLEl
     if (rowElement.previousElementSibling) {
         rowElement.after(rowElement.previousElementSibling);
     } else {
-        const headElement = rowElement.parentElement.previousElementSibling.firstElementChild;
-        headElement.querySelectorAll("th").forEach(item => {
-            const tdElement = document.createElement("td");
-            tdElement.innerHTML = item.innerHTML;
-            item.parentNode.replaceChild(tdElement, item);
-        });
-        rowElement.querySelectorAll("td").forEach(item => {
-            const thElement = document.createElement("th");
-            thElement.innerHTML = item.innerHTML;
-            item.parentNode.replaceChild(thElement, item);
-        });
+        const headElement = previousRow;
+        headElement.querySelectorAll("th").forEach(item => replaceTableCellTag(item, "td"));
+        rowElement.querySelectorAll("td").forEach(item => replaceTableCellTag(item, "th"));
         rowElement.after(headElement);
         rowElement.parentElement.previousElementSibling.append(rowElement);
     }
@@ -327,9 +393,9 @@ export const moveRowToUp = (protyle: IProtyle, range: Range, cellElement: HTMLEl
 };
 
 export const moveRowToDown = (protyle: IProtyle, range: Range, cellElement: HTMLElement, nodeElement: Element) => {
-    const rowElement = cellElement.parentElement;
-    if ((rowElement.parentElement.tagName === "TBODY" && !rowElement.nextElementSibling) ||
-        (rowElement.parentElement.tagName === "THEAD" && !rowElement.parentElement.nextElementSibling)) {
+    const rowElement = cellElement.parentElement as HTMLTableRowElement;
+    const nextRow = getTableRowMoveTarget(rowElement, 1);
+    if (!nextRow) {
         return;
     }
     range.insertNode(document.createElement("wbr"));
@@ -337,17 +403,9 @@ export const moveRowToDown = (protyle: IProtyle, range: Range, cellElement: HTML
     if (rowElement.nextElementSibling) {
         rowElement.before(rowElement.nextElementSibling);
     } else {
-        const firstRowElement = rowElement.parentElement.nextElementSibling.firstElementChild;
-        firstRowElement.querySelectorAll("td").forEach(item => {
-            const thElement = document.createElement("th");
-            thElement.innerHTML = item.innerHTML;
-            item.parentNode.replaceChild(thElement, item);
-        });
-        rowElement.querySelectorAll("th").forEach(item => {
-            const tdElement = document.createElement("td");
-            tdElement.innerHTML = item.innerHTML;
-            item.parentNode.replaceChild(tdElement, item);
-        });
+        const firstRowElement = nextRow;
+        firstRowElement.querySelectorAll("td").forEach(item => replaceTableCellTag(item, "th"));
+        rowElement.querySelectorAll("th").forEach(item => replaceTableCellTag(item, "td"));
         rowElement.after(firstRowElement);
         rowElement.parentElement.nextElementSibling.insertAdjacentElement("afterbegin", rowElement);
     }
@@ -412,7 +470,7 @@ export const moveColumnToRight = (protyle: IProtyle, range: Range, cellElement: 
 export const fixTable = (protyle: IProtyle, event: KeyboardEvent, range: Range) => {
     const cellElement = (hasClosestByTag(range.startContainer, "TD") || hasClosestByTag(range.startContainer, "TH")) as HTMLTableCellElement;
     const nodeElement = hasClosestBlock(range.startContainer) as HTMLTableElement;
-    if (!cellElement || !nodeElement) {
+    if (!cellElement || !nodeElement || !protyle.wysiwyg.element.contains(cellElement)) {
         return false;
     }
     // 光标在表格中，选中其他块标后按删除按钮无效
@@ -456,25 +514,10 @@ export const fixTable = (protyle: IProtyle, event: KeyboardEvent, range: Range) 
     }
 
     if (!nodeElement.classList.contains("protyle-wysiwyg--select") && !hasClosestByClassName(nodeElement, "protyle-wysiwyg--select")) {
-        // enter 光标跳转到下一行同列
+        // 未进入编辑状态的单元格先挂载内部编辑器，再按正文规则处理回车。
         if (isNotCtrl(event) && !event.shiftKey && !event.altKey && event.key === "Enter") {
             event.preventDefault();
-            const trElement = cellElement.parentElement as HTMLTableRowElement;
-            if ((!trElement.nextElementSibling && trElement.parentElement.tagName === "TBODY") ||
-                (trElement.parentElement.tagName === "THEAD" && !trElement.parentElement.nextElementSibling)) {
-                insertEmptyBlock(protyle, "afterend", nodeElement.getAttribute("data-node-id"));
-                return true;
-            }
-            let nextElement = trElement.nextElementSibling as HTMLTableRowElement;
-            if (!nextElement) {
-                nextElement = trElement.parentElement.nextElementSibling.firstChild as HTMLTableRowElement;
-            }
-            if (!nextElement) {
-                return true;
-            }
-            range.selectNodeContents(nextElement.cells[getColIndex(cellElement)]);
-            range.collapse(true);
-            scrollCenter(protyle);
+            void import("../render/tableCellRichEditor").then(module => module.enterTableCellRichEditor(protyle, cellElement));
             return true;
         }
         // 表格后无内容时，按右键需新建空块
@@ -516,103 +559,17 @@ export const fixTable = (protyle: IProtyle, event: KeyboardEvent, range: Range) 
             return true;
         }
 
-        if (event.key === "ArrowUp" && isNotCtrl(event) && !event.shiftKey && !event.altKey) {
-            if (cellElement.firstChild) {
-                let firstChild = cellElement.firstChild;
-                while (firstChild) {
-                    if (firstChild.textContent === "" && firstChild.nodeType === 3) {
-                        if (!firstChild.nextSibling) {
-                            break;
-                        }
-                        firstChild = firstChild.nextSibling;
-                    } else {
-                        break;
-                    }
-                }
-                const rangeTemp = document.createRange();
-                rangeTemp.selectNodeContents(firstChild);
-                rangeTemp.collapse(true);
-                const rangeRects = range.getClientRects().length === 0 ? getSelectionPosition(cellElement, range) : range.getClientRects()[0];
-                const rangeTempRects = rangeTemp.getClientRects().length === 0 ? getSelectionPosition(cellElement, rangeTemp) : rangeTemp.getClientRects()[0];
-                if (rangeTempRects.top < rangeRects.top) {
-                    return false;
-                }
-            }
-            const trElement = cellElement.parentElement as HTMLTableRowElement;
-            let previousElement = trElement.previousElementSibling as HTMLTableRowElement;
-            if (!previousElement) {
-                previousElement = trElement.parentElement.previousElementSibling.lastElementChild as HTMLTableRowElement;
-            }
-            if (!previousElement || previousElement?.tagName === "COL") {
+        if (["ArrowUp", "ArrowDown"].includes(event.key) && isNotCtrl(event) &&
+            !event.shiftKey && !event.altKey && !event.isComposing && range.collapsed) {
+            const direction = event.key === "ArrowUp" ? "up" : "down";
+            if (!isCaretAtVerticalBoundary(cellElement, range, direction)) {
                 return false;
             }
-            const currentColIndex = getColIndex(cellElement);
-            let newCellElement = previousElement.cells[currentColIndex];
-            while (previousElement) {
-                let i = 0;
-                while (newCellElement && newCellElement.classList.contains("fn__none")) {
-                    i++;
-                    newCellElement = newCellElement.previousElementSibling as HTMLTableCellElement;
-                }
-                if (newCellElement.colSpan < 2 && i !== 0) {
-                    previousElement = previousElement.previousElementSibling as HTMLTableRowElement;
-                    newCellElement = previousElement.cells[currentColIndex];
-                } else if (newCellElement.colSpan > i) {
-                    break;
-                }
-            }
-
-            range.selectNodeContents(newCellElement);
-            range.collapse(false);
-            scrollCenter(protyle);
-            event.preventDefault();
-            return true;
-        }
-
-        if (event.key === "ArrowDown" && isNotCtrl(event) && !event.shiftKey && !event.altKey) {
-            if (cellElement.lastChild) {
-                let lastChild = cellElement.lastChild;
-                while (lastChild) {
-                    if (lastChild.textContent === "" && lastChild.nodeType === 3) {
-                        if (!lastChild.previousSibling) {
-                            break;
-                        }
-                        lastChild = lastChild.previousSibling;
-                    } else {
-                        break;
-                    }
-                }
-                const rangeTemp = document.createRange();
-                rangeTemp.selectNodeContents(lastChild);
-                rangeTemp.collapse(false);
-                if (getSelectionPosition(cellElement, rangeTemp).top > getSelectionPosition(cellElement, range).top) {
-                    return false;
-                }
-            }
-            const trElement = cellElement.parentElement as HTMLTableRowElement;
-            if ((!trElement.nextElementSibling && trElement.parentElement.tagName === "TBODY") ||
-                (trElement.parentElement.tagName === "THEAD" && !trElement.parentElement.nextElementSibling)) {
+            const target = getVerticalTableCell(cellElement, direction);
+            if (!target) {
                 return false;
             }
-            let nextElement = trElement.nextElementSibling as HTMLTableRowElement;
-            if (!nextElement) {
-                nextElement = trElement.parentElement.nextElementSibling.firstChild as HTMLTableRowElement;
-            }
-            if (!nextElement) {
-                return false;
-            }
-            let rowSpan = cellElement.rowSpan;
-            while (rowSpan > 1) {
-                rowSpan--;
-                nextElement = nextElement.nextElementSibling as HTMLTableRowElement;
-            }
-            let nextCellElement = nextElement.cells[getColIndex(cellElement)];
-            while (nextCellElement.classList.contains("fn__none") && nextCellElement.nextElementSibling) {
-                nextCellElement = nextCellElement.previousElementSibling as HTMLTableCellElement;
-            }
-            range.selectNodeContents(nextCellElement);
-            range.collapse(true);
-            scrollCenter(protyle);
+            focusEditableAtGoalX(target, direction, getCaretGoalX(range), protyle.contentElement);
             event.preventDefault();
             return true;
         }
@@ -632,19 +589,19 @@ export const fixTable = (protyle: IProtyle, event: KeyboardEvent, range: Range) 
         }
 
         // 居左
-        if (matchHotKey(window.siyuan.config.keymap.editor.general.alignLeft.custom, event)) {
+        if (matchHotKey(window.siyuan.config.keymap.editor.general.alignLeft, event)) {
             setTableAlign(protyle, [cellElement], nodeElement, "left", range);
             event.preventDefault();
             return true;
         }
         // 居中
-        if (matchHotKey(window.siyuan.config.keymap.editor.general.alignCenter.custom, event)) {
+        if (matchHotKey(window.siyuan.config.keymap.editor.general.alignCenter, event)) {
             setTableAlign(protyle, [cellElement], nodeElement, "center", range);
             event.preventDefault();
             return true;
         }
         // 居右
-        if (matchHotKey(window.siyuan.config.keymap.editor.general.alignRight.custom, event)) {
+        if (matchHotKey(window.siyuan.config.keymap.editor.general.alignRight, event)) {
             setTableAlign(protyle, [cellElement], nodeElement, "right", range);
             event.preventDefault();
             return true;
@@ -724,7 +681,7 @@ export const fixTable = (protyle: IProtyle, event: KeyboardEvent, range: Range) 
             return true;
         }
     });
-    if (matchHotKey(window.siyuan.config.keymap.editor.table.moveToUp.custom, event)) {
+    if (matchHotKey(window.siyuan.config.keymap.editor.table.moveToUp, event)) {
         if ((!hasNone || (hasNone && !hasRowSpan && hasColSpan)) &&
             (!previousHasNone || (previousHasNone && !previousHasRowSpan && previousHasColSpan))) {
             moveRowToUp(protyle, range, cellElement, nodeElement);
@@ -733,7 +690,7 @@ export const fixTable = (protyle: IProtyle, event: KeyboardEvent, range: Range) 
         return true;
     }
 
-    if (matchHotKey(window.siyuan.config.keymap.editor.table.moveToDown.custom, event)) {
+    if (matchHotKey(window.siyuan.config.keymap.editor.table.moveToDown, event)) {
         if ((!hasNone || (hasNone && !hasRowSpan && hasColSpan)) &&
             (!nextHasNone || (nextHasNone && !nextHasRowSpan && nextHasColSpan))) {
             moveRowToDown(protyle, range, cellElement, nodeElement);
@@ -742,7 +699,7 @@ export const fixTable = (protyle: IProtyle, event: KeyboardEvent, range: Range) 
         return true;
     }
 
-    if (matchHotKey(window.siyuan.config.keymap.editor.table.moveToLeft.custom, event)) {
+    if (matchHotKey(window.siyuan.config.keymap.editor.table.moveToLeft, event)) {
         if (colIsPure && previousColIsPure) {
             moveColumnToLeft(protyle, range, cellElement, nodeElement);
         }
@@ -750,7 +707,7 @@ export const fixTable = (protyle: IProtyle, event: KeyboardEvent, range: Range) 
         return true;
     }
 
-    if (matchHotKey(window.siyuan.config.keymap.editor.table.moveToRight.custom, event)) {
+    if (matchHotKey(window.siyuan.config.keymap.editor.table.moveToRight, event)) {
         if (colIsPure && nextColIsPure) {
             moveColumnToRight(protyle, range, cellElement, nodeElement);
         }
@@ -759,7 +716,7 @@ export const fixTable = (protyle: IProtyle, event: KeyboardEvent, range: Range) 
     }
 
     // 上方新添加一行
-    if (matchHotKey(window.siyuan.config.keymap.editor.table.insertRowAbove.custom, event)) {
+    if (matchHotKey(window.siyuan.config.keymap.editor.table.insertRowAbove, event)) {
         insertRowAbove(protyle, range, cellElement, nodeElement);
         event.preventDefault();
         event.stopPropagation();
@@ -767,7 +724,7 @@ export const fixTable = (protyle: IProtyle, event: KeyboardEvent, range: Range) 
     }
 
     // 下方新添加一行 https://github.com/Vanessa219/vditor/issues/46
-    if (matchHotKey(window.siyuan.config.keymap.editor.table.insertRowBelow.custom, event)) {
+    if (matchHotKey(window.siyuan.config.keymap.editor.table.insertRowBelow, event)) {
         if (!nextHasNone || (nextHasNone && !nextHasRowSpan && nextHasColSpan)) {
             insertRow(protyle, range, cellElement, nodeElement);
         }
@@ -776,7 +733,7 @@ export const fixTable = (protyle: IProtyle, event: KeyboardEvent, range: Range) 
     }
 
     // 左方新添加一列
-    if (matchHotKey(window.siyuan.config.keymap.editor.table.insertColumnLeft.custom, event)) {
+    if (matchHotKey(window.siyuan.config.keymap.editor.table.insertColumnLeft, event)) {
         if (colIsPure || previousColIsPure) {
             insertColumn(protyle, nodeElement, cellElement, "beforebegin", range);
         }
@@ -785,7 +742,7 @@ export const fixTable = (protyle: IProtyle, event: KeyboardEvent, range: Range) 
     }
 
     // 后方新添加一列
-    if (matchHotKey(window.siyuan.config.keymap.editor.table.insertColumnRight.custom, event)) {
+    if (matchHotKey(window.siyuan.config.keymap.editor.table.insertColumnRight, event)) {
         if (colIsPure || nextColIsPure) {
             insertColumn(protyle, nodeElement, cellElement, "afterend", range);
         }
@@ -794,21 +751,16 @@ export const fixTable = (protyle: IProtyle, event: KeyboardEvent, range: Range) 
     }
 
     // 删除当前行
-    if (matchHotKey(window.siyuan.config.keymap.editor.table["delete-row"].custom, event)) {
-        if ((!hasNone && !hasRowSpan) || //https://github.com/siyuan-note/siyuan/issues/5045
-            (hasNone && !hasRowSpan && hasColSpan)) {
-            deleteRow(protyle, range, cellElement, nodeElement);
-        }
+    if (matchHotKey(window.siyuan.config.keymap.editor.table["delete-row"], event)) {
+        deleteRow(protyle, range, cellElement, nodeElement);
         event.preventDefault();
         event.stopPropagation();
         return true;
     }
 
     // 删除当前列
-    if (matchHotKey(window.siyuan.config.keymap.editor.table["delete-column"].custom, event)) {
-        if (colIsPure) {
-            deleteColumn(protyle, range, nodeElement, cellElement);
-        }
+    if (matchHotKey(window.siyuan.config.keymap.editor.table["delete-column"], event)) {
+        deleteColumn(protyle, range, nodeElement, cellElement);
         event.preventDefault();
         return true;
     }
@@ -863,16 +815,12 @@ export const updateTableTitle = (protyle: IProtyle, nodeElement: Element) => {
     }
     const captionElement = nodeElement.querySelector("caption");
     window.siyuan.menus.menu.remove();
-    const dialog = new Dialog({
+    const html = nodeElement.outerHTML;
+    mobileInputDialog({
         title: window.siyuan.languages.table,
-        width: isMobile() ? "92vw" : "520px",
-        content: `<div class="b3-dialog__content">
-    <label>
-        <div>${window.siyuan.languages.title}</div>
-        <div class="fn__hr"></div>
-        <input class="b3-text-field fn__block">
-    </label>
-    <div class="fn__hr--b"></div>
+        label: window.siyuan.languages.title,
+        value: captionElement?.textContent || "",
+        extraContent: `<div class="fn__hr--b"></div>
     <label>
         <div>${window.siyuan.languages.position}</div>
         <div class="fn__hr"></div>
@@ -880,46 +828,28 @@ export const updateTableTitle = (protyle: IProtyle, nodeElement: Element) => {
             <option value="top">${window.siyuan.languages.up}</option>
             <option value="bottom" ${captionElement?.style.captionSide === "bottom" ? "selected" : ""}>${window.siyuan.languages.down}</option>
         </select>
-    </label>
-</div>
-<div class="b3-dialog__action">
-    <button class="b3-button b3-button--cancel">${window.siyuan.languages.cancel}</button><div class="fn__space"></div>
-    <button class="b3-button b3-button--text">${window.siyuan.languages.confirm}</button>
-</div>
-<div>`,
-    });
-    const html = nodeElement.outerHTML;
-    const inputElement = dialog.element.querySelector(".b3-text-field") as HTMLInputElement;
-    const btnsElement = dialog.element.querySelectorAll(".b3-button");
-    dialog.bindInput(inputElement, () => {
-        (btnsElement[1] as HTMLButtonElement).click();
-    });
-    btnsElement[0].addEventListener("click", () => {
-        dialog.destroy();
-    });
-    btnsElement[1].addEventListener("click", () => {
-        const title = inputElement.value.trim();
-        const location = (dialog.element.querySelector("select") as HTMLSelectElement).value;
-        if (title) {
-            const html = `<caption contenteditable="false" ${location === "bottom" ? 'style="caption-side: bottom;"' : ""}>${Lute.EscapeHTMLStr(title)}</caption>`;
-            if (captionElement) {
-                captionElement.outerHTML = html;
+    </label>`,
+        onConfirm: (value, dialog) => {
+            const title = value.trim();
+            const location = (dialog.element.querySelector("select") as HTMLSelectElement).value;
+            if (title) {
+                const html = `<caption contenteditable="false" ${location === "bottom" ? 'style="caption-side: bottom;"' : ""}>${escapeHtmlTextAndAttr(title)}</caption>`;
+                if (captionElement) {
+                    captionElement.outerHTML = html;
+                } else {
+                    nodeElement.querySelector("table").insertAdjacentHTML("afterbegin", html);
+                }
+                nodeElement.setAttribute("caption", escapeHtmlTextAndAttr(html));
             } else {
-                nodeElement.querySelector("table").insertAdjacentHTML("afterbegin", html);
+                if (captionElement) {
+                    captionElement.remove();
+                }
+                nodeElement.removeAttribute("caption");
             }
-            nodeElement.setAttribute("caption", Lute.EscapeHTMLStr(html));
-        } else {
-            if (captionElement) {
-                captionElement.remove();
-            }
-            nodeElement.removeAttribute("caption");
-        }
-        updateTransaction(protyle, nodeElement, html);
-        dialog.destroy();
+            updateTransaction(protyle, nodeElement, html);
+            dialog.destroy();
+        },
     });
-    inputElement.value = captionElement?.textContent || "";
-    inputElement.focus();
-    inputElement.select();
 };
 
 export interface ITableCellInfo {
@@ -1000,6 +930,21 @@ export const buildTableGrid = (tableElement: HTMLElement): ITableGrid => {
     };
 };
 
+// 合并占位由逻辑网格确定，跨行单元格从其占据区域的外侧查找相邻行。
+export const getVerticalTableCell = (cell: HTMLTableCellElement, direction: "up" | "down") => {
+    const table = cell.closest("table");
+    if (!table) {
+        return;
+    }
+    const {grid, cellInfos} = buildTableGrid(table);
+    const info = cellInfos.find(item => item.cell === cell);
+    if (!info) {
+        return;
+    }
+    const row = direction === "up" ? info.row - 1 : info.row + info.rowspan;
+    return grid[row]?.[info.col] || undefined;
+};
+
 export const getTableCellSelectionIndexes = (
     tableElement: HTMLTableElement,
     cellElements: HTMLTableCellElement[],
@@ -1026,99 +971,295 @@ export const getTableCellSelectionIndexes = (
     };
 };
 
-const replaceTableCellTag = (cell: HTMLTableCellElement, tag: "th" | "td") => {
-    if (cell.tagName.toLowerCase() === tag) {
-        return;
+export interface IDeleteTableOptions {
+    range: Range;
+    row: number;
+    column: number;
+}
+
+const cloneTableCell = (sourceCell: HTMLTableCellElement | undefined, tag: "th" | "td") => {
+    const cell = document.createElement(tag);
+    if (!sourceCell) {
+        return cell;
     }
-    const newCell = document.createElement(tag);
-    Array.from(cell.attributes).forEach(attribute => {
-        newCell.setAttribute(attribute.name, attribute.value);
+    Array.from(sourceCell.attributes).forEach(attribute => {
+        cell.setAttribute(attribute.name, attribute.value);
     });
-    while (cell.firstChild) {
-        newCell.append(cell.firstChild);
-    }
-    cell.replaceWith(newCell);
+    Array.from(sourceCell.childNodes).forEach(child => cell.append(child.cloneNode(true)));
+    return cell;
 };
 
-const normalizeTableSections = (tableElement: HTMLTableElement) => {
-    const rows = Array.from(tableElement.rows);
-    const head = tableElement.tHead || tableElement.createTHead();
-    const body = tableElement.tBodies[0] || tableElement.createTBody();
-    head.innerHTML = "";
-    body.innerHTML = "";
-    rows.forEach((row, index) => {
-        Array.from(row.cells).forEach(cell => replaceTableCellTag(cell, index === 0 ? "th" : "td"));
-        (index === 0 ? head : body).append(row);
+const resetTableCellColumnLayout = (cell: HTMLTableCellElement) => {
+    cell.removeAttribute("align");
+    cell.style.removeProperty("width");
+    cell.style.removeProperty("min-width");
+    cell.style.removeProperty("max-width");
+    if (!cell.getAttribute("style")) {
+        cell.removeAttribute("style");
+    }
+};
+
+export const transposeTable = (protyle: IProtyle, nodeElement: Element, range: Range) => {
+    const tableElement = nodeElement.querySelector("table");
+    if (!tableElement) {
+        return false;
+    }
+    const grid = buildTableGrid(tableElement);
+    if (grid.rowCount === 0 || grid.columnCount === 0) {
+        return false;
+    }
+    if (!tableElement.contains(range.startContainer)) {
+        const firstCell = tableElement.querySelector("th, td");
+        if (!firstCell) {
+            return false;
+        }
+        range.selectNodeContents(firstCell);
+        range.collapse(true);
+    }
+    range.insertNode(document.createElement("wbr"));
+    const oldHTML = nodeElement.outerHTML;
+    const rowHeaderEnabled = isTableHeaderEnabled(nodeElement, "row");
+    const columnHeaderEnabled = isTableHeaderEnabled(nodeElement, "column");
+    const transposed = transposeTableCells(grid.cellInfos, grid.rowCount, grid.columnCount);
+    const headRowCount = getTableHeadRowCount(transposed.cells, transposed.rowCount);
+    const outputCells = new Map<string, typeof transposed.cells[number]>();
+    const coveredSlots = Array.from({length: transposed.rowCount},
+        () => new Array(transposed.columnCount).fill(false));
+    transposed.cells.forEach(cell => {
+        outputCells.set(`${cell.row}:${cell.col}`, cell);
+        for (let row = cell.row; row < cell.row + cell.rowspan; row++) {
+            for (let column = cell.col; column < cell.col + cell.colspan; column++) {
+                if (row !== cell.row || column !== cell.col) {
+                    coveredSlots[row][column] = true;
+                }
+            }
+        }
     });
-    Array.from(tableElement.tBodies).slice(1).forEach(item => item.remove());
+
+    const nextTable = tableElement.cloneNode(false) as HTMLTableElement;
+    if (tableElement.caption) {
+        nextTable.append(tableElement.caption.cloneNode(true));
+    }
+    const sourceColumnGroup = Array.from(tableElement.children)
+        .find(item => item.tagName === "COLGROUP") as HTMLTableColElement | undefined;
+    const columnGroup = sourceColumnGroup?.cloneNode(false) as HTMLTableColElement ||
+        document.createElement("colgroup");
+    for (let column = 0; column < transposed.columnCount; column++) {
+        const columnElement = document.createElement("col");
+        columnElement.style.minWidth = "60px";
+        columnGroup.append(columnElement);
+    }
+    nextTable.append(columnGroup);
+    const head = tableElement.tHead?.cloneNode(false) as HTMLTableSectionElement ||
+        document.createElement("thead");
+    const body = tableElement.tBodies[0]?.cloneNode(false) as HTMLTableSectionElement ||
+        document.createElement("tbody");
+    for (let row = 0; row < transposed.rowCount; row++) {
+        const rowElement = document.createElement("tr");
+        const tag = row < headRowCount ? "th" : "td";
+        for (let column = 0; column < transposed.columnCount; column++) {
+            const outputCell = outputCells.get(`${row}:${column}`);
+            const cell = outputCell ? cloneTableCell(outputCell.source.cell, tag) : document.createElement(tag);
+            resetTableCellColumnLayout(cell);
+            if (outputCell) {
+                cell.classList.remove("fn__none");
+                if (outputCell.rowspan > 1) {
+                    cell.setAttribute("rowspan", outputCell.rowspan.toString());
+                } else {
+                    cell.removeAttribute("rowspan");
+                }
+                if (outputCell.colspan > 1) {
+                    cell.setAttribute("colspan", outputCell.colspan.toString());
+                } else {
+                    cell.removeAttribute("colspan");
+                }
+            } else if (coveredSlots[row][column]) {
+                cell.classList.add("fn__none");
+            }
+            rowElement.append(cell);
+        }
+        (row < headRowCount ? head : body).append(rowElement);
+    }
+    nextTable.append(head, body);
+    tableElement.replaceWith(nextTable);
+    setTableHeaderEnabled(nodeElement, "row", columnHeaderEnabled);
+    setTableHeaderEnabled(nodeElement, "column", rowHeaderEnabled);
+    (nodeElement.firstElementChild as HTMLElement).scrollLeft = 0;
+    updateTransaction(protyle, nodeElement, oldHTML);
+    focusByWbr(nodeElement, range);
+    return true;
+};
+
+const rebuildProjectedTable = (
+    tableElement: HTMLTableElement,
+    grid: ITableGrid,
+    retainedRows: number[],
+    retainedColumns: number[],
+) => {
+    const projection = projectTableCells(grid.cellInfos, retainedRows, retainedColumns);
+    const headRowCount = getProjectedTableHeadRowCount(projection.cells, projection.rows, grid.sectionOfRow);
+    const sourceRows = Array.from(tableElement.rows);
+    const sourceCells = sourceRows.map(row => Array.from(row.cells));
+    const sourceColumnGroup = Array.from(tableElement.children)
+        .find(item => item.tagName === "COLGROUP") as HTMLTableColElement | undefined;
+    const sourceColumns = Array.from(sourceColumnGroup?.children || []) as HTMLTableColElement[];
+    const outputCells = new Map<string, typeof projection.cells[number]>();
+    const coveredSlots = Array.from({length: projection.rows.length},
+        () => new Array(projection.columns.length).fill(false));
+    projection.cells.forEach(cell => {
+        outputCells.set(`${cell.row}:${cell.col}`, cell);
+        for (let row = cell.row; row < cell.row + cell.rowspan; row++) {
+            for (let column = cell.col; column < cell.col + cell.colspan; column++) {
+                if (row !== cell.row || column !== cell.col) {
+                    coveredSlots[row][column] = true;
+                }
+            }
+        }
+    });
+
+    const nextTable = tableElement.cloneNode(false) as HTMLTableElement;
+    if (tableElement.caption) {
+        nextTable.append(tableElement.caption.cloneNode(true));
+    }
+    const columnGroup = sourceColumnGroup?.cloneNode(false) as HTMLTableColElement ||
+        document.createElement("colgroup");
+    projection.columns.forEach(column => {
+        const sourceColumn = sourceColumns[column];
+        if (sourceColumn) {
+            columnGroup.append(sourceColumn.cloneNode(true));
+        } else {
+            const newColumn = document.createElement("col");
+            newColumn.style.minWidth = "60px";
+            columnGroup.append(newColumn);
+        }
+    });
+    nextTable.append(columnGroup);
+    const head = tableElement.tHead?.cloneNode(false) as HTMLTableSectionElement ||
+        document.createElement("thead");
+    const body = tableElement.tBodies[0]?.cloneNode(false) as HTMLTableSectionElement ||
+        document.createElement("tbody");
+    projection.rows.forEach((sourceRow, row) => {
+        const rowElement = sourceRows[sourceRow]?.cloneNode(false) as HTMLTableRowElement ||
+            document.createElement("tr");
+        const tag = row < headRowCount ? "th" : "td";
+        projection.columns.forEach((sourceColumn, column) => {
+            const outputCell = outputCells.get(`${row}:${column}`);
+            const sourcePlaceholder = sourceCells[sourceRow]?.[sourceColumn];
+            const sourceCell = outputCell?.source.cell ||
+                (coveredSlots[row][column] && sourcePlaceholder?.classList.contains("fn__none") ?
+                    sourcePlaceholder : undefined);
+            const cell = cloneTableCell(sourceCell, tag);
+            if (outputCell) {
+                cell.classList.remove("fn__none");
+                if (outputCell.rowspan > 1) {
+                    cell.setAttribute("rowspan", outputCell.rowspan.toString());
+                } else {
+                    cell.removeAttribute("rowspan");
+                }
+                if (outputCell.colspan > 1) {
+                    cell.setAttribute("colspan", outputCell.colspan.toString());
+                } else {
+                    cell.removeAttribute("colspan");
+                }
+            } else if (coveredSlots[row][column]) {
+                cell.classList.add("fn__none");
+            } else {
+                cell.classList.remove("fn__none");
+                cell.removeAttribute("rowspan");
+                cell.removeAttribute("colspan");
+            }
+            rowElement.append(cell);
+        });
+        (row < headRowCount ? head : body).append(rowElement);
+    });
+    nextTable.append(head, body);
+    const scrollTop = tableElement.scrollTop;
+    tableElement.replaceWith(nextTable);
+    nextTable.scrollTop = scrollTop;
+    return {table: nextTable, projection};
+};
+
+const getProjectedIndex = (retainedIndexes: number[], sourceIndex: number) => {
+    const nextIndex = retainedIndexes.findIndex(index => index >= sourceIndex);
+    return nextIndex === -1 ? retainedIndexes.length - 1 : nextIndex;
+};
+
+const deleteTableRowsOrColumns = (
+    protyle: IProtyle,
+    nodeElement: HTMLElement,
+    rowIndexes: number[],
+    columnIndexes: number[],
+    options?: IDeleteTableOptions,
+) => {
+    const tableElement = nodeElement.querySelector("table");
+    if (!tableElement) {
+        return false;
+    }
+    const grid = buildTableGrid(tableElement);
+    const deletedRows = Array.from(new Set(rowIndexes))
+        .filter(index => index >= 0 && index < grid.rowCount).sort((a, b) => a - b);
+    const deletedColumns = Array.from(new Set(columnIndexes))
+        .filter(index => index >= 0 && index < grid.columnCount).sort((a, b) => a - b);
+    if (deletedRows.length === 0 && deletedColumns.length === 0) {
+        return false;
+    }
+    const deletedRowSet = new Set(deletedRows);
+    const deletedColumnSet = new Set(deletedColumns);
+    const retainedRows = Array.from({length: grid.rowCount}, (_, index) => index)
+        .filter(index => !deletedRowSet.has(index));
+    const retainedColumns = Array.from({length: grid.columnCount}, (_, index) => index)
+        .filter(index => !deletedColumnSet.has(index));
+    if (retainedRows.length === 0 || retainedColumns.length === 0) {
+        const range = options?.range || getEditorRange(nodeElement);
+        nodeElement.classList.add("protyle-wysiwyg--select");
+        removeBlock(protyle, nodeElement, range, "remove");
+        return true;
+    }
+
+    const oldHTML = nodeElement.outerHTML;
+    const undoContext = options ? getUndoFocusContext(protyle.wysiwyg.element, options.range, true) : undefined;
+    const {table} = rebuildProjectedTable(tableElement, grid, retainedRows, retainedColumns);
+    if (options) {
+        const sourceRow = deletedRows.length > 0 ? deletedRows[0] : options.row;
+        const sourceColumn = deletedColumns.length > 0 ? deletedColumns[0] : options.column;
+        const row = getProjectedIndex(retainedRows, sourceRow);
+        const column = getProjectedIndex(retainedColumns, sourceColumn);
+        const focusCell = buildTableGrid(table).grid[row]?.[column];
+        if (focusCell) {
+            options.range.selectNodeContents(focusCell);
+            options.range.collapse(true);
+            focusByRange(options.range);
+            const rowElement = table.rows[row];
+            if (rowElement) {
+                scrollToView(nodeElement, rowElement, protyle);
+            }
+            const scrollElement = nodeElement.firstElementChild as HTMLElement;
+            if (scrollElement && focusCell.offsetLeft + focusCell.clientWidth >
+                scrollElement.scrollLeft + scrollElement.clientWidth) {
+                scrollElement.scrollLeft = focusCell.offsetLeft + focusCell.clientWidth - scrollElement.clientWidth;
+            }
+        }
+    }
+    updateTransaction(protyle, nodeElement, oldHTML, undoContext);
+    return true;
 };
 
 export const deleteTableRows = (
     protyle: IProtyle,
     nodeElement: HTMLElement,
     rowIndexes: number[],
+    options?: IDeleteTableOptions,
 ) => {
-    const tableElement = nodeElement.querySelector("table");
-    if (!tableElement) {
-        return false;
-    }
-    const grid = buildTableGrid(tableElement);
-    if (grid.cellInfos.some(info => info.rowspan > 1 || info.colspan > 1)) {
-        return false;
-    }
-    const indexes = Array.from(new Set(rowIndexes))
-        .filter(index => index >= 0 && index < grid.rowCount)
-        .sort((a, b) => b - a);
-    if (indexes.length === 0) {
-        return false;
-    }
-    if (indexes.length >= grid.rowCount) {
-        const range = getEditorRange(nodeElement);
-        nodeElement.classList.add("protyle-wysiwyg--select");
-        removeBlock(protyle, nodeElement, range, "remove");
-        return true;
-    }
-    const oldHTML = nodeElement.outerHTML;
-    const rows = Array.from(tableElement.rows);
-    indexes.forEach(index => rows[index]?.remove());
-    normalizeTableSections(tableElement);
-    updateTransaction(protyle, nodeElement, oldHTML);
-    return true;
+    return deleteTableRowsOrColumns(protyle, nodeElement, rowIndexes, [], options);
 };
 
 export const deleteTableColumns = (
     protyle: IProtyle,
     nodeElement: HTMLElement,
     columnIndexes: number[],
+    options?: IDeleteTableOptions,
 ) => {
-    const tableElement = nodeElement.querySelector("table");
-    if (!tableElement) {
-        return false;
-    }
-    const grid = buildTableGrid(tableElement);
-    if (grid.cellInfos.some(info => info.rowspan > 1 || info.colspan > 1)) {
-        return false;
-    }
-    const indexes = Array.from(new Set(columnIndexes))
-        .filter(index => index >= 0 && index < grid.columnCount)
-        .sort((a, b) => b - a);
-    if (indexes.length === 0) {
-        return false;
-    }
-    if (indexes.length >= grid.columnCount) {
-        const range = getEditorRange(nodeElement);
-        nodeElement.classList.add("protyle-wysiwyg--select");
-        removeBlock(protyle, nodeElement, range, "remove");
-        return true;
-    }
-    const oldHTML = nodeElement.outerHTML;
-    Array.from(tableElement.rows).forEach(row => {
-        indexes.forEach(index => row.cells[index]?.remove());
-    });
-    const columns = Array.from(tableElement.querySelectorAll("col"));
-    indexes.forEach(index => columns[index]?.remove());
-    updateTransaction(protyle, nodeElement, oldHTML);
-    return true;
+    return deleteTableRowsOrColumns(protyle, nodeElement, [], columnIndexes, options);
 };
 
 const getTableRangeBounds = (cellInfos: ITableCellInfo[], rowCount: number, startCell: HTMLElement, endCell: HTMLElement) => {
@@ -1158,6 +1299,15 @@ export const getTableRangeCells = (tableElement: HTMLElement, startCell?: HTMLEl
         }
     });
     return ret;
+};
+
+export const getTableClipboardBlockDOM = (html: string) => {
+    const container = document.createElement("div");
+    container.innerHTML = html;
+    const table = container.querySelector("table");
+    table.setAttribute("contenteditable", "true");
+    table.setAttribute("spellcheck", "false");
+    return `<div data-node-id="${Lute.NewNodeID()}" data-type="NodeTable" class="table"><div contenteditable="false">${table.outerHTML}<div class="protyle-action__table"><div class="table__resize"></div><div class="table__select"></div></div></div><div class="protyle-attr" contenteditable="false">\u200b</div></div>`;
 };
 
 // getTableRangeHTML 根据起始单元格到结束单元格的矩形区域，重建一个合法的 <table> HTML。
@@ -1299,7 +1449,7 @@ export const getTableRangeHTML = (tableElement: HTMLElement, startCell: HTMLElem
             html += `<${section}>`;
             curSection = section;
         }
-        html += "<tr>";
+        html += getTableRowOpeningHTML((tableElement as HTMLTableElement).rows[selRowStart + r]);
         for (let c = 0; c <= maxOutCol; c++) {
             const slot = outGrid[r][c];
             if (slot) {

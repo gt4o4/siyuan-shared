@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package cache
 
@@ -24,8 +12,8 @@ import (
 )
 
 var docIALCache, _ = ristretto.NewCache(&ristretto.Config{
-	NumCounters: 100000,
-	MaxCost:     1024 * 1024 * 200,
+	NumCounters: AdmissionCounters,
+	MaxCost:     DefaultMaxCostBytes,
 	BufferItems: 64,
 })
 var docIALCacheKeys = map[string]map[string]struct{}{}
@@ -35,9 +23,23 @@ func docIALCacheKey(p, boxID string) string {
 	return boxID + "\x00" + p
 }
 
+// ialCacheCost 保守估算映射、条目及字符串的驻留字节数，不依赖特定 Go 版本的映射布局。
+func ialCacheCost(key string, ial map[string]string) int64 {
+	cost := int64(256 + len(key))
+	for name, value := range ial {
+		cost += 128 + int64(len(name)) + int64(len(value))
+	}
+	return cost
+}
+
 func PutDocIALInBox(p, boxID string, ial map[string]string) {
 	key := docIALCacheKey(p, boxID)
-	docIALCache.Set(key, ial, 128)
+	cost := ialCacheCost(key, ial)
+	if cost >= docIALCache.MaxCost() {
+		RemoveDocIALInBox(p, boxID)
+		return
+	}
+	docIALCache.Set(key, maps.Clone(ial), cost)
 
 	docIALCacheKeysMu.Lock()
 	defer docIALCacheKeysMu.Unlock()
@@ -87,6 +89,7 @@ func RemoveDocIALInBox(p, boxID string) {
 }
 
 func ClearDocsIAL() {
+	InvalidateDocTree("")
 	docIALCacheKeysMu.Lock()
 	docIALCacheKeys = map[string]map[string]struct{}{}
 	docIALCacheKeysMu.Unlock()
@@ -94,8 +97,8 @@ func ClearDocsIAL() {
 }
 
 var blockIALCache, _ = ristretto.NewCache(&ristretto.Config{
-	NumCounters: 100000,
-	MaxCost:     1024 * 1024 * 200,
+	NumCounters: AdmissionCounters,
+	MaxCost:     DefaultMaxCostBytes,
 	BufferItems: 64,
 })
 var blockIALCacheKeys = map[string]map[string]struct{}{}
@@ -111,7 +114,12 @@ func PutBlockIAL(id string, ial map[string]string) {
 
 func PutBlockIALInBox(id, boxID string, ial map[string]string) {
 	key := blockIALCacheKey(id, boxID)
-	blockIALCache.Set(key, ial, 128)
+	cost := ialCacheCost(key, ial)
+	if cost >= blockIALCache.MaxCost() {
+		RemoveBlockIALInBox(id, boxID)
+		return
+	}
+	blockIALCache.Set(key, maps.Clone(ial), cost)
 
 	blockIALCacheKeysMu.Lock()
 	defer blockIALCacheKeysMu.Unlock()
@@ -132,7 +140,7 @@ func GetBlockIALInBox(id, boxID string) (ret map[string]string) {
 	if nil == ial {
 		return
 	}
-	return ial.(map[string]string)
+	return maps.Clone(ial.(map[string]string))
 }
 
 // GetBlockIALWithBoxFallback 先查 box-aware key，未命中再回退到 bare key。

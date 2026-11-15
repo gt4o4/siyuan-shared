@@ -1,25 +1,12 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
 import (
 	"errors"
 	"fmt"
-	"path"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +14,7 @@ import (
 	"github.com/88250/lute/ast"
 	"github.com/88250/lute/parse"
 	"github.com/siyuan-note/siyuan/kernel/av"
+	"github.com/siyuan-note/siyuan/kernel/sql"
 	"github.com/siyuan-note/siyuan/kernel/treenode"
 	"github.com/siyuan-note/siyuan/kernel/util"
 )
@@ -38,17 +26,30 @@ type NewItemTemplatePreview struct {
 	HPath      string   `json:"hPath,omitempty"`
 	Warnings   []string `json:"warnings,omitempty"`
 
-	parentID string
+	plan *DocumentCreatePlan
 }
 
 // CreateAttributeViewItemResult 描述按模板创建数据库条目的结果。
 type CreateAttributeViewItemResult struct {
-	ItemID      string       `json:"itemID"`
-	BlockID     string       `json:"blockID"`
-	Content     string       `json:"content"`
-	IsDetached  bool         `json:"isDetached"`
-	Warnings    []string     `json:"warnings,omitempty"`
-	Transaction *Transaction `json:"-"`
+	ItemID          string   `json:"itemID"`
+	BlockID         string   `json:"blockID"`
+	Content         string   `json:"content"`
+	IsDetached      bool     `json:"isDetached"`
+	Warnings        []string `json:"warnings,omitempty"`
+	OpenAfterCreate *bool    `json:"openAfterCreate,omitempty"`
+	// 自动打开时使用当前分屏；false 或省略时向右分屏打开。
+	OpenInCurrentTab bool         `json:"openInCurrentTab,omitempty"`
+	Transaction      *Transaction `json:"-"`
+}
+
+// CreateAttributeViewItemMarkdown 描述通过数据库条目模板创建文档时使用的 Markdown 内容。
+type CreateAttributeViewItemMarkdown struct {
+	Title        string
+	Markdown     string
+	Tags         string
+	WithMath     bool
+	ClippingHref string
+	ListDocTree  bool
 }
 
 const (
@@ -68,12 +69,61 @@ type CreateAttributeViewItemDocsResult struct {
 }
 
 // CreateAttributeViewItem 按指定模板创建一个数据库条目。templateID 为空时创建空白游离条目。
-func CreateAttributeViewItem(avID, blockID, viewID, templateID, previousID, groupID string) (*CreateAttributeViewItemResult, error) {
-	attrView, err := av.ParseAttributeView(avID)
+func CreateAttributeViewItem(avID, blockID, viewID, templateID, previousID, groupID string, calendarDates ...*int64) (*CreateAttributeViewItemResult, error) {
+	return createAttributeViewItem(avID, blockID, viewID, templateID, previousID, groupID, nil, nil, nil, calendarDates...)
+}
+
+func CreateAttributeViewItemWithSelection(avID, blockID, viewID, templateID, previousID, groupID string,
+	calendarDate *int64, selection *DocumentSelection) (*CreateAttributeViewItemResult, error) {
+	return createAttributeViewItem(avID, blockID, viewID, templateID, previousID, groupID, nil, nil, selection, calendarDate)
+}
+
+// CreateAttributeViewItemWithMarkdown 按指定的文档类型模板创建数据库条目，并使用传入的 Markdown 创建绑定文档。
+func CreateAttributeViewItemWithMarkdown(avID, blockID, viewID, templateID, previousID, groupID string,
+	document *CreateAttributeViewItemMarkdown, selections ...*DocumentSelection) (*CreateAttributeViewItemResult, error) {
+	if nil == document {
+		return nil, errors.New("attribute view item markdown is nil")
+	}
+	var selection *DocumentSelection
+	if len(selections) > 0 {
+		selection = selections[0]
+	}
+	return createAttributeViewItem(avID, blockID, viewID, templateID, previousID, groupID, document, nil, selection)
+}
+
+type attributeViewItemCreationOptions struct {
+	storageBoxID    string
+	storageKnown    bool
+	templateTime    time.Time
+	primaryFallback string
+	expectedPrimary string
+	primaryOverride *string
+	operations      func(string) (do, undo []*Operation)
+}
+
+func createAttributeViewItem(avID, blockID, viewID, templateID, previousID, groupID string,
+	document *CreateAttributeViewItemMarkdown, options *attributeViewItemCreationOptions, selection *DocumentSelection, calendarDates ...*int64) (*CreateAttributeViewItemResult, error) {
+	var attrView *av.AttributeView
+	var err error
+	if options != nil && options.storageKnown {
+		attrView, err = av.ParseAttributeViewWithStorageContext(avID, options.storageBoxID)
+	} else {
+		attrView, err = avParseView(avID, blockID)
+	}
 	if nil != err {
 		return nil, err
 	}
 	createdAt := time.Now()
+	renderAt := createdAt
+	if options != nil {
+		renderAt = options.templateTime
+	}
+	if selection != nil {
+		if options != nil && !selection.Time.Equal(renderAt) {
+			return nil, errors.New("new item template preview time changed")
+		}
+		renderAt = selection.Time
+	}
 	itemTemplate := attrView.GetNewItemTemplate(templateID)
 	var prunedOptions []*av.PrunedNewItemTemplateOption
 	if "" != templateID && nil == itemTemplate {
@@ -90,9 +140,39 @@ func CreateAttributeViewItem(avID, blockID, viewID, templateID, previousID, grou
 		attrView = &cloned
 		itemTemplate = cloned.NewItemTemplates[0]
 	}
-	preview, err := resolveAttributeViewNewItemTemplate(blockID, itemTemplate, createdAt)
+	if nil != document && av.NewItemTargetDocument != itemTemplate.TargetType {
+		return nil, fmt.Errorf("new item template [%s] does not create a bound block", templateID)
+	}
+	if selection != nil && itemTemplate.TargetType != av.NewItemTargetDocument {
+		return nil, documentAddressingError("planChanged", errors.New("new item template target changed after selection"))
+	}
+	primaryFallback := ""
+	if options != nil {
+		primaryFallback = options.primaryFallback
+	}
+	if nil != document {
+		primaryFallback = document.Title
+	}
+	_, templateBoxID := attrView.StoragePath()
+	allowCarrierless := options != nil && options.storageKnown
+	preview, err := resolveAttributeViewNewItemTemplateWithDocumentContext(blockID, templateBoxID, itemTemplate, renderAt, primaryFallback, allowCarrierless, selection)
 	if nil != err {
 		return nil, err
+	}
+	if options != nil && preview.PrimaryKey != options.expectedPrimary {
+		return nil, errors.New("new item template preview changed")
+	}
+	if options != nil && options.primaryOverride != nil {
+		preview.PrimaryKey = *options.primaryOverride
+		if av.NewItemTargetDocument == itemTemplate.TargetType {
+			preview, err = resolveAttributeViewItemDocumentInStorage(blockID, templateBoxID, allowCarrierless, *options.primaryOverride, itemTemplate, renderAt, selection)
+			if nil != err {
+				return nil, err
+			}
+		}
+	}
+	if options != nil && options.storageKnown && itemTemplate.TargetType == av.NewItemTargetDocument && !IsSameCryptoBoundary(options.storageBoxID, preview.BoxID) {
+		return nil, errors.New(Conf.Language(381))
 	}
 	for _, prunedOption := range prunedOptions {
 		if templateID == prunedOption.TemplateID {
@@ -101,24 +181,62 @@ func CreateAttributeViewItem(avID, blockID, viewID, templateID, previousID, grou
 		}
 	}
 
+	dbUpdated := ""
+	if blockID != "" {
+		var dbTree *parse.Tree
+		var loadErr error
+		if options != nil && options.storageKnown {
+			dbTree, loadErr = LoadTreeByBlockIDInExactBox(blockID, options.storageBoxID)
+		} else {
+			dbTree, loadErr = LoadTreeByBlockID(blockID)
+		}
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		dbNode := treenode.GetNodeInTree(dbTree, blockID)
+		if dbNode == nil {
+			return nil, ErrBlockNotFound
+		}
+		dbUpdated, templateBoxID = dbNode.IALAttr("updated"), dbTree.Box
+	}
 	itemID := ast.NewNodeID()
-	fieldValues, err := resolveNewItemFieldValues(attrView, itemTemplate, createdAt)
+	var additionalDo, additionalUndo []*Operation
+	if options != nil {
+		additionalDo, additionalUndo = options.operations(itemID)
+	}
+	fieldValues, err := resolveNewItemFieldValues(attrView, itemTemplate, renderAt, templateBoxID)
 	if nil != err {
 		return nil, err
 	}
-	dbTree, err := LoadTreeByBlockID(blockID)
+	if len(calendarDates) > 0 && nil != calendarDates[0] {
+		if err = setNewCalendarItemDate(attrView, blockID, viewID, *calendarDates[0], fieldValues); nil != err {
+			return nil, err
+		}
+	}
+	filterContext, err := resolveAttributeViewFilterContext(attrView, nil, blockID)
 	if nil != err {
 		return nil, err
 	}
-	dbNode := treenode.GetNodeInTree(dbTree, blockID)
-	if nil == dbNode {
-		return nil, ErrBlockNotFound
+	if nil != filterContext && 1 > len(filterContext.CurrentDocumentItemIDs) {
+		return nil, av.ErrAttributeViewContextNotBound
 	}
+	// 模板字段会在插入条目后写入，需提前合并上下文关系，避免覆盖插入阶段自动填充的当前文档。
+	applyAttributeViewContextFilterDefaultValue(attrView, itemID, filterContext, fieldValues)
 	boundBlockID := itemID
 	isDetached := av.NewItemTargetDocument != itemTemplate.TargetType
+	if isDetached && itemTemplate.Icon != "" {
+		fieldValues[attrView.GetBlockKeyValues().Key.ID] = &av.Value{
+			Type: av.KeyTypeBlock, IsDetached: true,
+			Block: &av.ValueBlock{Content: preview.PrimaryKey, Icon: itemTemplate.Icon},
+		}
+	}
 	var createdTree *parse.Tree
+	var createdSources *relationCreatedDocuments
+	if options != nil && options.storageKnown {
+		createdSources = &relationCreatedDocuments{files: map[string]*documentSourceFile{}}
+	}
 	if !isDetached {
-		boundBlockID, createdTree, err = createAttributeViewItemDocument(preview, itemTemplate)
+		boundBlockID, createdTree, err = createAttributeViewItemDocumentWithMarkdown(preview, itemTemplate, document, createdSources)
 		if nil != err {
 			return nil, err
 		}
@@ -133,20 +251,46 @@ func CreateAttributeViewItem(avID, blockID, viewID, templateID, previousID, grou
 		PreviousID: previousID, IgnoreDefaultFill: false,
 		Srcs: []map[string]any{{"itemID": itemID, "id": boundBlockID, "content": preview.PrimaryKey, "isDetached": isDetached}},
 	})
-	fieldOperations := buildNewItemFieldValueOperations(attrView, fieldValues, itemID)
+	fieldOperations := buildNewItemFieldValueOperations(attrView, fieldValues, itemID, blockID)
 	doOperations = append(doOperations, fieldOperations...)
-	doOperations = append(doOperations, &Operation{Action: "doUpdateUpdated", ID: blockID, Data: util.CurrentTimeSecondsStr()})
+	doOperations = append(doOperations, additionalDo...)
+	if blockID != "" {
+		doOperations = append(doOperations, &Operation{Action: "doUpdateUpdated", ID: blockID, Data: util.CurrentTimeSecondsStr()})
+	}
 
-	undoOperations := []*Operation{{Action: "removeAttrViewBlock", AvID: avID, SrcIDs: []string{itemID}}}
+	undoOperations := append(additionalUndo, &Operation{Action: "removeAttrViewBlock", AvID: avID, BlockID: blockID, SrcIDs: []string{itemID}})
 	if nil != createdTree {
 		undoOperations = append(undoOperations, &Operation{Action: "removeCreatedDoc", ID: boundBlockID, Tree: createdTree})
 	}
-	undoOperations = append(undoOperations, &Operation{Action: "doUpdateUpdated", ID: blockID, Data: dbNode.IALAttr("updated")})
+	if blockID != "" {
+		undoOperations = append(undoOperations, &Operation{Action: "doUpdateUpdated", ID: blockID, Data: dbUpdated})
+	}
 	tx := &Transaction{DoOperations: doOperations, UndoOperations: undoOperations, Timestamp: createdAt.UnixMilli()}
+	// 关联新建在没有启用自动化时也保留数据库和载体快照，覆盖联合写入失败后的恢复。
+	tx.attributeViewItemCreation = options != nil || attrView.HasSubItems()
 	tx.MarkFromAPI()
 	if err = PerformTxSync(tx); nil != err {
-		cleanupErr := RemoveAttributeViewBlock([]string{itemID}, avID)
-		if nil != createdTree {
+		// 事务回滚可能已经移除新条目，只有仍存在时才清理，避免再次改动恢复后的关联。
+		var current *av.AttributeView
+		var cleanupErr error
+		if options != nil && options.storageKnown {
+			current, cleanupErr = av.ParseAttributeViewWithStorageContext(avID, options.storageBoxID)
+			if cleanupErr == nil && current.GetBlockValue(itemID) != nil {
+				cleanupErr = errors.New("relation item creation recovery is incomplete")
+			}
+		} else {
+			current, cleanupErr = avParseView(avID, blockID)
+			if cleanupErr == nil && current.GetBlockValue(itemID) != nil {
+				cleanupErr = removeAttributeViewBlock([]string{itemID}, avID, blockID, nil)
+			}
+		}
+		if createdSources != nil {
+			if cleanupErr == nil {
+				cleanupErr = createdSources.cleanup()
+			} else {
+				cleanupErr = createdSources.retainedError(cleanupErr)
+			}
+		} else if nil != createdTree {
 			cleanupErr = errors.Join(cleanupErr, removeCreatedNewItemDoc(boundBlockID))
 		}
 		return nil, newItemCreationError(err, cleanupErr)
@@ -154,18 +298,26 @@ func CreateAttributeViewItem(avID, blockID, viewID, templateID, previousID, grou
 
 	content := preview.PrimaryKey
 	if !isDetached {
-		if blockTree := treenode.GetBlockTree(boundBlockID); nil != blockTree {
-			content = path.Base(blockTree.HPath)
+		var blockTree *treenode.BlockTree
+		if options != nil && options.storageKnown {
+			blockTree = treenode.GetBlockTreeInExactBox(boundBlockID, options.storageBoxID)
+		} else {
+			blockTree = treenode.GetBlockTree(boundBlockID)
+		}
+		if nil != blockTree {
+			content = documentTitleText(blockTree.BoxID, blockTree.RootID)
 		}
 	}
 	return &CreateAttributeViewItemResult{
 		ItemID: itemID, BlockID: boundBlockID, Content: content, IsDetached: isDetached,
 		Warnings: preview.Warnings, Transaction: tx,
+		OpenAfterCreate:  itemTemplate.OpenAfterCreate,
+		OpenInCurrentTab: itemTemplate.OpenInCurrentTab,
 	}, nil
 }
 
 // CreateAttributeViewItemDocs 将指定条目中的游离条目批量创建为文档并绑定。
-func CreateAttributeViewItemDocs(avID, blockID, saveMode string, itemIDs []string) (*CreateAttributeViewItemDocsResult, error) {
+func CreateAttributeViewItemDocs(avID, blockID, saveMode string, itemIDs []string, selections ...*DocumentSelection) (*CreateAttributeViewItemDocsResult, error) {
 	unlock := lockAttributeViewItemDocs(avID)
 	defer unlock()
 
@@ -195,6 +347,13 @@ func CreateAttributeViewItemDocs(avID, blockID, saveMode string, itemIDs []strin
 		tree     *parse.Tree
 	}
 	createdAt := time.Now()
+	var selection *DocumentSelection
+	if len(selections) > 0 {
+		selection = selections[0]
+	}
+	if selection != nil {
+		createdAt = selection.Time
+	}
 	seen := map[string]bool{}
 	var items []*itemDoc
 	ret := &CreateAttributeViewItemDocsResult{}
@@ -208,7 +367,7 @@ func CreateAttributeViewItemDocs(avID, blockID, saveMode string, itemIDs []strin
 			ret.SkippedItemIDs = append(ret.SkippedItemIDs, itemID)
 			continue
 		}
-		preview, resolveErr := resolveAttributeViewItemDocument(blockID, value.Block.Content, itemTemplate, createdAt)
+		preview, resolveErr := resolveAttributeViewItemDocument(blockID, value.Block.Content, itemTemplate, createdAt, selection)
 		if nil != resolveErr {
 			return nil, resolveErr
 		}
@@ -222,6 +381,11 @@ func CreateAttributeViewItemDocs(avID, blockID, saveMode string, itemIDs []strin
 	if 0 == len(items) {
 		return ret, nil
 	}
+	plans := make([]*DocumentCreatePlan, 0, len(items))
+	for _, item := range items {
+		plans = append(plans, item.preview.plan)
+	}
+	coalesceDocumentPlanAncestors(plans)
 
 	cleanupCreatedDocs := func() error {
 		var cleanupErr error
@@ -233,7 +397,12 @@ func CreateAttributeViewItemDocs(avID, blockID, saveMode string, itemIDs []strin
 		return cleanupErr
 	}
 	for _, item := range items {
-		item.docID, item.tree, err = createAttributeViewItemDocument(item.preview, itemTemplate)
+		// 条目已设置的图标优先用于新建文档，未设置时沿用文档模板。
+		documentTemplate := *itemTemplate
+		if icon, valid := util.FilterIconValue(item.original.Block.Icon); valid && icon != "" {
+			documentTemplate.Icon = icon
+		}
+		item.docID, item.tree, err = createAttributeViewItemDocument(item.preview, &documentTemplate)
 		if nil != err {
 			return nil, newItemCreationError(err, cleanupCreatedDocs())
 		}
@@ -300,6 +469,7 @@ func newBoundAttributeViewItemValue(original *av.Value, docID, icon string) (*av
 	bound.Block.ID = docID
 	bound.Block.Content = ""
 	bound.Block.Icon = icon
+	bound.Block.RefSubtype = av.BlockRefSubtypeDynamic
 	return bound, nil
 }
 
@@ -328,7 +498,8 @@ func attributeViewItemDocumentTemplate(attrView *av.AttributeView, saveMode stri
 	}
 }
 
-func resolveAttributeViewNewItemTemplate(blockID string, itemTemplate *av.NewItemTemplate, createdAt time.Time) (*NewItemTemplatePreview, error) {
+func resolveAttributeViewNewItemTemplateWithFallback(blockID string, itemTemplate *av.NewItemTemplate, createdAt time.Time,
+	primaryFallback string, selections ...*DocumentSelection) (*NewItemTemplatePreview, error) {
 	boxID := ""
 	if blockTree := treenode.GetBlockTree(blockID); blockTree != nil {
 		boxID = blockTree.BoxID
@@ -340,102 +511,173 @@ func resolveAttributeViewNewItemTemplate(blockID string, itemTemplate *av.NewIte
 			}
 		}
 	}
+	return resolveAttributeViewNewItemTemplateWithFallbackInBox(blockID, boxID, itemTemplate, createdAt, primaryFallback, selections...)
+}
+
+func resolveAttributeViewNewItemTemplateWithFallbackInBox(blockID, boxID string, itemTemplate *av.NewItemTemplate, createdAt time.Time,
+	primaryFallback string, selections ...*DocumentSelection) (*NewItemTemplatePreview, error) {
+	return resolveAttributeViewNewItemTemplateWithDocumentContext(blockID, boxID, itemTemplate, createdAt, primaryFallback, false, selections...)
+}
+
+func resolveAttributeViewNewItemTemplateWithDocumentContext(blockID, boxID string, itemTemplate *av.NewItemTemplate, createdAt time.Time,
+	primaryFallback string, allowCarrierless bool, selections ...*DocumentSelection) (*NewItemTemplatePreview, error) {
 	primary, err := RenderGoTemplateAtInBox(itemTemplate.PrimaryKeyTemplate, createdAt, boxID)
 	if nil != err {
 		return nil, err
 	}
 	primary = strings.TrimSpace(primary)
+	if "" == strings.TrimSpace(itemTemplate.PrimaryKeyTemplate) && "" != strings.TrimSpace(primaryFallback) {
+		primary = strings.TrimSpace(primaryFallback)
+	}
 	preview := &NewItemTemplatePreview{PrimaryKey: primary}
 	if av.NewItemTargetDocument != itemTemplate.TargetType {
 		return preview, nil
 	}
-	return resolveAttributeViewItemDocument(blockID, primary, itemTemplate, createdAt)
+	return resolveAttributeViewItemDocumentInStorage(blockID, boxID, allowCarrierless, primary, itemTemplate, createdAt, selections...)
 }
 
-func resolveAttributeViewItemDocument(blockID, primary string, itemTemplate *av.NewItemTemplate, createdAt time.Time) (*NewItemTemplatePreview, error) {
-	blockTree := treenode.GetBlockTree(blockID)
-	if blockTree == nil {
-		for _, encBoxID := range treenode.GetOpenedEncryptedBoxIDs() {
-			if candidate := treenode.GetBlockTreeInBox(blockID, encBoxID); candidate != nil {
-				blockTree = candidate
-				break
+func resolveAttributeViewItemDocument(blockID, primary string, itemTemplate *av.NewItemTemplate, createdAt time.Time, selections ...*DocumentSelection) (*NewItemTemplatePreview, error) {
+	return resolveAttributeViewItemDocumentInStorage(blockID, "", false, primary, itemTemplate, createdAt, selections...)
+}
+
+func resolveAttributeViewItemDocumentInStorage(blockID, storageBoxID string, allowCarrierless bool, primary string, itemTemplate *av.NewItemTemplate, createdAt time.Time, selections ...*DocumentSelection) (*NewItemTemplatePreview, error) {
+	var blockTree *treenode.BlockTree
+	if allowCarrierless {
+		blockTree = treenode.GetBlockTreeInExactBox(blockID, storageBoxID)
+	} else {
+		blockTree = treenode.GetBlockTree(blockID)
+		if blockTree == nil {
+			for _, encBoxID := range treenode.GetOpenedEncryptedBoxIDs() {
+				if candidate := treenode.GetBlockTreeInBox(blockID, encBoxID); candidate != nil {
+					blockTree = candidate
+					break
+				}
 			}
 		}
 	}
-	if nil == blockTree {
-		return nil, ErrBlockNotFound
-	}
-	primary = normalizeDocTitle(primary)
-
-	boxID, pathTemplate, inherited, err := resolveNewItemSaveConfig(blockTree.BoxID, itemTemplate.SaveLocation)
-	if nil != err {
-		return nil, err
-	}
-	renderedPath, err := RenderGoTemplateAtInBox(pathTemplate, createdAt, boxID)
-	if nil != err {
-		return nil, err
-	}
-	renderedPath = util.TrimSpaceInPath(strings.TrimSpace(renderedPath))
-	return newItemDocumentPreview(blockTree, boxID, renderedPath, primary, inherited), nil
-}
-
-func newItemDocumentPreview(blockTree *treenode.BlockTree, boxID, renderedPath, primary string, inherited bool) *NewItemTemplatePreview {
-	preview := &NewItemTemplatePreview{PrimaryKey: primary, BoxID: boxID}
-	if boxID != blockTree.BoxID && "" != renderedPath && !strings.HasPrefix(renderedPath, "/") {
-		renderedPath = "/" + renderedPath
-	}
-	if "" == primary {
-		primary = newItemTitleFromPath(renderedPath)
-		preview.PrimaryKey = primary
-	}
-	parentTemplate := newItemParentPathTemplate(renderedPath)
-	baseHPath := "/"
-	if boxID == blockTree.BoxID && !strings.HasPrefix(parentTemplate, "/") {
-		baseHPath = blockTree.HPath
-		preview.parentID = blockTree.RootID
-	}
-	parentHPath := path.Clean(path.Join(baseHPath, parentTemplate))
-	if "." == parentHPath || "" == parentHPath {
-		parentHPath = "/"
-	}
-	if !strings.HasPrefix(parentHPath, "/") {
-		parentHPath = "/" + parentHPath
-	}
-	if "" == primary {
-		preview.HPath = strings.TrimSuffix(parentHPath, "/") + "/"
-		if "/" == parentHPath {
-			preview.HPath = "/"
-		}
+	currentBoxID := storageBoxID
+	var contextID *string
+	if blockTree != nil {
+		currentBoxID, contextID = blockTree.BoxID, &blockTree.RootID
 	} else {
-		preview.HPath = path.Join(parentHPath, primary)
+		if !allowCarrierless || blockID != "" {
+			return nil, ErrBlockNotFound
+		}
+		if currentBoxID == "" && itemTemplate.SaveLocation != nil {
+			currentBoxID = itemTemplate.SaveLocation.BoxID
+		}
+		if currentBoxID == "" {
+			return nil, errors.New("new item document requires an explicit notebook without a database carrier")
+		}
+		if !IsSameCryptoBoundary(storageBoxID, currentBoxID) {
+			return nil, errors.New(Conf.Language(381))
+		}
 	}
-	if inherited && boxID != blockTree.BoxID {
-		preview.parentID = ""
+	primary = normalizeDocumentTitle(primary)
+
+	target, err := resolveNewItemDocumentTarget(currentBoxID, itemTemplate.SaveLocation)
+	if err != nil {
+		return nil, err
 	}
-	return preview
+	if treenode.DocumentMetadataState(target.Notebook) != "ready" {
+		if err = recoverDocumentMetadata(target.Notebook); err != nil {
+			return nil, err
+		}
+	}
+	request := DocumentPlanRequest{Notebook: currentBoxID, Purpose: "document", ContextID: contextID,
+		ID: ast.NewNodeID(), Now: createdAt, Target: target, SkipContentTemplateCheck: true}
+	request.SelectionRevision = treenode.DocumentRevision([]interface{}{1, blockID, itemTemplate, target})
+	if blockTree == nil {
+		request.SelectionRevision = treenode.DocumentRevision([]interface{}{1, blockID, currentBoxID, itemTemplate, target})
+	}
+	if len(selections) > 0 {
+		selections[0].apply(&request)
+	}
+	if primary != "" {
+		request.Title = &primary
+	}
+	plan, err := PlanDocumentCreation(request)
+	if err != nil {
+		var ambiguity *DocumentAncestorAmbiguity
+		if errors.As(err, &ambiguity) {
+			return &NewItemTemplatePreview{PrimaryKey: ambiguity.DocumentTitle, BoxID: target.Notebook, HPath: ambiguity.DisplayPath}, err
+		}
+		return nil, err
+	}
+	return &NewItemTemplatePreview{PrimaryKey: plan.Title, BoxID: plan.Notebook, HPath: plan.DisplayPath, plan: plan}, nil
 }
 
 func createAttributeViewItemDocument(preview *NewItemTemplatePreview, itemTemplate *av.NewItemTemplate) (docID string, tree *parse.Tree, err error) {
-	docID = ast.NewNodeID()
-	arg := map[string]any{"titleEmpty": "" == preview.PrimaryKey}
-	docID, err = CreateWithMarkdown("", preview.BoxID, preview.HPath, "", preview.parentID, docID, false, "", arg)
+	return createAttributeViewItemDocumentWithMarkdown(preview, itemTemplate, nil)
+}
+
+func createAttributeViewItemDocumentWithMarkdown(preview *NewItemTemplatePreview, itemTemplate *av.NewItemTemplate,
+	document *CreateAttributeViewItemMarkdown, recorders ...*relationCreatedDocuments) (docID string, tree *parse.Tree, err error) {
+	var recorder *relationCreatedDocuments
+	if len(recorders) > 0 {
+		recorder = recorders[0]
+	}
+	cleanup := func() error {
+		if recorder != nil {
+			return recorder.cleanup()
+		}
+		return removeCreatedNewItemDoc(docID)
+	}
+	if preview.plan == nil || len(preview.plan.Steps) == 0 {
+		return "", nil, errors.New("attribute view document creation plan is missing")
+	}
+	step := &preview.plan.Steps[len(preview.plan.Steps)-1]
+	// 数据库正文模板由下方既有流程处理，避免同时应用普通新建模板。
+	step.DocCreateTemplatePath = ""
+	if nil != document {
+		step.Tags, step.Markdown, step.ClippingHref = document.Tags, document.Markdown, document.ClippingHref
+		step.WithMath = document.WithMath
+		step.ListDocTree = document.ListDocTree && !itemTemplate.HideInFileTree
+	}
+	if recorder != nil {
+		for index := range preview.plan.Steps {
+			preview.plan.Steps[index].captureCreatedSource = recorder.capture
+		}
+	}
+	_, err = executeDocumentCreationPlan(preview.plan, false)
 	if nil != err {
+		if recorder != nil {
+			err = newItemCreationError(err, cleanup())
+		}
 		return
 	}
-	if "" != itemTemplate.ContentTemplatePath {
-		if err = applyNewItemContentTemplate(itemTemplate.ContentTemplatePath, docID); nil != err {
-			err = newItemCreationError(err, removeCreatedNewItemDoc(docID))
+	docID = step.ID
+	if nil == document && "" != itemTemplate.ContentTemplatePath {
+		if recorder != nil {
+			sql.FlushQueue()
+			err = applyDocContentTemplateWithRecorder(itemTemplate.ContentTemplatePath, docID, nil, recorder)
+			sql.FlushQueue()
+		} else {
+			err = applyNewItemContentTemplate(itemTemplate.ContentTemplatePath, docID)
+		}
+		if nil != err {
+			err = newItemCreationError(err, cleanup())
 			return
 		}
 	}
-	tree, err = LoadTreeByBlockID(docID)
+	if recorder != nil {
+		tree, err = LoadTreeByBlockIDInExactBox(docID, preview.BoxID)
+	} else {
+		tree, err = LoadTreeByBlockID(docID)
+	}
 	if nil != err {
-		err = newItemCreationError(err, removeCreatedNewItemDoc(docID))
+		err = newItemCreationError(err, cleanup())
 		return
 	}
 	if applyNewItemDocumentAttrs(tree, itemTemplate) {
-		if err = indexWriteTreeUpsertQueue(tree); nil != err {
-			err = newItemCreationError(err, removeCreatedNewItemDoc(docID))
+		write := func() error { return indexWriteTreeUpsertQueue(tree) }
+		if recorder != nil {
+			err = recorder.recordOwnWrite(tree, write)
+		} else {
+			err = write()
+		}
+		if nil != err {
+			err = newItemCreationError(err, cleanup())
 			return
 		}
 		FlushTxQueue()
@@ -460,25 +702,28 @@ func applyNewItemDocumentAttrs(tree *parse.Tree, itemTemplate *av.NewItemTemplat
 	return
 }
 
-func resolveNewItemSaveConfig(currentBoxID string, location *av.NewItemSaveLocation) (boxID, pathTemplate string, inherited bool, err error) {
-	if nil != location {
-		boxID = location.BoxID
-		if "" == boxID {
+func resolveNewItemDocumentTarget(currentBoxID string, location *av.NewItemSaveLocation) (*EffectiveDocumentTarget, error) {
+	var target *EffectiveDocumentTarget
+	var err error
+	if location == nil {
+		target, err = GetDocCreateTarget(currentBoxID, "document")
+	} else {
+		boxID := location.BoxID
+		if boxID == "" {
 			boxID = currentBoxID
 		}
-		if nil == Conf.Box(boxID) {
-			return "", "", false, ErrBoxNotFound
+		if Conf.Box(boxID) == nil {
+			return nil, ErrBoxNotFound
 		}
-		if err = validateNewItemSaveBox(currentBoxID, boxID); nil != err {
-			return "", "", false, err
-		}
-		return boxID, location.PathTemplate, false, nil
+		target = &EffectiveDocumentTarget{Notebook: boxID, Path: location.PathTemplate}
 	}
-
-	inherited = true
-	boxID, pathTemplate = ResolveDocCreateSaveLocation(currentBoxID)
-	err = validateNewItemSaveBox(currentBoxID, boxID)
-	return
+	if err != nil {
+		return nil, err
+	}
+	if err = validateNewItemSaveBox(currentBoxID, target.Notebook); err != nil {
+		return nil, err
+	}
+	return target, nil
 }
 
 func validateNewItemSaveBox(currentBoxID, targetBoxID string) error {
@@ -488,33 +733,8 @@ func validateNewItemSaveBox(currentBoxID, targetBoxID string) error {
 	return nil
 }
 
-func newItemParentPathTemplate(renderedPath string) string {
-	if "" == renderedPath || strings.HasSuffix(renderedPath, "/") {
-		return renderedPath
-	}
-	isAbsolute := strings.HasPrefix(renderedPath, "/")
-	segments := strings.FieldsFunc(renderedPath, func(r rune) bool { return '/' == r })
-	if 1 >= len(segments) {
-		if isAbsolute {
-			return "/"
-		}
-		return ""
-	}
-	parent := strings.Join(segments[:len(segments)-1], "/")
-	if isAbsolute {
-		parent = "/" + parent
-	}
-	return parent
-}
-
-func newItemTitleFromPath(renderedPath string) string {
-	if "" == renderedPath || strings.HasSuffix(renderedPath, "/") {
-		return ""
-	}
-	return normalizeDocTitle(path.Base(renderedPath))
-}
-
-func resolveNewItemFieldValues(attrView *av.AttributeView, itemTemplate *av.NewItemTemplate, createdAt time.Time) (ret map[string]*av.Value, err error) {
+func resolveNewItemFieldValues(attrView *av.AttributeView, itemTemplate *av.NewItemTemplate, createdAt time.Time,
+	carrierBoxID string) (ret map[string]*av.Value, err error) {
 	ret = map[string]*av.Value{}
 	for keyID, fieldValue := range itemTemplate.FieldValues {
 		key, getErr := attrView.GetKey(keyID)
@@ -538,7 +758,7 @@ func resolveNewItemFieldValues(attrView *av.AttributeView, itemTemplate *av.NewI
 			}
 			value = fieldValue.Value.Clone()
 			if av.KeyTypeRelation == key.Type {
-				filterNewItemTemplateRelationValue(attrView, key, value)
+				filterNewItemTemplateRelationValue(attrView, key, value, carrierBoxID)
 				if nil == value.Relation || 0 == len(value.Relation.BlockIDs) {
 					continue
 				}
@@ -551,13 +771,17 @@ func resolveNewItemFieldValues(attrView *av.AttributeView, itemTemplate *av.NewI
 	return
 }
 
-func filterNewItemTemplateRelationValue(attrView *av.AttributeView, key *av.Key, value *av.Value) {
+func filterNewItemTemplateRelationValue(attrView *av.AttributeView, key *av.Key, value *av.Value,
+	carrierBoxID string) {
 	if nil == key.Relation || nil == value.Relation {
 		return
 	}
 	targetAv := attrView
 	if key.Relation.AvID != attrView.ID {
-		targetAv, _ = av.ParseAttributeView(key.Relation.AvID)
+		contextFilter := &av.AttributeViewContextFilter{
+			Spec: av.AttributeViewContextFilterSpec, KeyID: key.ID,
+		}
+		targetAv, _ = resolveAttributeViewContextFilterTarget(attrView, contextFilter, carrierBoxID)
 	}
 	if nil == targetAv {
 		value.Relation.BlockIDs = nil
@@ -577,7 +801,8 @@ func filterNewItemTemplateRelationValue(attrView *av.AttributeView, key *av.Key,
 	value.Relation.BlockIDs = blockIDs
 }
 
-func buildNewItemFieldValueOperations(attrView *av.AttributeView, fieldValues map[string]*av.Value, itemID string) (ret []*Operation) {
+func buildNewItemFieldValueOperations(attrView *av.AttributeView, fieldValues map[string]*av.Value, itemID,
+	blockID string) (ret []*Operation) {
 	for _, keyValues := range attrView.KeyValues {
 		if nil == keyValues || nil == keyValues.Key {
 			continue
@@ -587,7 +812,10 @@ func buildNewItemFieldValueOperations(attrView *av.AttributeView, fieldValues ma
 		if nil == value {
 			continue
 		}
-		ret = append(ret, &Operation{Action: "updateAttrViewCell", ID: ast.NewNodeID(), AvID: attrView.ID, KeyID: keyID, RowID: itemID, Data: value})
+		ret = append(ret, &Operation{
+			Action: "updateAttrViewCell", ID: ast.NewNodeID(), AvID: attrView.ID, BlockID: blockID,
+			KeyID: keyID, RowID: itemID, Data: value,
+		})
 	}
 	return
 }

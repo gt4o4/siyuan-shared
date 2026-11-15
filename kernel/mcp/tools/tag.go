@@ -1,23 +1,12 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package tools
 
 import (
 	"fmt"
+	"html"
 	"strings"
 
 	"github.com/siyuan-note/siyuan/kernel/model"
@@ -25,7 +14,13 @@ import (
 
 var TagTool = &Tool{
 	Name:        "tag",
-	Description: "Tag management. Actions: list(keyword?), rename(old, new), remove(label).",
+	Description: "Tag management. Actions: list(keyword?), rename(old, new), remove(label). rename/remove affect matching document tags and inline tags across the workspace, not a selected document. For selected documents, read and update each document's tags attribute with attr.get/set; for inline body tags, use block tools.",
+	EffectScope: EffectScopeLocal,
+	ActionEffects: map[string]ToolEffects{
+		"list":   {LocalRead: true},
+		"rename": {LocalWrite: true},
+		"remove": {LocalWrite: true},
+	},
 	InputSchema: ToolSchema{
 		Type: "object",
 		Properties: map[string]Property{
@@ -69,11 +64,17 @@ func tagList(args map[string]any) (CallToolResult, error) {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Tags (%d):\n\n", len(tags)))
+	fmt.Fprintf(&sb, "Tags (%d):\n\n", len(tags))
 	for _, t := range tags {
-		sb.WriteString(fmt.Sprintf("- #%s\n", t))
+		sb.WriteString("- ")
+		sb.WriteString(formatTagTextMark(t))
+		sb.WriteByte('\n')
 	}
 	return CallToolResult{Content: []ContentItem{{Type: "text", Text: sb.String()}}}, nil
+}
+
+func formatTagTextMark(label string) string {
+	return `<span data-type="tag">` + html.EscapeString(label) + `</span>`
 }
 
 func tagRename(args map[string]any) (CallToolResult, error) {
@@ -88,7 +89,10 @@ func tagRename(args map[string]any) (CallToolResult, error) {
 	}
 	model.ReloadTag()
 
-	return CallToolResult{Content: []ContentItem{{Type: "text", Text: "tag renamed: #" + oldLabel + " -> #" + newLabel}}}, nil
+	return CallToolResult{Content: []ContentItem{{
+		Type: "text",
+		Text: "tag renamed: " + formatTagTextMark(oldLabel) + " -> " + formatTagTextMark(newLabel),
+	}}}, nil
 }
 
 func tagRemove(args map[string]any) (CallToolResult, error) {
@@ -102,5 +106,5 @@ func tagRemove(args map[string]any) (CallToolResult, error) {
 	}
 	model.ReloadTag()
 
-	return CallToolResult{Content: []ContentItem{{Type: "text", Text: "tag removed: #" + label}}}, nil
+	return CallToolResult{Content: []ContentItem{{Type: "text", Text: "tag removed: " + formatTagTextMark(label)}}}, nil
 }

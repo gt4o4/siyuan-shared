@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package conf
 
@@ -25,7 +13,7 @@ type Variable struct {
 }
 
 // Variables 是全局变量库，与 Secrets 对应：Secrets 加密存储敏感数据，Variables 明文存储非敏感数据。
-// 两者以 {{vars.NAME}} 形式被智能体工具、MCP 服务等引用。
+// 两者以 {{vars.NAME}} 形式被智能体工具、MCP 服务请求头和 stdio 环境变量等引用。
 type Variables struct {
 	Items []*Variable `json:"items"`
 }

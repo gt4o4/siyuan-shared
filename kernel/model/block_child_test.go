@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
@@ -69,5 +57,48 @@ func TestHeadingChildBlocksSkipSuperBlockCloseMarker(t *testing.T) {
 	ids := headingChildrenIDs(heading)
 	if !slices.Equal(ids, []string{paragraphAID, paragraphBID}) {
 		t.Fatalf("unexpected heading child IDs: [%v]", ids)
+	}
+}
+
+func TestGetOrderedListContinueStartFromTree(t *testing.T) {
+	newList := func(id string, numbers ...int) *ast.Node {
+		list := &ast.Node{Type: ast.NodeList, ID: id, ListData: &ast.ListData{Typ: 1}}
+		for _, number := range numbers {
+			list.AppendChild(&ast.Node{Type: ast.NodeListItem, ID: id + "-item", ListData: &ast.ListData{Typ: 1, Num: number}})
+		}
+		return list
+	}
+
+	root := &ast.Node{Type: ast.NodeDocument, ID: "root"}
+	previousList := newList("previous", 6, 7)
+	root.AppendChild(previousList)
+	root.AppendChild(&ast.Node{Type: ast.NodeList, ID: "unordered", ListData: &ast.ListData{Typ: 0}})
+	root.AppendChild(&ast.Node{Type: ast.NodeParagraph, ID: "paragraph"})
+	currentList := newList("current", 1, 2, 3)
+	root.AppendChild(currentList)
+	tree := &parse.Tree{Root: root, ID: root.ID}
+
+	start, found := getOrderedListContinueStartFromTree(currentList.ID, tree)
+	if !found || 8 != start {
+		t.Fatalf("unexpected continue start: [%d, %v]", start, found)
+	}
+
+	innerCurrent := newList("inner-current", 1)
+	previousList.FirstChild.AppendChild(innerCurrent)
+	if _, found = getOrderedListContinueStartFromTree(innerCurrent.ID, tree); found {
+		t.Fatal("expected list numbering not to continue across parent boundaries")
+	}
+
+	if _, found = getOrderedListContinueStartFromTree(previousList.FirstChild.ID, tree); found {
+		t.Fatal("expected a list item to be rejected")
+	}
+
+	overflowRoot := &ast.Node{Type: ast.NodeDocument, ID: "overflow-root"}
+	overflowRoot.AppendChild(newList("overflow-previous", maxOrderedListNumber))
+	overflowCurrent := newList("overflow-current", 1)
+	overflowRoot.AppendChild(overflowCurrent)
+	overflowTree := &parse.Tree{Root: overflowRoot, ID: overflowRoot.ID}
+	if _, found = getOrderedListContinueStartFromTree(overflowCurrent.ID, overflowTree); found {
+		t.Fatal("expected overflowing list numbering to be unavailable")
 	}
 }

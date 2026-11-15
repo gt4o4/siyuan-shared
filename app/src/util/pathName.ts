@@ -1,11 +1,13 @@
+import {toggleMenu} from "../menus/menuToggle";
 import * as path from "path";
-import {fetchPost} from "./fetch";
-import {Dialog} from "../dialog";
-import {escapeAriaLabel, escapeHtml} from "./escape";
+import {fetchPost, fetchSyncPost} from "./fetch";
+import {MobileDialog as Dialog} from "../dialog/mobileDialog";
+import {escapeAriaLabel, escapeHtml, escapeHtmlTextAndAttr} from "./escape";
+import {genFileTreeDocAriaLabel} from "./fileTreeTooltip";
 import {isMobile} from "./functions";
-import {focusByRange} from "../protyle/util/selection";
-import {unicode2Emoji} from "../emoji";
+import {focusByRange} from "../protyle/util/selectionOffsets";
 import {Constants} from "../constants";
+import {getFileTreeDefaultIconAttr, getFileTreeIconHTML} from "../emoji/fileTreeIcon";
 /// #if !BROWSER
 import {ipcRenderer} from "electron";
 /// #endif
@@ -18,8 +20,15 @@ import {Menu} from "../plugin/Menu";
 import {hasClosestByClassName} from "../protyle/util/hasClosest";
 import {mergePathSegments} from "./mergePathSegments";
 import {expandFileTree} from "../layout/dock/fileTreeAnimation";
+import {getHostCapabilities} from "./hostCapabilities";
+import {highlightSearchText} from "./searchHighlight";
+import {addClearButton} from "./addClearButton";
+import {normalizeSiYuanUri} from "./normalizeSiYuanUri";
 
 export const useShell = (cmd: "showItemInFolder" | "openPath", filePath: string) => {
+    if (!getHostCapabilities().localFileSystem) {
+        return;
+    }
     /// #if !BROWSER
     ipcRenderer.send(Constants.SIYUAN_CMD, {
         cmd,
@@ -55,10 +64,11 @@ export const parseSiYuanUriInfo = (uri: URL | string | null | undefined): ISiYua
     try {
         if (uri == null) return null;
 
-        const uriObj = uri instanceof URL ? uri : new URL(uri);
-        if (!isSiYuanUriProtocol(uriObj)) {
+        const parsedURI = uri instanceof URL ? uri : new URL(uri);
+        if (!isSiYuanUriProtocol(parsedURI)) {
             return null;
         }
+        const uriObj = normalizeSiYuanUri(parsedURI);
         if (uriObj.hostname === "blocks" && /^\/\d{14}-\w{7}/.test(uriObj.pathname)) {
             const avItemID = uriObj.searchParams.get("avItemID") || undefined;
             const avViewID = uriObj.searchParams.get("avViewID") || undefined;
@@ -74,6 +84,7 @@ export const parseSiYuanUriInfo = (uri: URL | string | null | undefined): ISiYua
                 avItemID,
                 avViewID,
                 avGroupID,
+                avStandalone: uriObj.searchParams.get("avStandalone") === "1",
             };
         }
         return null;
@@ -119,6 +130,10 @@ export const redirectToCheckAuth = async (to: string = window.location.href) => 
     const url = new URL(window.location.origin);
     url.pathname = "/check-auth";
     url.searchParams.set("to", to);
+    if (getHostCapabilities().remoteKernel) {
+        url.searchParams.set("lang", window.siyuan.config.appearance.lang);
+        url.searchParams.set("remote", "1");
+    }
     window.location.href = url.href;
 };
 
@@ -147,15 +162,20 @@ export const getDocDisplayName = (name: string, titleEmpty?: boolean, escape?: b
     if (titleEmpty) {
         return window.siyuan.languages["_kernel"][16];
     }
-    const displayName = getDisplayName(name, true, true);
+    // 文档接口返回原始标题，斜杠和 .sy 都是标题内容，不能按文件路径处理。
     if (escape) {
-        return Lute.EscapeHTMLStr(displayName);
+        return escapeHtmlTextAndAttr(name);
     }
-    return displayName;
+    return name;
 };
 
 export const getAssetPathWithoutQuery = (assetPath: string) => {
-    return assetPath.split("?", 1)[0];
+    return assetPath.split(/[?#]/, 1)[0];
+};
+
+// 只去掉片段，保留查询：内核依赖 box 等查询参数定位资源，但不处理片段。
+export const getAssetPathWithoutFragment = (assetPath: string) => {
+    return assetPath.split("#", 1)[0];
 };
 
 export const getAssetExtension = (assetPath: string) => {
@@ -164,7 +184,7 @@ export const getAssetExtension = (assetPath: string) => {
 
 export const getAssetName = (assetPath: string) => {
     const pathWithoutQuery = getAssetPathWithoutQuery(assetPath);
-    return pathPosix().basename(pathWithoutQuery, getAssetExtension(pathWithoutQuery)).replace(/-\d{14}-\w{7}/, "");
+    return pathPosix().basename(pathWithoutQuery, getAssetExtension(pathWithoutQuery)).replace(/-\d{14}-\w{7}$/, "");
 };
 
 export const isLocalPath = (link: string) => {
@@ -231,21 +251,25 @@ export const isMoveTargetAllowed = (sourceNotebookIds: string[] = [], targetNote
 };
 
 export const moveToPath = (fromPaths: string[], toNotebook: string, toPath: string) => {
-    fetchPost("/api/filetree/moveDocs", {
+    return fetchSyncPost("/api/filetree/moveDocs", {
         toNotebook,
         fromPaths,
         toPath,
-    });
+    }).then(response => response.code === 0);
 };
 
 export const movePathTo = (options: {
-    cb: (toPath: string[], toNotebook: string[]) => void,
+    cb: (toPath: string[], toNotebook: string[]) => void | boolean | Promise<void | boolean>,
+    awaitConfirm?: boolean,
+    validate?: (toPath: string[], toNotebook: string[]) => boolean,
     paths?: string[],
     range?: Range,
+    restoreFocus?: () => void,
     title?: string,
     flashcard: boolean
     rootIDs?: string[],
     sourceNotebookIds?: string[],
+    multiple?: boolean,
 }) => {
     const exitDialog = window.siyuan.dialogs.find((item) => {
         if (item.element.querySelector("#foldList")) {
@@ -266,7 +290,7 @@ export const movePathTo = (options: {
         <svg class="svg--mid"><use xlink:href="#iconSearch"></use></svg>
         <svg class="svg--smaller"><use xlink:href="#iconDown"></use></svg>
     </span>
-    <input class="b3-text-field fn__block" style="padding-left: 42px;" value="" placeholder="${window.siyuan.languages.searchPlaceholder}">
+    <input spellcheck="false" class="b3-text-field fn__block" style="padding-left: 42px;" value="" placeholder="${window.siyuan.languages.searchPlaceholder}">
 </div>
 <ul id="foldList" class="fn__flex-1 fn__none b3-list b3-list--background${isMobile() ? " b3-list--mobile" : ""}" style="overflow: auto;position: relative"></ul>
 <div id="foldTree" class="fn__flex-1${isMobile() ? " b3-list--mobile" : ""}" style="overflow: auto;position: relative"></div>
@@ -278,7 +302,9 @@ export const movePathTo = (options: {
         width: isMobile() ? "92vw" : "50vw",
         height: isMobile() ? "80vh" : "70vh",
         destroyCallback() {
-            if (options.range) {
+            if (options.restoreFocus) {
+                options.restoreFocus();
+            } else if (options.range) {
                 focusByRange(options.range);
             }
         }
@@ -292,6 +318,56 @@ export const movePathTo = (options: {
     }
     const searchListElement = dialog.element.querySelector("#foldList");
     const searchTreeElement = dialog.element.querySelector("#foldTree");
+    const confirmElement = dialog.element.querySelector<HTMLButtonElement>(".b3-button--text");
+    const selected = new Map<string, {path: string, notebook: string}>();
+    const selectionKey = (row: HTMLElement) => `${row.dataset.box}:${row.dataset.path}`;
+    const renderSelection = (root: Element) => {
+        if (!options.multiple) { return; }
+        root.querySelectorAll<HTMLElement>(".b3-list-item").forEach(row => {
+            let checkbox = row.querySelector<HTMLInputElement>("[data-path-select]");
+            if (!checkbox) {
+                checkbox = document.createElement("input");
+                checkbox.type = "checkbox";
+                checkbox.className = "b3-switch fn__flex-center";
+                checkbox.setAttribute("data-path-select", "true");
+                checkbox.setAttribute("aria-label", row.querySelector(".b3-list-item__text, .b3-list-item__showall").textContent);
+                row.append(checkbox);
+                checkbox.addEventListener("click", event => event.stopPropagation());
+                checkbox.addEventListener("change", () => {
+                    const key = selectionKey(row);
+                    if (checkbox.checked) {
+                        selected.set(key, {path: row.dataset.path, notebook: row.dataset.box});
+                    } else {
+                        selected.delete(key);
+                    }
+                    renderSelection(searchTreeElement);
+                    renderSelection(searchListElement);
+                });
+            }
+            checkbox.checked = selected.has(selectionKey(row));
+        });
+        confirmElement.textContent = `${window.siyuan.languages.confirm} (${selected.size})`;
+        confirmElement.disabled = selected.size === 0;
+    };
+    const expand = (row: HTMLElement) => getLeaf(row, options.flashcard, renderSelection);
+    const submit = () => {
+        const currentPanelElement = searchListElement.classList.contains("fn__none") ? searchTreeElement : searchListElement;
+        const items = options.multiple ? Array.from(selected.values()) :
+            Array.from(currentPanelElement.querySelectorAll<HTMLElement>(".b3-list-item--focus"))
+                .map(row => ({path: row.dataset.path, notebook: row.dataset.box}));
+        if (!items.length) { return; }
+        const paths = items.map(item => item.path);
+        const notebooks = items.map(item => item.notebook);
+        if (!options.validate || options.validate(paths, notebooks)) {
+            if (options.awaitConfirm) {
+                void dialog.runPending(async () => await options.cb(paths, notebooks) === true);
+                return;
+            }
+            options.cb(paths, notebooks);
+            dialog.destroy();
+        }
+    };
+    renderSelection(searchTreeElement);
     setNoteBook((notebooks) => {
         let html = "";
         notebooks.forEach((item) => {
@@ -303,17 +379,18 @@ export const movePathTo = (options: {
 <span class="counter counter--right b3-tooltips b3-tooltips__w" aria-label="${window.siyuan.languages.flashcardCard}">${item.flashcardCount}</span>`;
                 }
                 html += `<ul class="b3-list b3-list--background">
-<li class="b3-list-item${html === "" ? " b3-list-item--focus" : ""}" data-path="/" data-box="${item.id}">
+<li class="b3-list-item${html === "" ? " b3-list-item--focus" : ""}" data-path="/" data-box="${item.id}"${getFileTreeDefaultIconAttr(item.icon, "notebook")}>
     <span class="b3-list-item__toggle b3-list-item__toggle--hl">
         <svg class="b3-list-item__arrow"><use xlink:href="#iconRight"></use></svg>
     </span>
-    ${unicode2Emoji(item.icon || window.siyuan.storage[Constants.LOCAL_IMAGES].note, "b3-list-item__graphic", true)}
+    ${getFileTreeIconHTML(item.icon, "notebook", "b3-list-item__graphic", true)}
     <span class="b3-list-item__text">${escapeHtml(item.name)}</span>
     ${countHTML}
 </li></ul>`;
             }
         });
         searchTreeElement.innerHTML = html;
+        renderSelection(searchTreeElement);
     }, options.flashcard);
 
     const inputElement = dialog.element.querySelector(".b3-text-field") as HTMLInputElement;
@@ -333,113 +410,58 @@ export const movePathTo = (options: {
         searchTreeElement.classList.add("fn__none");
         searchListElement.classList.remove("fn__none");
         searchListElement.scrollTo(0, 0);
+        const keyword = inputElement.value;
+        const caseSensitive = window.siyuan.config.search.caseSensitive;
         fetchPost("/api/filetree/searchDocs", {
-            k: inputElement.value,
+            k: keyword,
             flashcard: options.flashcard,
             excludeIDs: options.rootIDs,
         }, (data) => {
+            if (inputElement.value !== keyword) {
+                return;
+            }
+            const highlight = (text: string) => highlightSearchText(text, keyword, caseSensitive);
             let fileHTML = "";
             data.data.forEach((item: {
                 boxIcon: string,
                 box: string,
                 hPath: string,
                 path: string,
+                name?: string,
+                alias?: string,
                 newFlashcardCount: string,
                 dueFlashcardCount: string,
                 flashcardCount: string
             }) => {
+                if (!isMoveTargetAllowed(options.sourceNotebookIds, item.box)) {
+                    return;
+                }
                 let countHTML = "";
                 if (options.flashcard) {
-                    countHTML = `<span class="fn__flex-1"></span>
-<span class="counter counter--right b3-tooltips b3-tooltips__w" aria-label="${window.siyuan.languages.flashcardNewCard}">${item.newFlashcardCount}</span>
+                    countHTML = `<span class="counter counter--right b3-tooltips b3-tooltips__w" aria-label="${window.siyuan.languages.flashcardNewCard}">${item.newFlashcardCount}</span>
 <span class="counter counter--right b3-tooltips b3-tooltips__w" aria-label="${window.siyuan.languages.flashcardDueCard}">${item.dueFlashcardCount}</span>
 <span class="counter counter--right b3-tooltips b3-tooltips__w" aria-label="${window.siyuan.languages.flashcardCard}">${item.flashcardCount}</span>`;
                 }
-                fileHTML += `<li class="b3-list-item${fileHTML === "" ? " b3-list-item--focus" : ""}" data-path="${item.path}" data-box="${item.box}">
-    ${unicode2Emoji(item.boxIcon || window.siyuan.storage[Constants.LOCAL_IMAGES].note, "b3-list-item__graphic", true)}
-    <span class="b3-list-item__showall" style="padding: 4px 0">${escapeHtml(item.hPath)}</span>
+                let attributesHTML = "";
+                if (item.name) {
+                    attributesHTML += `<span class="b3-list-item__meta fn__flex" style="max-width: 30%" aria-label="${window.siyuan.languages.name} ${escapeAriaLabel(item.name)}"><svg class="b3-list-item__hinticon"><use xlink:href="#iconN"></use></svg><span class="b3-list-item__hinttext">${highlight(item.name)}</span></span>`;
+                }
+                if (item.alias) {
+                    attributesHTML += `<span class="b3-list-item__meta fn__flex" style="max-width: 30%" aria-label="${window.siyuan.languages.alias} ${escapeAriaLabel(item.alias)}"><svg class="b3-list-item__hinticon"><use xlink:href="#iconA"></use></svg><span class="b3-list-item__hinttext">${highlight(item.alias)}</span></span>`;
+                }
+                fileHTML += `<li class="b3-list-item${fileHTML === "" ? " b3-list-item--focus" : ""}" data-path="${item.path}" data-box="${item.box}"${getFileTreeDefaultIconAttr(item.boxIcon, "notebook")}>
+    ${getFileTreeIconHTML(item.boxIcon, "notebook", "b3-list-item__graphic", true)}
+    <span class="b3-list-item__showall fn__flex-1" style="padding: 4px 0; min-width: 0">${highlight(item.hPath)}</span>
+    ${attributesHTML}
     ${countHTML}
 </li>`;
             });
             searchListElement.innerHTML = fileHTML;
+            renderSelection(searchListElement);
         });
     };
 
-    const toggleMovePathHistory = () => {
-        const keys = window.siyuan.storage[Constants.LOCAL_MOVE_PATH].keys;
-        if (!keys || keys.length === 0 || (keys.length === 1 && keys[0] === inputElement.value)) {
-            return;
-        }
-        const menu = new Menu(Constants.MENU_MOVE_PATH_HISTORY);
-        if (menu.isOpen) {
-            return;
-        }
-        menu.element.classList.add("b3-menu--list");
-        menu.addItem({
-            iconHTML: "",
-            label: window.siyuan.languages.clearHistory,
-            click() {
-                window.siyuan.storage[Constants.LOCAL_MOVE_PATH].keys = [];
-                setStorageVal(Constants.LOCAL_MOVE_PATH, window.siyuan.storage[Constants.LOCAL_MOVE_PATH]);
-            }
-        });
-        const separatorElement = menu.addSeparator(1);
-        let current = true;
-        keys.forEach((s: string) => {
-            if (s !== inputElement.value && s) {
-                const menuItem = menu.addItem({
-                    iconHTML: "",
-                    label: escapeHtml(s),
-                    action: "iconCloseRound",
-                    bind(element) {
-                        element.addEventListener("click", (itemEvent) => {
-                            if (hasClosestByClassName(itemEvent.target as Element, "b3-menu__action")) {
-                                keys.find((item: string, index: number) => {
-                                    if (item === s) {
-                                        keys.splice(index, 1);
-                                        return true;
-                                    }
-                                });
-                                window.siyuan.storage[Constants.LOCAL_MOVE_PATH].keys = keys;
-                                setStorageVal(Constants.LOCAL_MOVE_PATH, window.siyuan.storage[Constants.LOCAL_MOVE_PATH]);
-                                if (element.previousElementSibling?.classList.contains("b3-menu__separator") && !element.nextElementSibling) {
-                                    window.siyuan.menus.menu.remove();
-                                } else {
-                                    element.remove();
-                                }
-                            } else {
-                                inputElement.value = element.textContent;
-                                inputEvent();
-                                window.siyuan.menus.menu.remove();
-                            }
-                            itemEvent.preventDefault();
-                            itemEvent.stopPropagation();
-                        });
-                    }
-                });
-                if (current) {
-                    menuItem.classList.add("b3-menu__item--current");
-                }
-                current = false;
-            }
-        });
-        if (current) {
-            separatorElement.remove();
-        }
-        const rect = inputElement.getBoundingClientRect();
-        menu.open({
-            x: rect.left,
-            y: rect.bottom
-        });
-    };
-    inputEvent();
-    inputElement.addEventListener("compositionend", (event: InputEvent) => {
-        inputEvent(event);
-    });
-    inputElement.addEventListener("input", (event: InputEvent) => {
-        inputEvent(event);
-    });
-    inputElement.addEventListener("blur", () => {
+    const saveMovePathHistory = () => {
         if (inputElement.value) {
             let list: string[] = window.siyuan.storage[Constants.LOCAL_MOVE_PATH].keys;
             list.splice(0, 0, inputElement.value);
@@ -451,8 +473,100 @@ export const movePathTo = (options: {
         }
         window.siyuan.storage[Constants.LOCAL_MOVE_PATH].k = inputElement.value;
         setStorageVal(Constants.LOCAL_MOVE_PATH, window.siyuan.storage[Constants.LOCAL_MOVE_PATH]);
+    };
+    const toggleMovePathHistory = () => {
+        toggleMenu({
+            target: inputElement.previousElementSibling,
+            build: (_menu, session) => {
+                const keys = window.siyuan.storage[Constants.LOCAL_MOVE_PATH].keys;
+                if (!keys || keys.length === 0) {
+                    return;
+                }
+                const menu = new Menu(Constants.MENU_MOVE_PATH_HISTORY);
+                if (menu.isOpen) {
+                    return;
+                }
+                menu.element.classList.add("b3-menu--list");
+                menu.addItem({
+                    iconHTML: "",
+                    label: window.siyuan.languages.clearHistory,
+                    click() {
+                        window.siyuan.storage[Constants.LOCAL_MOVE_PATH].keys = [];
+                        setStorageVal(Constants.LOCAL_MOVE_PATH, window.siyuan.storage[Constants.LOCAL_MOVE_PATH]);
+                    }
+                });
+                const separatorElement = menu.addSeparator(1);
+                let current = true;
+                keys.forEach((s: string) => {
+                    if (s) {
+                        const menuItem = menu.addItem({
+                            iconHTML: "",
+                            label: escapeHtml(s),
+                            action: "iconCloseRound",
+                            bind(element) {
+                                element.addEventListener("click", (itemEvent) => {
+                                    if (hasClosestByClassName(itemEvent.target as Element, "b3-menu__action")) {
+                                        keys.find((item: string, index: number) => {
+                                            if (item === s) {
+                                                keys.splice(index, 1);
+                                                return true;
+                                            }
+                                        });
+                                        window.siyuan.storage[Constants.LOCAL_MOVE_PATH].keys = keys;
+                                        setStorageVal(Constants.LOCAL_MOVE_PATH, window.siyuan.storage[Constants.LOCAL_MOVE_PATH]);
+                                        if (element.previousElementSibling?.classList.contains("b3-menu__separator") && !element.nextElementSibling) {
+                                            window.siyuan.menus.menu.remove();
+                                        } else {
+                                            element.remove();
+                                        }
+                                    } else {
+                                        inputElement.value = s;
+                                        inputElement.dispatchEvent(new Event("change"));
+                                        saveMovePathHistory();
+                                        inputEvent();
+                                        window.siyuan.menus.menu.remove();
+                                    }
+                                    itemEvent.preventDefault();
+                                    itemEvent.stopPropagation();
+                                });
+                            }
+                        });
+                        if (current) {
+                            menuItem.classList.add("b3-menu__item--current");
+                        }
+                        current = false;
+                    }
+                });
+                if (current) {
+                    separatorElement.remove();
+                }
+                const rect = inputElement.getBoundingClientRect();
+                session.show(() => menu.open({
+                    x: rect.left,
+                    y: rect.bottom,
+                    h: rect.height
+                }));
+
+            },
+        });
+    };
+    inputEvent();
+    addClearButton({
+        inputElement,
+        right: 8,
+        height: inputElement.clientHeight,
+        clearCB() {
+            saveMovePathHistory();
+            inputEvent();
+        }
     });
-    const lineHeight = 28;
+    inputElement.addEventListener("compositionend", (event: InputEvent) => {
+        inputEvent(event);
+    });
+    inputElement.addEventListener("input", (event: InputEvent) => {
+        inputEvent(event);
+    });
+    inputElement.addEventListener("blur", saveMovePathHistory);
     inputElement.addEventListener("keydown", (event: KeyboardEvent) => {
         if (event.isComposing) {
             return;
@@ -463,6 +577,11 @@ export const movePathTo = (options: {
             return;
         }
         if (window.siyuan.menus.menu.element.getAttribute("data-name") === Constants.MENU_MOVE_PATH_HISTORY) {
+            return;
+        }
+        if (event.key === "Enter") {
+            submit();
+            event.preventDefault();
             return;
         }
         const currentPanelElement = searchListElement.classList.contains("fn__none") ? searchTreeElement : searchListElement;
@@ -481,7 +600,7 @@ export const movePathTo = (options: {
         if (searchListElement.classList.contains("fn__none")) {
             if ((event.key === "ArrowRight" && !currentItemElement.querySelector(".b3-list-item__arrow--open") && !currentItemElement.querySelector(".b3-list-item__toggle").classList.contains("fn__hidden")) ||
                 (event.key === "ArrowLeft" && currentItemElement.querySelector(".b3-list-item__arrow--open"))) {
-                getLeaf(currentItemElement, options.flashcard);
+                expand(currentItemElement);
                 event.preventDefault();
                 return;
             }
@@ -579,9 +698,9 @@ export const movePathTo = (options: {
                     currentItemElement.nextElementSibling.classList.add("b3-list-item--focus");
                 }
                 currentItemElement = currentPanelElement.querySelector(".b3-list-item--focus");
-                if (currentPanelElement.scrollTop < currentItemElement.offsetTop - currentPanelElement.clientHeight + lineHeight ||
+                if (currentPanelElement.scrollTop < currentItemElement.offsetTop - currentPanelElement.clientHeight + currentItemElement.offsetHeight ||
                     currentPanelElement.scrollTop > currentItemElement.offsetTop) {
-                    currentPanelElement.scrollTop = currentItemElement.offsetTop - currentPanelElement.clientHeight + lineHeight;
+                    currentPanelElement.scrollTop = currentItemElement.offsetTop - currentPanelElement.clientHeight + currentItemElement.offsetHeight;
                 }
                 event.preventDefault();
                 return;
@@ -595,35 +714,20 @@ export const movePathTo = (options: {
                     currentItemElement.previousElementSibling.classList.add("b3-list-item--focus");
                 }
                 currentItemElement = currentPanelElement.querySelector(".b3-list-item--focus");
-                if (currentPanelElement.scrollTop < currentItemElement.offsetTop - currentPanelElement.clientHeight + lineHeight ||
-                    currentPanelElement.scrollTop > currentItemElement.offsetTop - lineHeight * 2) {
-                    currentPanelElement.scrollTop = currentItemElement.offsetTop - lineHeight * 2;
+                if (currentPanelElement.scrollTop < currentItemElement.offsetTop - currentPanelElement.clientHeight + currentItemElement.offsetHeight ||
+                    currentPanelElement.scrollTop > currentItemElement.offsetTop - currentItemElement.offsetHeight * 2) {
+                    currentPanelElement.scrollTop = currentItemElement.offsetTop - currentItemElement.offsetHeight * 2;
                 }
                 event.preventDefault();
                 return;
             }
-        }
-        if (event.key === "Enter") {
-            const currentItemElements = currentPanelElement.querySelectorAll(".b3-list-item--focus");
-            if (currentItemElements.length === 0) {
-                return;
-            }
-            const pathList: string[] = [];
-            const notebookIdList: string[] = [];
-            currentItemElements.forEach(item => {
-                pathList.push(item.getAttribute("data-path"));
-                notebookIdList.push(item.getAttribute("data-box"));
-            });
-            options.cb(pathList, notebookIdList);
-            dialog.destroy();
-            event.preventDefault();
         }
     });
     dialog.element.addEventListener("click", (event) => {
         let target = event.target as HTMLElement;
         while (target && !target.isEqualNode(dialog.element)) {
             if (target.classList.contains("b3-list-item__toggle")) {
-                getLeaf(target.parentElement, options.flashcard);
+                expand(target.parentElement);
                 event.preventDefault();
                 event.stopPropagation();
                 break;
@@ -633,19 +737,7 @@ export const movePathTo = (options: {
                 event.stopPropagation();
                 break;
             } else if (target.classList.contains("b3-button--text")) {
-                const currentPanelElement = searchListElement.classList.contains("fn__none") ? searchTreeElement : searchListElement;
-                const currentItemElements = currentPanelElement.querySelectorAll(".b3-list-item--focus");
-                if (currentItemElements.length === 0) {
-                    return;
-                }
-                const pathList: string[] = [];
-                const notebookIdList: string[] = [];
-                currentItemElements.forEach(item => {
-                    pathList.push(item.getAttribute("data-path"));
-                    notebookIdList.push(item.getAttribute("data-box"));
-                });
-                options.cb(pathList, notebookIdList);
-                dialog.destroy();
+                submit();
                 event.preventDefault();
                 event.stopPropagation();
                 break;
@@ -655,6 +747,14 @@ export const movePathTo = (options: {
                 event.stopPropagation();
                 break;
             } else if (target.classList.contains("b3-list-item")) {
+                if (options.multiple) {
+                    dialog.element.querySelectorAll(".b3-list-item--focus").forEach(item => item.classList.remove("b3-list-item--focus"));
+                    target.classList.add("b3-list-item--focus");
+                    target.querySelector<HTMLInputElement>("[data-path-select]").click();
+                    event.preventDefault();
+                    event.stopPropagation();
+                    break;
+                }
                 const currentPanelElement = searchListElement.classList.contains("fn__none") ? searchTreeElement : searchListElement;
                 const currentItemElements = currentPanelElement.querySelectorAll(".b3-list-item--focus");
                 if (currentItemElements.length === 0) {
@@ -671,7 +771,7 @@ export const movePathTo = (options: {
                     target.classList.add("b3-list-item--focus");
                 }
                 if (target.getAttribute("data-path") === "/") {
-                    getLeaf(target, options.flashcard);
+                    expand(target);
                 }
                 event.preventDefault();
                 event.stopPropagation();
@@ -683,9 +783,10 @@ export const movePathTo = (options: {
         inputElement.focus();
         /// #endif
     });
+    return dialog;
 };
 
-const getLeaf = (liElement: HTMLElement, flashcard: boolean) => {
+const getLeaf = (liElement: HTMLElement, flashcard: boolean, onRender?: (root: Element) => void) => {
     const toggleElement = liElement.querySelector(".b3-list-item__arrow");
     if (toggleElement.classList.contains("b3-list-item__arrow--open")) {
         toggleElement.classList.remove("b3-list-item__arrow--open");
@@ -725,12 +826,13 @@ const getLeaf = (liElement: HTMLElement, flashcard: boolean) => {
             } else if (item.count && item.count > 0) {
                 countHTML = `<span class="popover__block counter b3-tooltips b3-tooltips__w" aria-label="${window.siyuan.languages.ref}">${item.count}</span>`;
             }
-            fileHTML += `<li data-box="${notebookId}" class="b3-list-item" data-path="${item.path}">
+            const defaultIcon = item.subFileCount === 0 ? "file" : "folder";
+            fileHTML += `<li data-box="${notebookId}" class="b3-list-item" data-path="${item.path}"${getFileTreeDefaultIconAttr(item.icon, defaultIcon)}>
     <span style="padding-left: ${item.path.split("/").length * 8}px" class="b3-list-item__toggle b3-list-item__toggle--hl${item.subFileCount === 0 ? " fn__hidden" : ""}">
         <svg class="b3-list-item__arrow"><use xlink:href="#iconRight"></use></svg>
     </span>
-    ${unicode2Emoji(item.icon || (item.subFileCount === 0 ? window.siyuan.storage[Constants.LOCAL_IMAGES].file : window.siyuan.storage[Constants.LOCAL_IMAGES].folder), "b3-list-item__graphic", true)}
-    <span class="b3-list-item__text ariaLabel" data-position="parentE" aria-label="${getDocDisplayName(item.name, item.titleEmpty, true)} <small class='ft__on-surface'>${item.hSize}</small>${item.bookmark ? "<br>" + window.siyuan.languages.bookmark + " " + escapeAriaLabel(item.bookmark) : ""}${item.name1 ? "<br>" + window.siyuan.languages.name + " " + escapeAriaLabel(item.name1) : ""}${item.alias ? "<br>" + window.siyuan.languages.alias + " " + escapeAriaLabel(item.alias) : ""}${item.memo ? "<br>" + window.siyuan.languages.memo + " " + escapeAriaLabel(item.memo) : ""}${item.subFileCount !== 0 ? window.siyuan.languages.includeSubFile.replace("x", item.subFileCount) : ""}<br>${window.siyuan.languages.modifiedAt} ${item.hMtime}<br>${window.siyuan.languages.createdAt} ${item.hCtime}">${getDocDisplayName(item.name, item.titleEmpty, true)}</span>
+    ${getFileTreeIconHTML(item.icon, defaultIcon, "b3-list-item__graphic", true)}
+    <span class="b3-list-item__text ariaLabel" data-position="parentE" data-tooltip-encoding="none" aria-label="${genFileTreeDocAriaLabel(item, true)}">${getDocDisplayName(item.name, item.titleEmpty, true)}</span>
     ${countHTML}
 </li>`;
         });
@@ -739,6 +841,7 @@ const getLeaf = (liElement: HTMLElement, flashcard: boolean) => {
         }
         toggleElement.classList.add("b3-list-item__arrow--open");
         liElement.insertAdjacentHTML("afterend", `<ul>${fileHTML}</ul>`);
+        onRender?.(liElement.nextElementSibling);
         expandFileTree(liElement.nextElementSibling as HTMLElement);
     });
 };
@@ -788,6 +891,9 @@ export const setNoteBook = (cb?: (notebook: INotebook[]) => void, flashcard = fa
     return fetchPost("/api/notebook/lsNotebooks", {
         flashcard
     }, (response) => {
+        if (!response.data?.notebooks) {
+            return;
+        }
         if (!flashcard) {
             window.siyuan.notebooks = response.data.notebooks;
             if (window.siyuan.config?.fileTree) {
@@ -815,10 +921,10 @@ export const isEncryptedBox = (boxId: string): boolean => {
 /**
  * 规范化并校验相对路径：允许子目录，但禁止通过 ".." 穿越到根外。
  * 用于插件存储，确保路径不逃出指定根目录。
- * @returns 规范化后的相对路径（使用 /），若路径非法则返回替换后的合法路径
+ * @returns 规范化后的相对路径（使用 /）；不含有效文件段（如 ".."、"."、空串）时返回 null，避免指向根目录自身或其上级
  */
 export const normalizeStoragePath = (storageName: string): string | null => {
     const segments = storageName.replace(/\\/g, "/").split("/");
     const merged = mergePathSegments([], segments);
-    return merged.length > 0 ? merged.join("/") : storageName.replace(/[\/\\]+/g, "");
+    return merged.length > 0 ? merged.join("/") : null;
 };

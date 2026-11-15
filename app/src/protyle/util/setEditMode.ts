@@ -2,9 +2,14 @@ import {hideElements} from "../ui/hideElements";
 import {getAllModels} from "../../layout/getAll";
 import {updateOutline} from "../../editor/util";
 import {resize} from "./resize";
+import {forEachPluginSubscriber} from "../../plugin/EventBusCore";
+import {areProtylePluginExtensionsEnabled} from "../runtimeCapabilities";
 
 /// #if MOBILE
 export const updateMobileTitleReadonly = (protyle: IProtyle) => {
+    if (window.siyuan.mobile.editor?.protyle !== protyle) {
+        return;
+    }
     const inputElement = document.getElementById("toolbarName") as HTMLInputElement;
     const readonlyElement = document.getElementById("toolbarNameReadonly");
     if (!inputElement || !readonlyElement) {
@@ -14,10 +19,23 @@ export const updateMobileTitleReadonly = (protyle: IProtyle) => {
     if (readonly && !inputElement.readOnly && document.activeElement === inputElement) {
         inputElement.blur();
     }
-    inputElement.readOnly = readonly;
-    readonlyElement.textContent = inputElement.value;
-    inputElement.classList.toggle("fn__none", readonly);
-    readonlyElement.classList.toggle("fn__none", !readonly);
+    const inlineEditor = readonlyElement.querySelector(".mobile-document-title-editor");
+    if (inlineEditor) {
+        if (readonly && inlineEditor.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
+        protyle.title?.setReadonly(readonly);
+    }
+    inputElement.readOnly = true;
+    if (!readonly && !inlineEditor) {
+        readonlyElement.tabIndex = 0;
+    } else {
+        if (document.activeElement === readonlyElement) readonlyElement.blur();
+        readonlyElement.removeAttribute("tabindex");
+    }
+    if (!inlineEditor) readonlyElement.setAttribute("role", "button");
+    else readonlyElement.removeAttribute("role");
+    readonlyElement.setAttribute("aria-disabled", String(readonly));
+    inputElement.classList.add("fn__none");
+    readonlyElement.classList.remove("fn__none");
 };
 /// #endif
 
@@ -57,7 +75,9 @@ export const setEditMode = (protyle: IProtyle, type: TEditorMode) => {
     updateMobileTitleReadonly(protyle);
     /// #endif
     hideElements(["gutterOnly", "toolbar", "select", "hint", "util"], protyle);
-    protyle.app.plugins.forEach(item => {
-        item.eventBus.emit("switch-protyle-mode", {protyle});
-    });
+    if (areProtylePluginExtensionsEnabled(protyle)) {
+        forEachPluginSubscriber("switch-protyle-mode", eventBus => {
+            eventBus.emit("switch-protyle-mode", {protyle});
+        });
+    }
 };

@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package plugin
 
@@ -23,11 +11,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 
-	"github.com/gin-gonic/gin"
 	"github.com/lxzan/gws"
 	"github.com/siyuan-note/logging"
+	"github.com/siyuan-note/siyuan/kernel/apicontract"
 	"github.com/siyuan-note/siyuan/kernel/util"
 )
 
@@ -194,13 +183,6 @@ type JsonRpcError struct {
 	Data    any              `json:"data,omitempty"`
 }
 
-// JsonRpcRequestProcessingResults represents the results of parsing and validating JSON-RPC requests, including any global error and the individual results for each request in a batch.
-type JsonRpcRequestProcessingResults struct {
-	Batch       bool                  // Whether the original request was a batch (array) or single request
-	GlobalError *JsonRpcErrorResponse // If the entire request is invalid
-	Requests    []*JsonRpcProcessingRequest
-}
-
 // JsonRpcProcessingRequest represents the result of parsing and validating a single JSON-RPC request, including any error if the request is invalid.
 type JsonRpcProcessingRequest struct {
 	Request *JsonRpcRequest       // The parsed request, or nil if the request was invalid
@@ -216,86 +198,12 @@ type JsonRpcProcessingResponse struct {
 	Error    *JsonRpcErrorResponse   // The error response, or nil if the request was a notification or the response is a success
 }
 
-// JsonRpcResponse returns the appropriate response (either success or error) to be sent back to the client, or nil if this is a notification and no response should be sent.
-func (r *JsonRpcProcessingResponse) JsonRpcResponse() any {
-	if r.Response != nil {
-		return r.Response
-	}
-	if r.Error != nil {
-		return r.Error
-	}
-	return nil
-}
-
-// HandleRpcHttp handles POST /api/plugin/rpc/:name
-// Supports single call, batch call, and notification (no response for notification).
-func HandleRpcHttp(c *gin.Context) {
-	name := util.GetRequestUrlStringParam(c, "name")
-	p := resolveRunningPlugin(c, name, http.StatusOK)
-	if p == nil {
-		return
-	}
-
-	body, err := io.ReadAll(c.Request.Body)
-	if err != nil {
-		c.JSON(http.StatusOK, &JsonRpcErrorResponse{
-			JsonRpc: JsonRpcVersion,
-			Error: &JsonRpcError{
-				Code:    JsonRpcErrorCodeInternalError,
-				Message: JsonRpcErrorInternalError.Message,
-				Data:    fmt.Sprintf("Failed to read request body: %s", err),
-			},
-			ID: nil,
-		})
-		return
-	}
-
-	results := parseRpcRequests(body)
-	if results.GlobalError != nil {
-		c.JSON(http.StatusOK, results.GlobalError)
-		return
-	}
-
-	responses := p.dispatchRpcRequests(results.Requests)
-
-	if !results.Batch {
-		// Single request - return single response (or empty for notification)
-		if len(responses) > 0 && responses[0] != nil {
-			response := responses[0]
-			if response.Response != nil {
-				c.JSON(http.StatusOK, response.Response)
-				return
-			} else if response.Error != nil {
-				c.JSON(http.StatusOK, response.Error)
-				return
-			}
-		}
-		c.Status(http.StatusNoContent)
-		return
-	}
-
-	// Batch request - filter out nil responses (notifications) and return array
-	filtered := filterRpcResponses(responses)
-
-	if len(filtered) > 0 {
-		c.JSON(http.StatusOK, filtered)
-	} else {
-		// All notifications in batch - send nothing per spec (MUST NOT return empty array)
-		c.Status(http.StatusNoContent)
-	}
-}
-
-// HandleRpcWebSocket handles GET /ws/plugin/rpc/:name
-// Supports single call, batch call, notification, and server push notifications.
-func HandleRpcWebSocket(c *gin.Context) {
-	name := util.GetRequestUrlStringParam(c, "name")
-	p := resolveRunningPlugin(c, name, http.StatusNotFound)
-	if p == nil {
-		return
-	}
-
-	if c.IsWebsocket() == false {
-		c.String(http.StatusBadRequest, "This endpoint only accepts WebSocket connections")
+func (p *KernelPlugin) serveRPCWebSocket(writer http.ResponseWriter, request *http.Request) {
+	name := p.Name
+	if !strings.EqualFold(request.Header.Get("Upgrade"), "websocket") || !strings.Contains(strings.ToLower(request.Header.Get("Connection")), "upgrade") {
+		writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(writer, "This endpoint only accepts WebSocket connections")
 		return
 	}
 
@@ -304,61 +212,39 @@ func HandleRpcWebSocket(c *gin.Context) {
 	h.onMessage = func(socket *gws.Conn, message *gws.Message) {
 		defer message.Close()
 
-		results := parseRpcRequests(message.Bytes())
-		if results.GlobalError != nil {
-			if respBytes, marshalErr := json.Marshal(results.GlobalError); marshalErr == nil {
-				socket.WriteAsync(gws.OpcodeText, respBytes, func(err error) {
-					if err != nil {
-						logging.LogWarnf("[plugin:%s] RPC WebSocket response write failed: %s", name, err)
-					}
-				})
-			} else {
-				logging.LogErrorf("[plugin:%s] RPC WebSocket response marshal failed: %s", name, marshalErr)
-			}
+		request, err := apicontract.DecodePluginRPC(bytes.NewReader(message.Bytes()))
+		if err != nil {
+			logging.LogErrorf("[plugin:%s] RPC WebSocket request read failed: %s", name, err)
 			return
 		}
-
-		responses := p.dispatchRpcRequests(results.Requests)
-
-		var responseBytes []byte
-		var marshalErr error
-		var needToSend bool
-
-		if !results.Batch {
-			if len(responses) > 0 && responses[0] != nil {
-				if response := responses[0].JsonRpcResponse(); response != nil {
-					needToSend = true
-					responseBytes, marshalErr = json.Marshal(response)
-				}
-			}
-		} else {
-			filtered := filterRpcResponses(responses)
-			if len(filtered) > 0 {
-				needToSend = true
-				responseBytes, marshalErr = json.Marshal(filtered)
-			}
+		// WebSocket 调用随插件停止退出，不使用 HTTP 握手请求的上下文。
+		response, err := p.dispatchRPCContract(p.context, request)
+		if err != nil {
+			logging.LogErrorf("[plugin:%s] RPC response marshal failed: %s", name, err)
+			return
 		}
-
-		if needToSend {
-			if marshalErr != nil {
-				logging.LogErrorf("[plugin:%s] RPC response marshal failed: %s", name, marshalErr)
-				return
-			}
-			socket.WriteAsync(gws.OpcodeText, responseBytes, func(err error) {
-				if err != nil {
-					logging.LogWarnf("[plugin:%s] RPC WebSocket response write failed: %s", name, err)
-				}
-			})
+		if response == nil {
+			return
 		}
+		responseBytes, err := json.Marshal(apicontract.RPCResponseMessage(*response))
+		if err != nil {
+			logging.LogErrorf("[plugin:%s] RPC response marshal failed: %s", name, err)
+			return
+		}
+		socket.WriteAsync(gws.OpcodeText, responseBytes, func(err error) {
+			if err != nil {
+				logging.LogWarnf("[plugin:%s] RPC WebSocket response write failed: %s", name, err)
+			}
+		})
 	}
 
 	upgrader := gws.NewUpgrader(h, &gws.ServerOption{
 		// 校验 Origin，防止跨站 WebSocket 劫持（CSWSH） https://github.com/siyuan-note/siyuan/security/advisories/GHSA-3cc2-h3v6-rqpq
 		Authorize: func(r *http.Request, _ gws.SessionStorage) bool {
-			return util.IsSessionOriginAllowed(r.Header.Get("Origin"), r.Host)
+			return util.IsSessionOriginAllowedRequest(r)
 		},
 	})
-	socket, err := upgrader.Upgrade(c.Writer, c.Request)
+	socket, err := upgrader.Upgrade(writer, request)
 	if err != nil {
 		logging.LogErrorf("[plugin:%s] RPC WebSocket upgrade failed: %s", name, err)
 		return
@@ -388,121 +274,4 @@ func HandleRpcWebSocket(c *gin.Context) {
 	defer doClose()
 	doOpen()
 	<-ctx.Done()
-}
-
-// resolveRunningPlugin looks up the plugin by name and writes an error response if it is
-// not found (-32001) or not running (-32002). Returns nil when the caller should abort.
-func resolveRunningPlugin(c *gin.Context, name string, errStatus int) *KernelPlugin {
-	p := GetManager().GetPlugin(name)
-	if p == nil {
-		c.JSON(errStatus, &JsonRpcErrorResponse{
-			JsonRpc: JsonRpcVersion,
-			Error:   JsonRpcErrorPluginNotLoaded,
-		})
-		return nil
-	}
-	if p.State() != PluginStateRunning {
-		c.JSON(errStatus, &JsonRpcErrorResponse{
-			JsonRpc: JsonRpcVersion,
-			Error:   JsonRpcErrorPluginNotRunning,
-		})
-		return nil
-	}
-	return p
-}
-
-// parseRpcRequest parses a single JSON-RPC request from the given body. The body must be a JSON object.
-func parseRpcRequest(body []byte) (parsedRequest JsonRpcProcessingRequest) {
-	var request JsonRpcRequest
-	if !json.Valid(body) {
-		// Invalid JSON
-		parsedRequest.Error = &JsonRpcErrorResponse{
-			JsonRpc: JsonRpcVersion,
-			Error: &JsonRpcError{
-				Code:    JsonRpcErrorCodeParseError,
-				Message: JsonRpcErrorParseError.Message,
-				Data:    "RPC request is not valid JSON",
-			},
-			ID: nil,
-		}
-		return
-	}
-	if err := json.Unmarshal(body, &request); err != nil {
-		// Invalid request structure
-		parsedRequest.Error = &JsonRpcErrorResponse{
-			JsonRpc: JsonRpcVersion,
-			Error: &JsonRpcError{
-				Code:    JsonRpcErrorCodeInvalidRequest,
-				Message: JsonRpcErrorInvalidRequest.Message,
-				Data:    fmt.Sprintf("RPC request is not a valid JSON-RPC object: %s", err),
-			},
-			ID: nil,
-		}
-		return
-	}
-	parsedRequest.Request = &request
-	return
-}
-
-// parseRpcRequests parses the given body into one or more JSON-RPC requests, handling both single and batch requests.
-func parseRpcRequests(body []byte) (results JsonRpcRequestProcessingResults) {
-	if !json.Valid(body) {
-		// Invalid JSON
-		results.GlobalError = &JsonRpcErrorResponse{
-			JsonRpc: JsonRpcVersion,
-			Error: &JsonRpcError{
-				Code:    JsonRpcErrorCodeParseError,
-				Message: JsonRpcErrorParseError.Message,
-				Data:    "RPC request is not valid JSON",
-			},
-			ID: nil,
-		}
-		return
-	}
-
-	var jsonArray []json.RawMessage
-	if err := json.Unmarshal(body, &jsonArray); err != nil {
-		// single request
-		request := parseRpcRequest(body)
-		results.Requests = append(results.Requests, &request)
-		return
-	} else {
-		// batch request
-		if len(jsonArray) == 0 {
-			// per spec, an empty array is invalid
-			results.GlobalError = &JsonRpcErrorResponse{
-				JsonRpc: JsonRpcVersion,
-				Error: &JsonRpcError{
-					Code:    JsonRpcErrorCodeInvalidRequest,
-					Message: JsonRpcErrorInvalidRequest.Message,
-					Data:    "RPC request is not allowed to be an empty array",
-				},
-				ID: nil,
-			}
-			return
-		}
-
-		results.Batch = true
-		results.Requests = make([]*JsonRpcProcessingRequest, len(jsonArray))
-		for i, raw := range jsonArray {
-			request := parseRpcRequest(raw)
-			results.Requests[i] = &request
-		}
-	}
-	return
-}
-
-// filterRpcResponses filters out nil responses (for notifications) and extracts the actual response objects for non-nil responses.
-func filterRpcResponses(responses []*JsonRpcProcessingResponse) []any {
-	filtered := make([]any, 0, len(responses))
-	for _, response := range responses {
-		if response != nil {
-			if response.Response != nil {
-				filtered = append(filtered, response.Response)
-			} else if response.Error != nil {
-				filtered = append(filtered, response.Error)
-			}
-		}
-	}
-	return filtered
 }

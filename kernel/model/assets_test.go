@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
@@ -39,6 +27,51 @@ import (
 	"github.com/siyuan-note/siyuan/kernel/util"
 )
 
+func TestRemoveAssetThumbnail(t *testing.T) {
+	originalDataDir, originalTempDir := util.DataDir, util.TempDir
+	t.Cleanup(func() { util.DataDir, util.TempDir = originalDataDir, originalTempDir })
+	root := filepath.Join(t.TempDir(), "assets", "workspace")
+	util.DataDir = filepath.Join(root, "data")
+	util.TempDir = filepath.Join(root, "temp")
+	for _, test := range []struct {
+		name      string
+		source    string
+		thumbnail string
+		remove    bool
+	}{
+		{"global", "assets/photo.png", "assets/photo.png", true},
+		{"uppercase", "assets/Photo.JPG", "assets/Photo.JPG", true},
+		{"nested", "assets/nested/assets/photo.jpeg", "assets/nested/assets/photo.jpeg", true},
+		{"notebook", "20260101120000-abc1234/assets/photo.png", "assets/photo.png", true},
+		{"document", "20260101120000-abc1234/20260101120001-def5678/assets/photo.png", "assets/photo.png", true},
+		{"unsupported", "assets/photo.txt", "assets/photo.txt", false},
+		{"outside", "../assets/photo.png", "assets/photo.png", false},
+		{"nonasset", "storage/assets/photo.png", "assets/photo.png", false},
+		{"similar directory", "otherassets/photo.png", "assets/photo.png", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			thumbnailPath := filepath.Join(util.TempDir, "thumbnails", filepath.FromSlash(test.thumbnail))
+			if err := os.MkdirAll(filepath.Dir(thumbnailPath), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(thumbnailPath, []byte("cached image"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			assetAbsPath := filepath.Join(util.DataDir, filepath.FromSlash(test.source))
+			removeAssetThumbnail(assetAbsPath)
+			_, err := os.Stat(thumbnailPath)
+			if test.remove {
+				if !os.IsNotExist(err) {
+					t.Fatalf("thumbnail should be removed: %v", err)
+				}
+				removeAssetThumbnail(assetAbsPath)
+			} else if err != nil {
+				t.Fatalf("unrelated thumbnail should be preserved: %v", err)
+			}
+		})
+	}
+}
+
 func TestGenerateImageDoesNotRequireDocument(t *testing.T) {
 	var source bytes.Buffer
 	if err := png.Encode(&source, image.NewRGBA(image.Rect(0, 0, 2, 2))); err != nil {
@@ -60,7 +93,7 @@ func TestGenerateImageDoesNotRequireDocument(t *testing.T) {
 	}}
 	ai.ImageGeneration.ModelID = modelID
 	Conf = NewAppConf()
-	Conf.AI = ai
+	Conf.AI.Store(ai)
 
 	result, err := GenerateImage(context.Background(), GenerateImageRequest{Prompt: "draw", OutputFormat: "png"})
 	if err != nil {
@@ -87,7 +120,7 @@ func TestImageGenerationProviderErrorsPreventAutomaticRetry(t *testing.T) {
 	}}
 	ai.ImageGeneration.ModelID = generationModelID
 	Conf = NewAppConf()
-	Conf.AI = ai
+	Conf.AI.Store(ai)
 
 	if _, err := GenerateImage(context.Background(), GenerateImageRequest{Prompt: "draw", OutputFormat: "png"}); !IsImageExecutionUnknown(err) {
 		t.Fatalf("image provider error should prevent automatic retry: %v", err)
@@ -111,7 +144,7 @@ func TestClearWorkspaceTempRemovesImageOperations(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	clearWorkspaceTemp(false)
+	clearWorkspaceTemp("")
 	if _, err := os.Stat(operationDir); !os.IsNotExist(err) {
 		t.Fatalf("image operation directory was not removed: %v", err)
 	}
@@ -126,7 +159,7 @@ func TestClearWorkspaceTempPreservesInstallPackages(t *testing.T) {
 	util.DataDir = filepath.Join(root, "data")
 	util.TempDir = filepath.Join(root, "temp")
 	util.WorkspaceDir = root
-	installPkgPath := filepath.Join(util.TempDir, "install", "siyuan-test-win.exe")
+	installPkgPath := filepath.Join(util.TempDir, "install", "siyuan-0.0.1-win.exe")
 	if err := os.MkdirAll(filepath.Dir(installPkgPath), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -138,11 +171,11 @@ func TestClearWorkspaceTempPreservesInstallPackages(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	clearWorkspaceTemp(true)
+	clearWorkspaceTemp(installPkgPath)
 	if _, err := os.Stat(installPkgPath); err != nil {
 		t.Fatalf("install package should be preserved during update: %v", err)
 	}
-	clearWorkspaceTemp(false)
+	clearWorkspaceTemp("")
 	if _, err := os.Stat(installPkgPath); !os.IsNotExist(err) {
 		t.Fatalf("old install package should be removed during normal exit: %v", err)
 	}
@@ -152,6 +185,98 @@ func TestPrepareDocumentImageRejectsNetworkImage(t *testing.T) {
 	_, err := PrepareDocumentImage("20260715130000-abcdefg", "https://example.com/image.png")
 	if err == nil || err.Error() != "only local assets/... images are supported" {
 		t.Fatalf("unexpected network image error: %v", err)
+	}
+}
+
+func TestPrepareAgentMessageImageReadsGlobalAsset(t *testing.T) {
+	originalDataDir, originalWorkspaceDir := util.DataDir, util.WorkspaceDir
+	t.Cleanup(func() {
+		util.DataDir, util.WorkspaceDir = originalDataDir, originalWorkspaceDir
+	})
+	workspaceDir := t.TempDir()
+	util.WorkspaceDir = workspaceDir
+	util.DataDir = filepath.Join(workspaceDir, "data")
+	assetPath := filepath.Join(util.DataDir, "assets", "chat.png")
+	if err := os.MkdirAll(filepath.Dir(assetPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	var imageData bytes.Buffer
+	if err := png.Encode(&imageData, image.NewRGBA(image.Rect(0, 0, 2, 2))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(assetPath, imageData.Bytes(), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	prepared, err := PrepareAgentMessageImage("assets/chat.png?style=thumb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.Artifact.Path != "assets/chat.png" || prepared.MIMEType != "image/png" ||
+		prepared.Prepared.Width != 2 || prepared.Prepared.Height != 2 {
+		t.Fatalf("unexpected prepared agent image: %#v", prepared)
+	}
+	if _, err = PrepareAgentMessageImage("assets/../storage/secret.png"); err == nil {
+		t.Fatal("agent image path traversal should be rejected")
+	}
+}
+
+func TestAgentMessageImageAssets(t *testing.T) {
+	markdown := "![first](assets/first.png)\n\n[asset link](assets/file.png)\n\n" +
+		"![duplicate](assets/first.png)\n\n![network](https://example.com/image.png)"
+	want := []string{"assets/first.png"}
+	if got := AgentMessageImageAssets(markdown); !reflect.DeepEqual(got, want) {
+		t.Fatalf("agent message image assets: got %v, want %v", got, want)
+	}
+}
+
+func TestUnusedAssetsExcludesAgentSessionImages(t *testing.T) {
+	originalDataDir, originalWorkspaceDir := util.DataDir, util.WorkspaceDir
+	originalConf := Conf
+	t.Cleanup(func() {
+		util.DataDir, util.WorkspaceDir = originalDataDir, originalWorkspaceDir
+		Conf = originalConf
+	})
+	workspaceDir := t.TempDir()
+	util.WorkspaceDir = workspaceDir
+	util.DataDir = filepath.Join(workspaceDir, "data")
+	Conf = NewAppConf()
+	Conf.FileTree.Store(conf.NewFileTree())
+	assetsDir := filepath.Join(util.DataDir, "assets")
+	if err := os.MkdirAll(assetsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"session.png", "runtime.png", "linked.png", "unused.png"} {
+		if err := os.WriteFile(filepath.Join(assetsDir, name), []byte("image"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sessionDir := filepath.Join(util.DataDir, "storage", "ai", "agent", "sessions", "20260825120000-abcdefg")
+	if err := os.MkdirAll(sessionDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "session.json"), []byte(
+		`{"entries":[{"type":"user","content":"![session](assets/session.png?style=thumb)\n\n[link](assets/linked.png)"}]}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionDir, "runtime.json"), []byte(
+		`{"activeTurn":{"userContent":"![runtime](assets/runtime.png)"}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	items, err := UnusedAssets(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unused := map[string]bool{}
+	for _, item := range items {
+		unused[item.Item] = true
+	}
+	if unused["assets/session.png"] || unused["assets/runtime.png"] {
+		t.Fatalf("agent session images were classified as unused: %#v", unused)
+	}
+	if !unused["assets/linked.png"] || !unused["assets/unused.png"] {
+		t.Fatalf("unreferenced assets were not classified as unused: %#v", unused)
 	}
 }
 
@@ -513,16 +638,72 @@ func TestUnusedAssetsContainPath(t *testing.T) {
 	}
 }
 
+func TestAllAssetAbsPathsWithAssetsInWorkspacePath(t *testing.T) {
+	originalDataDir := util.DataDir
+	originalConf := Conf
+	t.Cleanup(func() {
+		util.DataDir = originalDataDir
+		Conf = originalConf
+	})
+
+	util.DataDir = filepath.Join(t.TempDir(), "assets", "workspace", "data")
+	Conf = NewAppConf()
+	Conf.FileTree.Store(conf.NewFileTree())
+	globalAssetPath := filepath.Join(util.DataDir, "assets", "nested", "assets", "image.png")
+	if err := os.MkdirAll(filepath.Dir(globalAssetPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(globalAssetPath, []byte("image"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	const (
+		boxID = "20260814140000-abcdefg"
+		docID = "20260814140001-hijklmn"
+	)
+	boxConfPath := filepath.Join(util.DataDir, boxID, ".siyuan", "conf.json")
+	if err := os.MkdirAll(filepath.Dir(boxConfPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(boxConfPath, []byte(`{"name":"Notebook"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	notebookAssetPath := filepath.Join(util.DataDir, boxID, docID, "assets", "document.png")
+	if err := os.MkdirAll(filepath.Dir(notebookAssetPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(notebookAssetPath, []byte("image"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	assets, err := allAssetAbsPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := map[string]string{
+		"assets/nested/assets/image.png": globalAssetPath,
+		"assets/document.png":            notebookAssetPath,
+	}
+	for assetPath, expectedAbsPath := range expected {
+		if actualAbsPath := assets[assetPath]; actualAbsPath != expectedAbsPath {
+			t.Fatalf("asset path [%s]: got %q, want %q", assetPath, actualAbsPath, expectedAbsPath)
+		}
+	}
+}
+
 func TestGetAssetLinkDestsByNode(t *testing.T) {
 	const blockID = "20200101000000-abcdefg"
 	root := &ast.Node{Type: ast.NodeDocument}
 	paragraph := &ast.Node{Type: ast.NodeParagraph, ID: blockID}
 	paragraph.SetIALAttr("custom-data-assets", "assets/custom.png")
 	linkDest := &ast.Node{Type: ast.NodeLinkDest, Tokens: []byte("assets/image.png")}
+	annotationID := &ast.Node{Type: ast.NodeFileAnnotationRefID,
+		Tokens: []byte("assets/document-20200101000001-bcdefgh.pdf/20200101000002-cdefghi")}
 	root.AppendChild(paragraph)
 	paragraph.AppendChild(linkDest)
+	paragraph.AppendChild(annotationID)
 
-	want := []string{"assets/custom.png", "assets/image.png"}
+	want := []string{"assets/custom.png", "assets/image.png", "assets/document-20200101000001-bcdefgh.pdf"}
 	if got := getAssetsLinkDests(root, false); !reflect.DeepEqual(got, want) {
 		t.Fatalf("get asset link destinations: got %v, want %v", got, want)
 	}
@@ -531,6 +712,10 @@ func TestGetAssetLinkDestsByNode(t *testing.T) {
 	}
 	if got := getAssetLinkDestsByNode(linkDest, false); !reflect.DeepEqual(got, []string{"assets/image.png"}) {
 		t.Fatalf("get inline asset link destinations: got %v, want %v", got, []string{"assets/image.png"})
+	}
+	if got := getAssetLinkDestsByNode(annotationID, false); !reflect.DeepEqual(got,
+		[]string{"assets/document-20200101000001-bcdefgh.pdf"}) {
+		t.Fatalf("get PDF annotation asset link destination: got %v", got)
 	}
 	if got := assetLinkDestBlockID(linkDest); got != blockID {
 		t.Fatalf("get asset link destination block ID: got %q, want %q", got, blockID)
@@ -564,21 +749,87 @@ func TestGetAttributeViewAssetsLinkDestsFiltersItems(t *testing.T) {
 					{BlockID: "private-item", URL: &av.ValueURL{Content: "assets/private-url.png"}},
 				},
 			},
+			{
+				Key: &av.Key{Type: av.KeyTypeText},
+				Values: []*av.Value{
+					{
+						BlockID: "public-item",
+						Text: newAttributeViewRichText(t, strings.Join([]string{
+							"[Markdown](assets/public-rich.png)",
+							`<span data-type="a" data-href="assets/public-text-mark.png">Text mark</span>`,
+							`<<assets/public-document-20200101000001-bcdefgh.pdf/20200101000002-cdefghi "PDF shorthand">>`,
+							`<span data-type="file-annotation-ref" data-id="assets/public-span-20200101000003-defghij.pdf/20200101000004-efghijk">PDF text mark</span>`,
+							"[Network](https://example.com/remote.png)",
+						}, "\n\n")),
+						Relation: &av.ValueRelation{Contents: []*av.Value{{
+							Text: newAttributeViewRichText(t, "[Relation](assets/public-relation.png)"),
+						}}},
+						Rollup: &av.ValueRollup{Contents: []*av.Value{{
+							Text: newAttributeViewRichText(t, "[Rollup](assets/public-rollup.png)"),
+						}}},
+					},
+					{
+						BlockID: "private-item",
+						Text:    newAttributeViewRichText(t, "[Private](assets/private-rich.png)"),
+					},
+				},
+			},
 		},
+		NewItemTemplates: []*av.NewItemTemplate{{
+			FieldValues: map[string]*av.NewItemFieldValue{
+				"text": {Value: &av.Value{Text: newAttributeViewRichText(t, "[Template](assets/template-rich.png)")}},
+			},
+		}},
 	}
 
 	filter := func(_ *av.AttributeView, itemID string) bool {
 		return "public-item" == itemID
 	}
-	want := []string{"assets/public.png", "assets/public-url.png"}
+	want := []string{
+		"assets/public.png",
+		"assets/public-url.png",
+		"assets/public-rich.png",
+		"assets/public-text-mark.png",
+		"assets/public-document-20200101000001-bcdefgh.pdf",
+		"assets/public-span-20200101000003-defghij.pdf",
+		"assets/public-relation.png",
+		"assets/public-rollup.png",
+	}
 	if got := getAttributeViewAssetsLinkDests(attrView, false, filter); !reflect.DeepEqual(got, want) {
 		t.Fatalf("get filtered attribute view asset links: got %v, want %v", got, want)
 	}
 
-	want = []string{"assets/public.png", "assets/private.png", "assets/public-url.png", "assets/private-url.png"}
+	want = []string{
+		"assets/public.png",
+		"assets/private.png",
+		"assets/public-url.png",
+		"assets/private-url.png",
+		"assets/public-rich.png",
+		"assets/public-text-mark.png",
+		"assets/public-document-20200101000001-bcdefgh.pdf",
+		"assets/public-span-20200101000003-defghij.pdf",
+		"assets/public-relation.png",
+		"assets/public-rollup.png",
+		"assets/private-rich.png",
+		"assets/template-rich.png",
+	}
 	if got := getAttributeViewAssetsLinkDests(attrView, false, nil); !reflect.DeepEqual(got, want) {
 		t.Fatalf("get unfiltered attribute view asset links: got %v, want %v", got, want)
 	}
+}
+
+func newAttributeViewRichText(t *testing.T, content string) *av.ValueText {
+	t.Helper()
+	ret := &av.ValueText{
+		Content: "stale projection",
+		Rich: &av.ValueTextRich{
+			Spec: av.ValueTextRichSpec, Format: av.ValueTextRichFormatKramdown, Content: content,
+		},
+	}
+	if err := ret.NormalizeRichContent(); nil != err {
+		t.Fatalf("normalize attribute view rich text: %v", err)
+	}
+	return ret
 }
 
 func TestRenameAssetClearsAttributeViewCache(t *testing.T) {

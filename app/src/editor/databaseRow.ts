@@ -5,6 +5,23 @@ import {renderAVAttribute} from "../protyle/render/av/blockAttr";
 import {Protyle} from "../protyle";
 import {getEditorHorizontalPadding} from "../protyle/ui/padding";
 import {searchMarkRender} from "../protyle/render/searchMarkRender";
+import {registerDatabaseRowRefresh} from "../protyle/render/av/databaseRowRefresh";
+import {focusDatabasePrimary} from "../protyle/render/av/primaryFocus";
+import {saveLayout, setPanelFocus} from "../layout/util";
+import {preserveAVBindingRange} from "../protyle/render/av/binding";
+import {inheritDatabaseRowReadonly} from "../protyle/render/av/rowReadonly";
+import {disposeRelatedAVViews, preserveRelatedAVViews, syncRelatedAVViews} from "../protyle/render/av/relatedView";
+import {IDatabaseRowOpenData, mountDesktopDatabaseRowNavigation, switchDesktopDatabaseRowPreview} from "../protyle/render/av/openDatabaseRow";
+
+type TDatabaseRowData = Parameters<typeof newDatabaseRowModel>[0]["data"];
+const rowSwitchers = new WeakMap<Custom, (data: TDatabaseRowData) => Promise<boolean>>();
+const rowReady = new WeakMap<Custom, Promise<boolean>>();
+
+export const whenDatabaseRowReady = (model: Custom) => rowReady.get(model) || Promise.resolve(false);
+
+export const switchDatabaseRow = (model: Custom, data: TDatabaseRowData) => {
+    return rowSwitchers.get(model)?.(data) || Promise.resolve(false);
+};
 
 export const newDatabaseRowModel = (options: {
     app: App,
@@ -19,13 +36,26 @@ export const newDatabaseRowModel = (options: {
         matchedValueID?: string,
         matchedKeyID?: string,
         keywords?: string[],
+        focusPrimary?: boolean,
+        focusTitle?: boolean,
+        bindPrimary?: boolean,
+        navigation?: IDatabaseRowOpenData["navigation"],
+        boundBlockID?: string,
+        isDetached?: boolean,
     },
 }) => {
     let customModel: Custom;
     let contextProtyle: IProtyle;
+    let sourceProtyle: Partial<IProtyle>;
     let ghostProtyle: Protyle;
     let resizeObserver: ResizeObserver;
+    let unregisterRefresh: () => void;
     let destroyed = false;
+    let openingBoundID = "";
+    let renderVersion = 0;
+    let pendingRow: {data: TDatabaseRowData, resolve: (opened: boolean) => void};
+    let resolveReady: (ready: boolean) => void;
+    const ready = new Promise<boolean>(resolve => { resolveReady = resolve; });
     const updateTitle = (custom: Custom, bodyElement: HTMLElement) => {
         const primaryElement = bodyElement.querySelector<HTMLElement>('[data-primary="true"] [data-cell-value]');
         if (!primaryElement?.dataset.cellValue) {
@@ -50,18 +80,65 @@ export const newDatabaseRowModel = (options: {
             bodyElement.style.margin = `8px ${padding.right}px 8px ${padding.left}px`;
         }
     };
-    const render = (custom: Custom) => {
+    const render = (custom: Custom, automaticRefresh = false) => {
         const previousBodyElement = custom.element.querySelector<HTMLElement>(".protyle-db-row__body");
         if (!previousBodyElement || !contextProtyle) {
             return;
         }
-        const data = custom.data as typeof options.data;
+        if (sourceProtyle) {
+            inheritDatabaseRowReadonly(contextProtyle, sourceProtyle);
+            sourceProtyle = undefined;
+        }
+        const switching = pendingRow;
+        const data = switching?.data || custom.data as TDatabaseRowData;
+        const currentRenderVersion = ++renderVersion;
         const bodyElement = document.createElement("div");
         bodyElement.className = "custom-attr protyle-db-row__body";
-        previousBodyElement.replaceWith(bodyElement);
-        updateLayout(custom);
         renderAVAttribute(bodyElement, data.itemID, contextProtyle, (element) => {
+            if (destroyed || currentRenderVersion !== renderVersion || !previousBodyElement.isConnected) {
+                disposeRelatedAVViews(element);
+                return;
+            }
+            if (!element.querySelector(`[data-av-id="${data.avID}"]`)) {
+                if (switching) {
+                    pendingRow = undefined;
+                    switching.resolve(false);
+                    return;
+                }
+                custom.tab.parent.removeTab(custom.tab.id);
+                resolveReady(false);
+                return;
+            }
+            const primaryElement = element.querySelector<HTMLElement>('[data-primary="true"] [data-cell-value]');
+            const primaryValue: IAVCellValue = primaryElement?.dataset.cellValue ?
+                JSON.parse(decodeURIComponent(primaryElement.dataset.cellValue)) : undefined;
+            if (!switching && data.isDetached !== false && !openingBoundID && primaryValue?.block?.id && !primaryValue.isDetached &&
+                window.siyuan.config.editor.databaseAttrShow) {
+                openingBoundID = primaryValue.block.id;
+                void switchDesktopDatabaseRowPreview(custom, {...data, databaseBlockID: data.blockID,
+                    notebookID: data.notebookId, boundBlockID: primaryValue.block.id, isDetached: false}, contextProtyle)
+                    .catch(error => console.warn("Failed to open bound database row:", error))
+                    .finally(() => { openingBoundID = ""; });
+            }
+            // 保留当前内容，待属性和反链加载完成后一次替换，避免刷新期间出现空白。
+            const restoreBindingRange = switching ? undefined : preserveAVBindingRange(contextProtyle, previousBodyElement);
+            preserveRelatedAVViews(previousBodyElement, element);
+            previousBodyElement.replaceWith(element);
+            syncRelatedAVViews(element);
+            restoreBindingRange?.(element);
+            if (switching) {
+                custom.data = data;
+                pendingRow = undefined;
+                custom.element.querySelector(".protyle-content").scrollTop = 0;
+            }
+            updateLayout(custom);
             updateTitle(custom, element);
+            resolveReady(true);
+            if (switching) {
+                saveLayout();
+                switching.resolve(true);
+            }
+            focusDatabasePrimary(custom.element, contextProtyle, data);
             if (!data.keywords?.length) {
                 return;
             }
@@ -80,7 +157,9 @@ export const newDatabaseRowModel = (options: {
                 currentElement: matchedElement,
             });
         },
-            {avID: data.avID, itemID: data.itemID, valueID: data.valueID});
+            {avID: data.avID, itemID: data.itemID, valueID: data.valueID, databaseBlockID: data.blockID},
+            {owner: custom.element, isCurrent: () => !destroyed && currentRenderVersion === renderVersion},
+            automaticRefresh && !switching);
     };
     const model = new Custom({
         app: options.app,
@@ -97,11 +176,22 @@ export const newDatabaseRowModel = (options: {
         </div>
     </div>
 </div>`;
+            const activatePanel = () => {
+                const wndElement = custom.element.closest('[data-type="wnd"]');
+                if (wndElement) {
+                    setPanelFocus(wndElement);
+                }
+            };
+            custom.element.addEventListener("pointerdown", activatePanel);
+            custom.element.addEventListener("focusin", activatePanel);
             custom.element.querySelector(".protyle-db-row__title span").textContent = options.data.title || window.siyuan.languages.untitled;
             custom.element.addEventListener("database-row-title-update", (event) => {
                 const title = (event as CustomEvent<string>).detail;
                 custom.data.title = title;
                 custom.tab.updateTitle(title);
+            });
+            custom.element.addEventListener("database-row-readonly", (event) => {
+                sourceProtyle = (event as CustomEvent<Partial<IProtyle>>).detail;
             });
             updateLayout(custom);
             resizeObserver = new ResizeObserver(() => updateLayout(custom));
@@ -114,14 +204,31 @@ export const newDatabaseRowModel = (options: {
                         return;
                     }
                     contextProtyle = editor.protyle;
-                    custom.element.append(contextProtyle.highlight.styleElement);
+                    unregisterRefresh = registerDatabaseRowRefresh(contextProtyle.id, {
+                        getAVID: () => (customModel.data as typeof options.data).avID,
+                        refresh: () => render(customModel, true),
+                    });
+                    custom.element.append(contextProtyle.highlight.styleElement, contextProtyle.hint.element);
                     render(custom);
+                    const data = custom.data as TDatabaseRowData;
+                    if (data.navigation) {
+                        mountDesktopDatabaseRowNavigation(custom, {
+                            ...data, databaseBlockID: data.blockID, notebookID: data.notebookId,
+                            isDetached: data.isDetached !== false,
+                        }, contextProtyle);
+                    }
                 },
             });
         },
         destroy() {
             destroyed = true;
+            resolveReady(false);
+            pendingRow?.resolve(false);
+            pendingRow = undefined;
+            rowSwitchers.delete(customModel);
+            rowReady.delete(customModel);
             resizeObserver?.disconnect();
+            unregisterRefresh?.();
             ghostProtyle?.destroy();
         },
         update() {
@@ -130,6 +237,17 @@ export const newDatabaseRowModel = (options: {
         resize() {
             updateLayout(customModel);
         },
+    });
+    rowReady.set(model, ready);
+    rowSwitchers.set(model, data => {
+        if (destroyed || !contextProtyle || data.blockID !== model.data.blockID || data.avID !== model.data.avID) {
+            return Promise.resolve(false);
+        }
+        pendingRow?.resolve(false);
+        return new Promise(resolve => {
+            pendingRow = {data, resolve};
+            render(model);
+        });
     });
     return model;
 };

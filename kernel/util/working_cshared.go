@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package util
 
@@ -31,13 +19,7 @@ import (
 	"github.com/siyuan-note/logging"
 )
 
-// BootDesktopLib initializes the kernel for c-shared library mode.
-// Unlike Boot(), it takes parameters directly (no CLI flag parsing) and
-// returns an error code instead of calling os.Exit().
-// Unlike BootMobile(), it supports desktop features like dynamic port
-// and workspace locking.
-//
-// Returns 0 on success, or a logging.ExitCode* value on failure.
+// BootDesktopLib 初始化桌面端进程内内核（c-shared N-API），返回退出码而不调用 os.Exit。
 func BootDesktopLib(workspace, port, lang, wd string) int {
 	initEnvVars()
 	IncBootProgress(3, "Booting kernel...")
@@ -45,54 +27,57 @@ func BootDesktopLib(workspace, port, lang, wd string) int {
 	initMime()
 	initHttpClient()
 
-	// Set parameters directly (like BootMobile)
 	if wd != "" {
-		WorkingDir = wd
+		absPath, err := filepath.Abs(wd)
+		if err != nil {
+			logging.LogErrorf("resolve wd [%s] failed: %s", wd, err)
+			return logging.ExitCodeInitWorkspaceErr
+		}
+		WorkingDir = absPath
 	}
 	if lang != "" {
-		Lang = lang
+		Lang = LangToBCP47(lang)
 	}
 	ServerPort = port
 	Mode = "prod"
-	Container = ContainerCShared
-
-	msStoreFilePath := filepath.Join(WorkingDir, "ms-store")
-	ISMicrosoftStore = gulu.File.IsExist(msStoreFilePath)
+	InProcess = true
+	AttachUI = false
+	Container = ContainerStd
 
 	UserAgent = UserAgent + " " + Container + "/" + runtime.GOOS
 	httpclient.SetUserAgent(UserAgent)
 
-	// Initialize workspace (same as initWorkspaceDir but returns error)
 	if code := initWorkspaceDirLib(workspace); code != 0 {
 		return code
 	}
-
-	LogPath = filepath.Join(TempDir, "siyuan.log")
-	logging.SetLogPath(LogPath)
-
-	// Try to lock workspace (same as tryLockWorkspace but returns error)
-	if code := tryLockWorkspaceLib(); code != 0 {
-		return code
-	}
-
-	AppearancePath = filepath.Join(ConfDir, "appearance")
-	ThemesPath = filepath.Join(AppearancePath, "themes")
-	IconsPath = filepath.Join(AppearancePath, "icons")
-
-	// Create standard directories (conf, data, temp, etc.)
 	if code := initPathDirLib(); code != 0 {
 		return code
 	}
 
+	AppearancePath = filepath.Join(ConfDir, "appearance")
+	ThemesPath = filepath.Join(DataDir, "themes")
+	IconsPath = filepath.Join(DataDir, "icons")
+	LogPath = filepath.Join(TempDir, "siyuan.log")
+
+	msStoreFilePath := filepath.Join(WorkingDir, "ms-store")
+	ISMicrosoftStore = gulu.File.IsExist(msStoreFilePath)
+
+	logging.SetLogPath(LogPath)
+
+	if code := tryLockWorkspaceLib(); code != 0 {
+		return code
+	}
+	if code := clearWorkspaceStartupTempLib(); code != 0 {
+		return code
+	}
+
 	bootBanner := figure.NewColorFigure("SiYuan", "isometric3", "green", true)
-	logging.LogInfof("\n" + bootBanner.String())
+	logging.LogInfo("\n" + bootBanner.String())
 	logBootInfo()
 
 	return 0
 }
 
-// initWorkspaceDirLib is like initWorkspaceDir but returns error code
-// instead of calling os.Exit.
 func initWorkspaceDirLib(workspaceArg string) int {
 	userHomeConfDir := filepath.Join(HomeDir, ".config", "siyuan")
 	workspaceConf := filepath.Join(userHomeConfDir, "workspace.json")
@@ -105,12 +90,7 @@ func initWorkspaceDirLib(workspaceArg string) int {
 		}
 	}
 
-	defaultWorkspaceDir := filepath.Join(HomeDir, "SiYuan")
-	if gulu.OS.IsWindows() {
-		if userProfile := os.Getenv("USERPROFILE"); "" != userProfile {
-			defaultWorkspaceDir = filepath.Join(userProfile, "SiYuan")
-		}
-	}
+	defaultWorkspaceDir := defaultWorkspacePath(HomeDir, runtime.GOOS, os.Getenv("USERPROFILE"), homeDirOverridden)
 
 	var workspacePaths []string
 	if !gulu.File.IsExist(workspaceConf) {
@@ -127,6 +107,7 @@ func initWorkspaceDirLib(workspaceArg string) int {
 	if "" != workspaceArg {
 		WorkspaceDir = workspaceArg
 	}
+	WorkspaceDir = filepath.Clean(WorkspaceDir)
 
 	if !gulu.File.IsDir(WorkspaceDir) {
 		logging.LogWarnf("use the default workspace [%s] since the specified workspace [%s] is not a dir", defaultWorkspaceDir, WorkspaceDir)
@@ -149,13 +130,12 @@ func initWorkspaceDirLib(workspaceArg string) int {
 	RepoDir = filepath.Join(WorkspaceDir, "repo")
 	HistoryDir = filepath.Join(WorkspaceDir, "history")
 	TempDir = filepath.Join(WorkspaceDir, "temp")
+	QueueDir = filepath.Join(TempDir, "queue")
 	osTmpDir := filepath.Join(TempDir, "os")
-	os.RemoveAll(osTmpDir)
 	if err := os.MkdirAll(osTmpDir, 0755); err != nil {
 		logging.LogErrorf("create os tmp dir [%s] failed: %s", osTmpDir, err)
 		return logging.ExitCodeInitWorkspaceErr
 	}
-	os.RemoveAll(filepath.Join(TempDir, "repo"))
 	os.Setenv("TMPDIR", osTmpDir)
 	os.Setenv("TEMP", osTmpDir)
 	os.Setenv("TMP", osTmpDir)
@@ -169,7 +149,18 @@ func initWorkspaceDirLib(workspaceArg string) int {
 	return 0
 }
 
-// tryLockWorkspaceLib is like tryLockWorkspace but returns error code.
+func clearWorkspaceStartupTempLib() int {
+	for _, dir := range []string{"os", "repo", "export", "clipboard"} {
+		os.RemoveAll(filepath.Join(TempDir, dir))
+	}
+	osTmpDir := filepath.Join(TempDir, "os")
+	if err := os.MkdirAll(osTmpDir, 0755); err != nil {
+		logging.LogErrorf("create os tmp dir [%s] failed: %s", osTmpDir, err)
+		return logging.ExitCodeInitWorkspaceErr
+	}
+	return 0
+}
+
 func tryLockWorkspaceLib() int {
 	WorkspaceLock = flock.New(filepath.Join(WorkspaceDir, ".lock"))
 	ok, err := WorkspaceLock.TryLock()
@@ -184,7 +175,6 @@ func tryLockWorkspaceLib() int {
 	return logging.ExitCodeWorkspaceLocked
 }
 
-// initPathDirLib is like initPathDir but returns error code.
 func initPathDirLib() int {
 	dirs := []struct {
 		path string
@@ -199,6 +189,8 @@ func initPathDirLib() int {
 		{filepath.Join(DataDir, "plugins"), "data/plugins"},
 		{filepath.Join(DataDir, "emojis"), "data/emojis"},
 		{filepath.Join(DataDir, "public"), "data/public"},
+		{filepath.Join(DataDir, "themes"), "data/themes"},
+		{filepath.Join(DataDir, "icons"), "data/icons"},
 	}
 
 	for _, d := range dirs {
@@ -210,8 +202,7 @@ func initPathDirLib() int {
 	return 0
 }
 
-// CheckPortAvailable tests if a port can be bound. Used by c-shared
-// callers to pre-validate port before starting the HTTP server.
+// CheckPortAvailable 在启动 HTTP 服务前探测端口是否可用。
 func CheckPortAvailable(port string) bool {
 	ln, err := net.Listen("tcp", LocalHost+":"+port)
 	if err != nil {

@@ -1,37 +1,53 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/88250/gulu"
 	"github.com/gin-gonic/gin"
 	"github.com/siyuan-note/logging"
+	"github.com/siyuan-note/siyuan/kernel/apicontract"
+	"github.com/siyuan-note/siyuan/kernel/chatgpt"
 	"github.com/siyuan-note/siyuan/kernel/conf"
 	mcpclient "github.com/siyuan-note/siyuan/kernel/mcp/client"
 	"github.com/siyuan-note/siyuan/kernel/model"
 	"github.com/siyuan-note/siyuan/kernel/util"
 )
 
-func resolveAIProvider(arg map[string]any) (*conf.Provider, error) {
-	if providerConfig, ok := arg["providerConfig"]; ok && providerConfig != nil {
+type aiEditorChatReq struct {
+	TaskID  string                  `json:"taskID"`
+	IDs     []string                `json:"ids"`
+	Input   string                  `json:"input"`
+	Action  string                  `json:"action"`
+	History []model.AIEditorMessage `json:"history"`
+}
+
+func validateAIProviderHeaders(ai *conf.AI) error {
+	if ai != nil {
+		for _, provider := range ai.Providers {
+			if provider != nil {
+				if err := util.ValidateAIProviderHeaders(provider.Headers); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func resolveAIProvider(request apicontract.AIProviderRequest) (*conf.Provider, error) {
+	if err := request.ProviderError(); err != nil {
+		return nil, err
+	}
+	if providerConfig := request.ProviderConfig; providerConfig != nil {
 		data, err := gulu.JSON.MarshalJSON(providerConfig)
 		if err != nil {
 			return nil, err
@@ -43,6 +59,9 @@ func resolveAIProvider(arg map[string]any) (*conf.Provider, error) {
 		if strings.TrimSpace(provider.BaseURL) == "" {
 			return nil, errors.New("provider base URL is required")
 		}
+		if err = util.ValidateAIProviderHeaders(provider.Headers); err != nil {
+			return nil, err
+		}
 		ai := &conf.AI{Providers: []*conf.Provider{provider}}
 		ai.Normalize()
 		if len(ai.Providers) != 1 {
@@ -51,8 +70,8 @@ func resolveAIProvider(arg map[string]any) (*conf.Provider, error) {
 		return ai.Providers[0], nil
 	}
 
-	providerID, _ := arg["provider"].(string)
-	for _, provider := range model.Conf.AI.Providers {
+	providerID := request.Provider
+	for _, provider := range model.Conf.AI.Load().Providers {
 		if provider != nil && provider.ID == providerID {
 			return provider, nil
 		}
@@ -60,166 +79,245 @@ func resolveAIProvider(arg map[string]any) (*conf.Provider, error) {
 	return nil, errors.New("provider not found")
 }
 
-func chatGPT(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+var chatGPT = contractHandler(apicontract.AIChatGPT, chatGPTContract)
 
-	arg, ok := util.JsonArg(c, ret)
-	if !ok {
-		return
-	}
+func chatGPTContract(c *gin.Context, req apicontract.AIMessageRequest) apicontract.Response[string] {
 
-	var msg string
-	if !util.ParseJsonArgs(arg, ret, util.BindJsonArg("msg", &msg, true, true)) {
-		return
-	}
-	ret.Data = model.ChatGPT(msg)
+	return apicontract.Success(model.ChatGPT(req.Msg))
 }
 
-func chatGPTWithAction(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+var chatGPTWithAction = contractHandler(apicontract.AIChatGPTWithAction, chatGPTWithActionContract)
 
-	arg, ok := util.JsonArg(c, ret)
-	if !ok {
-		return
-	}
+func chatGPTWithActionContract(c *gin.Context, req apicontract.AIActionRequest) apicontract.Response[string] {
 
-	idsArg := arg["ids"].([]any)
-	var ids []string
-	for _, id := range idsArg {
-		ids = append(ids, id.(string))
+	return apicontract.Success(model.ChatGPTWithAction(req.IDs, req.Action))
+}
+
+var aiEditorChat = contractHandler(apicontract.AIEditorChat, aiEditorChatContract, aiProviderAdmission)
+
+func aiEditorChatContract(c *gin.Context, request apicontract.AIEditorChatRequest) apicontract.Response[apicontract.Null] {
+	req := aiEditorRequest(request)
+	stream, err := model.NewAIEditorChatStream(c.Request.Context(), req.IDs, req.Input, req.Action, req.History)
+	if nil != err {
+		return apicontract.Failure[apicontract.Null](-1, err.Error())
 	}
-	action := arg["action"].(string)
-	ret.Data = model.ChatGPTWithAction(ids, action)
+	return apicontract.StreamSSE[apicontract.Null](func(_ http.ResponseWriter, _ *http.Request) {
+		defer stream.Close()
+
+		flusher, ok := c.Writer.(http.Flusher)
+		if !ok {
+			return
+		}
+		c.Header("Content-Type", "text/event-stream")
+		c.Header("Cache-Control", "no-cache")
+		c.Header("Connection", "keep-alive")
+		c.Header("X-Accel-Buffering", "no")
+		if err = writeSSEEvent(c, "start", apicontract.AISSEStart{TaskID: req.TaskID}); nil != err {
+			return
+		}
+		flusher.Flush()
+
+		finishReason := "stop"
+		for {
+			response, recvErr := stream.Recv()
+			if nil != recvErr {
+				if model.IsAIEditorStreamDone(recvErr) {
+					writeSSEEvent(c, "done", apicontract.AISSEFinish{FinishReason: finishReason})
+					flusher.Flush()
+					return
+				}
+				if nil != c.Request.Context().Err() {
+					return
+				}
+				logging.LogErrorf("receive AI editor stream failed: %s", recvErr)
+				writeSSEError(c, recvErr.Error())
+				flusher.Flush()
+				return
+			}
+			for _, choice := range response.Choices {
+				if "" != choice.Delta.ReasoningContent {
+					if err = writeSSEEvent(c, "reasoning", apicontract.AISSEToken{Token: choice.Delta.ReasoningContent}); nil != err {
+						return
+					}
+					flusher.Flush()
+				}
+				if "" != choice.Delta.Content {
+					if err = writeSSEEvent(c, "content", apicontract.AISSEToken{Token: choice.Delta.Content}); nil != err {
+						return
+					}
+					flusher.Flush()
+				}
+				if "" == choice.FinishReason {
+					continue
+				}
+				finishReason = string(choice.FinishReason)
+				if "length" == finishReason {
+					writeSSEEvent(c, "truncated", apicontract.AISSEMessage{Message: model.Conf.Language(297)})
+					flusher.Flush()
+				}
+				writeSSEEvent(c, "done", apicontract.AISSEFinish{FinishReason: finishReason})
+				flusher.Flush()
+				return
+			}
+		}
+	})
+}
+
+var lsAIEditorActions = contractHandler(apicontract.AIListEditorActions, lsAIEditorActionsContract)
+
+func lsAIEditorActionsContract(c *gin.Context, req apicontract.EmptyRequest) apicontract.Response[[]*apicontract.AIEditorAction] {
+
+	actions, err := model.GetAIEditorActions()
+	if err != nil {
+		return apicontract.Failure[[]*apicontract.AIEditorAction](-1, err.Error())
+	}
+	return apicontract.Success(aiEditorActionsContract(actions))
+}
+
+var saveAIEditorAction = contractHandler(apicontract.AISaveEditorAction, saveAIEditorActionContract)
+
+func saveAIEditorActionContract(c *gin.Context, req apicontract.AIEditorActionSaveRequest) apicontract.Response[*apicontract.AIEditorAction] {
+
+	saved, err := model.SaveAIEditorAction(&model.AIEditorAction{
+		ID:     req.ID,
+		Name:   req.Name,
+		Action: req.Action,
+	})
+	if err != nil {
+		return apicontract.Failure[*apicontract.AIEditorAction](-1, err.Error())
+	}
+	return apicontract.Success((*apicontract.AIEditorAction)(saved))
+}
+
+var removeAIEditorAction = contractHandler(apicontract.AIRemoveEditorAction, removeAIEditorActionContract)
+
+func removeAIEditorActionContract(c *gin.Context, req apicontract.AIEditorActionIDRequest) apicontract.Response[apicontract.Null] {
+	if err := model.RemoveAIEditorAction(req.ID); err != nil {
+		return apicontract.Failure[apicontract.Null](-1, err.Error())
+	}
+	return apicontract.Success(apicontract.Null{})
 }
 
 // testModel 测试 AI 模型可用性。使用已保存的 Provider 或详情页草稿中的 baseURL/APIKey/超时，
-// 校验指定模型是否可用。优先通过 ListModels 拉取可用模型清单精确匹配，
-// 若该端点不可用则回退到极简 Chat Completion 验证连通性。
-func testModel(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+// 校验指定模型是否可用。先通过 ListModels 拉取可用模型清单，再按 Provider 协议发送极简生成请求。
+var testModel = contractHandler(apicontract.AITestModel, testModelContract)
 
-	arg, ok := util.JsonArg(c, ret)
-	if !ok {
-		return
-	}
-
-	var modelName string
-	if !util.ParseJsonArgs(arg, ret,
-		util.BindJsonArg("model", &modelName, true, true),
-	) {
-		return
-	}
+func testModelContract(c *gin.Context, req apicontract.AIModelRequest) apicontract.Response[apicontract.AIModelTestData] {
 
 	// 支持已保存的 Provider ID 和详情页尚未保存的草稿配置。
-	provider, err := resolveAIProvider(arg)
+	provider, err := resolveAIProvider(req.AIProviderRequest)
 	if err != nil {
-		ret.Code = -1
-		ret.Msg = err.Error()
-		return
+		return apicontract.Failure[apicontract.AIModelTestData](-1, err.Error())
 	}
 
-	available, matched, err := util.TestModel(provider.APIKey, provider.BaseURL, modelName, provider.RequestTimeout)
+	var available []string
+	var matched bool
+	if provider.AuthType == "chatgpt" {
+		available, matched, err = testChatGPTModel(c.Request.Context(), provider, req.Model)
+	} else {
+		available, matched, err = util.TestModel(
+			provider.APIKey, provider.BaseURL, provider.Protocol, req.Model, provider.RequestTimeout, model.ResolveAIProviderHeaders(provider))
+	}
 	// 可用模型清单裁剪到前 50 条，避免响应体过大
 	if 50 < len(available) {
 		available = available[:50]
 	}
 	// 测试结果统一以 code=0 返回，具体成败信息放在 data 中由前端控制展示，
 	// 避免触发统一的错误消息提示导致按钮状态无法恢复
-	result := map[string]any{
-		"available": available,
-		"matched":   matched,
-	}
+	result := apicontract.AIModelTestData{Available: available, Matched: matched}
 	if nil != err {
-		result["msg"] = err.Error()
-		logging.LogErrorf("test model [%s] failed: %s", modelName, err)
+		message := err.Error()
+		result.Msg = &message
+		logging.LogErrorf("test model [%s] failed: %s", req.Model, err)
 	} else if !matched {
-		result["msg"] = "model not in available list"
+		message := "model not in available list"
+		result.Msg = &message
 	}
-	ret.Data = result
+	return apicontract.Success(result)
 }
 
 // testEmbeddingModel 测试嵌入模型可用性。直接读取已保存的 Embedding 配置，
 // 发送极简文本 embedding 请求验证连通性与鉴权，并返回向量维度便于核对。
-func testEmbeddingModel(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+var testEmbeddingModel = contractHandler(apicontract.AITestEmbeddingModel, testEmbeddingModelContract)
 
-	embedding := model.Conf.AI.Embedding
+func testEmbeddingModelContract(c *gin.Context, req apicontract.EmptyRequest) apicontract.Response[apicontract.AIEmbeddingTestData] {
+
+	embedding := model.Conf.AI.Load().Embedding
 	if nil == embedding || "" == embedding.APIKey || "" == embedding.BaseURL || "" == embedding.Name {
 		// 配置不完整时统一以 code=0 返回，把信息放在 data 中由前端控制展示，
 		// 避免返回 code=-1 触发统一错误提示且令前端按钮无法恢复
-		ret.Data = map[string]any{
-			"matched": false,
-			"msg":     "embedding model not configured",
-		}
-		return
+		message := "embedding model not configured"
+		return apicontract.Success(apicontract.AIEmbeddingTestData{Matched: false, Msg: &message})
 	}
 
 	matched, dims, err := util.TestEmbeddingModel(embedding.APIKey, embedding.BaseURL, embedding.Name, embedding.Dimensions, embedding.Timeout)
 	// 测试结果统一以 code=0 返回，具体成败信息放在 data 中由前端控制展示，
 	// 避免触发统一的错误消息提示导致按钮状态无法恢复
-	result := map[string]any{
-		"matched":    matched,
-		"dimensions": dims,
-	}
+	result := apicontract.AIEmbeddingTestData{Matched: matched, Dimensions: &dims}
 	if nil != err {
-		result["msg"] = err.Error()
+		message := err.Error()
+		result.Msg = &message
 		logging.LogErrorf("test embedding model [%s] failed: %s", embedding.Name, err)
 	}
-	ret.Data = result
+	return apicontract.Success(result)
 }
 
 // testRerankModel 测试重排模型可用性。直接读取已保存的 Rerank 配置，
 // 用极简 query+documents 发一次重排请求验证连通性与鉴权。
-func testRerankModel(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+var testRerankModel = contractHandler(apicontract.AITestRerankModel, testRerankModelContract)
 
-	rerank := model.Conf.AI.Rerank
+func testRerankModelContract(c *gin.Context, req apicontract.EmptyRequest) apicontract.Response[apicontract.AIRerankTestData] {
+
+	rerank := model.Conf.AI.Load().Rerank
 	if nil == rerank || "" == rerank.APIKey || "" == rerank.Endpoint || "" == rerank.Name {
 		// 配置不完整时统一以 code=0 返回，把信息放在 data 中由前端控制展示，
 		// 避免返回 code=-1 触发统一错误提示且令前端按钮无法恢复
-		ret.Data = map[string]any{
-			"matched": false,
-			"msg":     "rerank model not configured",
-		}
-		return
+		message := "rerank model not configured"
+		return apicontract.Success(apicontract.AIRerankTestData{Matched: false, Msg: &message})
 	}
 
-	matched, err := util.TestRerankModel(rerank.APIKey, rerank.Endpoint, rerank.Name, rerank.Timeout)
+	matched, err := util.TestRerankModel(util.RerankOptions{
+		APIKey:        rerank.APIKey,
+		Endpoint:      rerank.Endpoint,
+		Model:         rerank.Name,
+		RequestFormat: rerank.RequestFormat,
+		Timeout:       rerank.Timeout,
+	})
 	// 测试结果统一以 code=0 返回，具体成败信息放在 data 中由前端控制展示
-	result := map[string]any{
-		"matched": matched,
-	}
+	result := apicontract.AIRerankTestData{Matched: matched}
 	if nil != err {
-		result["msg"] = err.Error()
+		message := err.Error()
+		result.Msg = &message
 		logging.LogErrorf("test rerank model [%s] failed: %s", rerank.Name, err)
 	}
-	ret.Data = result
+	return apicontract.Success(result)
 }
 
 // listModels 拉取指定 Provider 的可用模型清单（GET /v1/models），用于填充前端模型名称下拉框。
 // 不支持该端点的服务会返回错误，由前端回退为手动输入。
-func listModels(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+var listModels = contractHandler(apicontract.AIListModels, listModelsContract)
 
-	arg, ok := util.JsonArg(c, ret)
-	if !ok {
-		return
-	}
+func listModelsContract(c *gin.Context, req apicontract.AIProviderRequest) apicontract.Response[apicontract.AIModelsData] {
 
-	provider, err := resolveAIProvider(arg)
+	provider, err := resolveAIProvider(req)
 	if err != nil {
-		ret.Code = -1
-		ret.Msg = err.Error()
-		return
+		return apicontract.Failure[apicontract.AIModelsData](-1, err.Error())
 	}
 
-	metadata, err := util.ListAvailableModelsWithContext(provider.APIKey, provider.BaseURL, provider.RequestTimeout)
+	var metadata []util.AvailableModel
+	displayNames := map[string]string{}
+	if provider.AuthType == "chatgpt" {
+		var catalog []chatgpt.Model
+		ctx, cancel := context.WithTimeout(c.Request.Context(), time.Duration(provider.RequestTimeout)*time.Second)
+		defer cancel()
+		catalog, err = util.ChatGPTService().Models(ctx, provider.AccountID)
+		for _, item := range catalog {
+			metadata = append(metadata, util.AvailableModel{ID: item.ID})
+			displayNames[item.ID] = item.DisplayName
+		}
+	} else {
+		metadata, err = util.ListProviderModels(provider.APIKey, provider.BaseURL, provider.Protocol, provider.RequestTimeout, model.ResolveAIProviderHeaders(provider))
+	}
 	models := make([]string, 0, len(metadata))
 	contextLengths := map[string]int{}
 	for _, item := range metadata {
@@ -230,105 +328,105 @@ func listModels(c *gin.Context) {
 			}
 		}
 	}
-	result := map[string]any{
-		"models":         models,
-		"contextLengths": contextLengths,
-	}
+	result := apicontract.AIModelsData{Models: models, ContextLengths: contextLengths, DisplayNames: displayNames}
 	if nil != err {
-		result["msg"] = err.Error()
+		message := err.Error()
+		result.Msg = &message
 	}
-	ret.Data = result
+	return apicontract.Success(result)
 }
 
 // embeddingStat 返回嵌入索引进度统计，供设置页展示进度条与各项计数。
-func embeddingStat(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
-	ret.Data = model.GetEmbeddingStat()
+var embeddingStat = contractHandler(apicontract.AIGetEmbeddingStat, embeddingStatContract)
+
+func embeddingStatContract(c *gin.Context, req apicontract.EmptyRequest) apicontract.Response[*apicontract.AIEmbeddingStat] {
+	return apicontract.Success((*apicontract.AIEmbeddingStat)(model.GetEmbeddingStat()))
 }
 
 // mcpStatus 返回所有已配置 MCP server 的连接状态，供设置页轮询展示。
-func mcpStatus(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
-	ret.Data = mcpclient.MCPStatus()
+var mcpStatus = contractHandler(apicontract.AIGetMCPStatus, mcpStatusContract)
+
+func mcpStatusContract(c *gin.Context, req apicontract.EmptyRequest) apicontract.Response[[]apicontract.AIMCPStatus] {
+	return apicontract.Success(aiMCPStatusContract(mcpclient.MCPStatus()))
 }
 
-func mcpOAuthAuthorize(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+// mcpEnvironmentVariables 返回当前内核拥有的环境变量名称，供 stdio MCP 设置选择。
+var mcpEnvironmentVariables = contractHandler(apicontract.AIGetMCPEnvironment, mcpEnvironmentVariablesContract)
 
-	arg, ok := util.JsonArg(c, ret)
-	if !ok {
-		return
+func mcpEnvironmentVariablesContract(c *gin.Context, req apicontract.EmptyRequest) apicontract.Response[apicontract.AIMCPEnvironmentData] {
+	names, defaults := mcpclient.MCPEnvironmentVariables()
+	return apicontract.Success(apicontract.AIMCPEnvironmentData{Names: names, Defaults: defaults})
+}
+
+var mcpOAuthAuthorize = contractHandler(apicontract.AIMCPOAuthAuthorize, mcpOAuthAuthorizeContract)
+
+func mcpOAuthAuthorizeContract(c *gin.Context, req apicontract.AIMCPIDRequest) apicontract.Response[apicontract.Null] {
+	confAISnapshot := model.Conf.LoadAI()
+
+	serverID := req.ID
+	if confAISnapshot == nil || confAISnapshot.MCP == nil {
+		return apicontract.Failure[apicontract.Null](-1, "MCP server not found")
 	}
-	serverID, _ := arg["id"].(string)
-	if model.Conf.AI == nil || model.Conf.AI.MCP == nil {
-		ret.Code = -1
-		ret.Msg = "MCP server not found"
-		return
-	}
-	for _, server := range model.Conf.AI.MCP.Servers {
+	for _, server := range confAISnapshot.MCP.Servers {
 		if server.ID == serverID && server.Enabled && server.Type == "http" {
-			mcpclient.ReconnectMCPAsync(model.Conf.AI.MCP.Servers, []string{serverID}, []string{serverID})
-			return
+			mcpclient.ReconnectMCPAsync(confAISnapshot.MCP.Servers, []string{serverID}, []string{serverID})
+			return apicontract.SuccessWithoutData[apicontract.Null]()
 		}
 	}
-	ret.Code = -1
-	ret.Msg = "MCP server not found"
+	return apicontract.Failure[apicontract.Null](-1, "MCP server not found")
 }
 
-func mcpOAuthDisconnect(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+var mcpOAuthDisconnect = contractHandler(apicontract.AIMCPOAuthDisconnect, mcpOAuthDisconnectContract)
 
-	arg, ok := util.JsonArg(c, ret)
-	if !ok {
-		return
+func mcpOAuthDisconnectContract(c *gin.Context, req apicontract.AIMCPIDRequest) apicontract.Response[apicontract.Null] {
+	confAISnapshot := model.Conf.LoadAI()
+
+	serverID := req.ID
+	// 断开失败不阻止重连，但要在重连后把错误报给调用方。
+	disconnectErr := mcpclient.DisconnectMCPOAuth(serverID)
+	if confAISnapshot != nil && confAISnapshot.MCP != nil {
+		mcpclient.ReconnectMCPAsync(confAISnapshot.MCP.Servers, []string{serverID}, nil)
 	}
-	serverID, _ := arg["id"].(string)
-	if err := mcpclient.DisconnectMCPOAuth(serverID); err != nil {
-		ret.Code = -1
-		ret.Msg = err.Error()
+	if disconnectErr != nil {
+		return apicontract.Failure[apicontract.Null](-1, disconnectErr.Error())
 	}
-	if model.Conf.AI != nil && model.Conf.AI.MCP != nil {
-		mcpclient.ReconnectMCPAsync(model.Conf.AI.MCP.Servers, []string{serverID}, nil)
-	}
+	return apicontract.SuccessWithoutData[apicontract.Null]()
 }
 
-func mcpOAuthCallback(c *gin.Context) {
+var mcpOAuthCallback = contractHandler(apicontract.AIMCPOAuthCallback, mcpOAuthCallbackContract)
+
+func mcpOAuthCallbackContract(c *gin.Context, request apicontract.EmptyRequest) apicontract.Response[apicontract.BinaryContent] {
 	if !model.IsLocalRequest(c) {
-		c.String(http.StatusForbidden, "Forbidden")
-		return
+		return apicontract.SuccessHTTPContent(http.StatusForbidden, "text/plain; charset=utf-8", []byte("Forbidden"))
 	}
 	c.Header("Cache-Control", "no-store")
 	c.Header("Referrer-Policy", "no-referrer")
 	c.Header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'")
 	callbackError := c.Query("error")
 	if err := mcpclient.CompleteMCPOAuth(c.Param("flowID"), c.Query("code"), c.Query("state"), callbackError, c.Query("iss")); err != nil {
-		c.Data(http.StatusBadRequest, "text/html; charset=utf-8", util.RenderOAuthCallbackPage(
+		return apicontract.SuccessHTTPContent(http.StatusBadRequest, "text/html; charset=utf-8", util.RenderOAuthCallbackPage(
 			util.LangToBCP47(model.Conf.Lang), model.Conf.Language(327), model.Conf.Language(328), false))
-		return
 	}
 	if callbackError != "" {
-		c.Data(http.StatusOK, "text/html; charset=utf-8", util.RenderOAuthCallbackPage(
+		return apicontract.SuccessHTTPContent(http.StatusOK, "text/html; charset=utf-8", util.RenderOAuthCallbackPage(
 			util.LangToBCP47(model.Conf.Lang), model.Conf.Language(327), model.Conf.Language(328), false))
-		return
 	}
-	c.Data(http.StatusOK, "text/html; charset=utf-8", util.RenderOAuthCallbackPage(
+	return apicontract.SuccessHTTPContent(http.StatusOK, "text/html; charset=utf-8", util.RenderOAuthCallbackPage(
 		util.LangToBCP47(model.Conf.Lang), model.Conf.Language(325), model.Conf.Language(326), true))
 }
 
 // reindexEmbedding 清空嵌入向量表并触发后台索引器重新计算所有块，异步执行。
-func reindexEmbedding(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+var reindexEmbedding = contractHandler(apicontract.AIReindexEmbedding, reindexEmbeddingContract)
+
+func reindexEmbeddingContract(c *gin.Context, req apicontract.EmptyRequest) apicontract.Response[apicontract.Null] {
 	model.ReindexEmbedding()
+	return apicontract.SuccessWithoutData[apicontract.Null]()
 }
 
 // retryFailedEmbedding 删除失败块的行，使其立即回到主循环重嵌，已成功向量不动，异步执行。
-func retryFailedEmbedding(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+var retryFailedEmbedding = contractHandler(apicontract.AIRetryFailedEmbedding, retryFailedEmbeddingContract)
+
+func retryFailedEmbeddingContract(c *gin.Context, req apicontract.EmptyRequest) apicontract.Response[apicontract.Null] {
 	model.RetryFailedEmbedding()
+	return apicontract.SuccessWithoutData[apicontract.Null]()
 }

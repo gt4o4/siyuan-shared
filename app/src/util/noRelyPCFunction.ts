@@ -1,6 +1,5 @@
-import {Dialog} from "../dialog";
-import {fetchPost} from "./fetch";
-import {isMobile} from "./functions";
+import {mobileInputDialog as openInputDialog} from "../dialog/mobileInputDialog";
+import {fetchPost, fetchSyncPost} from "./fetch";
 import {Constants} from "../constants";
 /// #if !MOBILE
 import {getDockByType} from "../layout/tabUtil";
@@ -9,8 +8,9 @@ import {Tag} from "../layout/dock/Tag";
 import {upDownHint} from "./upDownHint";
 import {escapeHtml} from "./escape";
 import {hasClosestByClassName} from "../protyle/util/hasClosest";
-import {isNotCtrl} from "../protyle/util/compatibility";
+import {isNotCtrl, isPhablet} from "../protyle/util/compatibility";
 import {electronUndo} from "../protyle/undo";
+import {isMobile} from "./functions";
 
 export const genTagList = (listElement: Element, k: string) => {
     listElement.classList.remove("fn__none");
@@ -36,27 +36,17 @@ export const genTagList = (listElement: Element, k: string) => {
 
 // 需独立出来，否则移动端引用的时候会引入 pc 端大量无用代码
 export const renameTag = (labelName: string) => {
-    const dialog = new Dialog({
+    const dialog = openInputDialog({
         title: window.siyuan.languages.rename,
-        content: `<div class="b3-dialog__content">
-    <input class="b3-text-field fn__block">
-    <div class="b3-list fn__flex-1 b3-list--background fn__none protyle-hint" style="position: absolute;width: calc(100% - 48px);">
-        <img style="margin: 0 auto;display: block;width: 64px;height: 64px" src="/stage/loading-pure.svg">
-    </div>
-</div>
-<div class="b3-dialog__action">
-    <button class="b3-button b3-button--cancel">${window.siyuan.languages.cancel}</button><div class="fn__space"></div>
-    <button class="b3-button b3-button--text">${window.siyuan.languages.confirm}</button>
-</div>`,
-        width: isMobile() ? "92vw" : "520px",
-    });
-    dialog.element.setAttribute("data-key", Constants.DIALOG_RENAMETAG);
-    const btnsElement = dialog.element.querySelectorAll(".b3-button");
-    btnsElement[0].addEventListener("click", () => {
-        dialog.destroy();
-    });
-    btnsElement[1].addEventListener("click", () => {
-        fetchPost("/api/tag/renameTag", {oldLabel: labelName, newLabel: inputElement.value}, () => {
+        value: labelName,
+        bindInput: false,
+        awaitConfirm: true,
+        extraContent: `<div class="b3-list fn__flex-1 b3-list--background fn__none ${isMobile() ? "tag-rename__suggestions" : "protyle-hint"}"${isMobile() ? "" : ' style="position: absolute;width: calc(100% - 48px);"'}>
+        <div class="fn__flex" style="height:64px;align-items:center;justify-content:center"><span class="b3-loading" aria-hidden="true"></span></div>
+    </div>`,
+        onConfirm: async (value, dialog) => {
+            const response = await fetchSyncPost("/api/tag/renameTag", {oldLabel: labelName, newLabel: value});
+            if (response.code !== 0) return false;
             dialog.destroy();
             /// #if MOBILE
             window.siyuan.mobile.docks.tag.update();
@@ -64,12 +54,12 @@ export const renameTag = (labelName: string) => {
             const dockTag = getDockByType("tag");
             (dockTag.data.tag as Tag).update();
             /// #endif
-        });
+            return true;
+        },
     });
-    const inputElement = dialog.element.querySelector("input");
-    inputElement.value = labelName;
-    inputElement.focus();
-    inputElement.select();
+    dialog.element.setAttribute("data-key", Constants.DIALOG_RENAMETAG);
+    const inputElement = dialog.element.querySelector<HTMLInputElement>("[data-dialog-input]");
+    const confirmElement = dialog.element.querySelector<HTMLButtonElement>("[data-input-confirm]");
     const listElement = dialog.element.querySelector(".b3-list--background");
     inputElement.addEventListener("keydown", (event: KeyboardEvent) => {
         event.stopPropagation();
@@ -86,7 +76,7 @@ export const renameTag = (labelName: string) => {
             event.preventDefault();
         } else if (!event.shiftKey && isNotCtrl(event) && event.key === "Enter") {
             if (listElement.classList.contains("fn__none")) {
-                (btnsElement[1] as HTMLButtonElement).click();
+                confirmElement.click();
             } else {
                 const currentElement = listElement.querySelector(".b3-list-item--focus") as HTMLElement;
                 inputElement.value = currentElement.dataset.type === "new" ? currentElement.querySelector("mark").textContent.trim() : currentElement.textContent.trim();
@@ -122,8 +112,9 @@ export const checkFold = (id: string, cb: (zoomIn: boolean, action: TProtyleActi
         return;
     }
     fetchPost("/api/block/checkBlockFold", {id}, (foldResponse) => {
+        const action = isPhablet() ? Constants.CB_GET_HL : Constants.CB_GET_FOCUS;
         cb(foldResponse.data.isFolded,
-            foldResponse.data.isFolded ? [Constants.CB_GET_FOCUS, Constants.CB_GET_ALL] : [Constants.CB_GET_FOCUS, Constants.CB_GET_CONTEXT, Constants.CB_GET_ROOTSCROLL],
+            foldResponse.data.isFolded ? [action, Constants.CB_GET_ALL] : [action, Constants.CB_GET_CONTEXT, Constants.CB_GET_ROOTSCROLL],
             foldResponse.data.isRoot);
     });
 };

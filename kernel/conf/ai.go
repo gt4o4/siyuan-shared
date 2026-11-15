@@ -1,24 +1,15 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package conf
 
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"math"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -29,25 +20,90 @@ import (
 )
 
 type AI struct {
+	Memory          *Memory          `json:"memory"`
+	Web             *AIWeb           `json:"web"`
 	MCP             *MCP             `json:"mcp"`
 	Embedding       *Embedding       `json:"embedding"`
 	Rerank          *Rerank          `json:"rerank"`
+	Decision        *Decision        `json:"decision"`
 	Agent           *Agent           `json:"agent"`
 	Editing         *Editing         `json:"editing"`
 	ImageGeneration *ImageGeneration `json:"imageGeneration"`
 	Providers       []*Provider      `json:"providers"`
 }
 
-type Agent struct {
-	ModelID             string  `json:"modelId"`
-	SessionTimeout      int     `json:"sessionTimeout"`
-	StreamIdleTimeout   int     `json:"streamIdleTimeout"`
-	ConfirmTimeout      int     `json:"confirmTimeout"`
-	MaxRetries          int     `json:"maxRetries"`
-	Temperature         float64 `json:"temperature"`
-	MaxCompletionTokens int     `json:"maxCompletionTokens"`
-	MaxToolCallRounds   int     `json:"maxToolCallRounds"`
+// AIWeb 独立配置网页搜索和抓取，DeepSeek 两个接口共用凭证，不跟随对话模型切换。
+type AIWeb struct {
+	SearchProvider string `json:"searchProvider"`
+	FetchProvider  string `json:"fetchProvider"`
+	APIKey         string `json:"apiKey"`
+	ExaAPIKey      string `json:"exaApiKey"`
+	Timeout        int    `json:"timeout"`
 }
+
+func (web *AIWeb) Normalize() {
+	web.SearchProvider = strings.TrimSpace(web.SearchProvider)
+	web.FetchProvider = strings.TrimSpace(web.FetchProvider)
+	if web.SearchProvider == "" {
+		web.SearchProvider = "exa"
+	}
+	if web.FetchProvider == "" {
+		web.FetchProvider = "direct"
+	}
+	web.APIKey = strings.TrimSpace(web.APIKey)
+	web.ExaAPIKey = strings.TrimSpace(web.ExaAPIKey)
+	web.Timeout = util.NormalizeWebTimeout(web.Timeout)
+}
+
+// DefaultAgentConfirmTimeout 是智能体确认超时时间的默认值（秒），也用于智能体提问的等待时长。
+const DefaultAgentConfirmTimeout = 600
+
+// DefaultAgentSessionTimeout 是智能体会话总超时时间的默认值（秒）。
+const DefaultAgentSessionTimeout = 1800
+
+// MaxAgentSessionTimeout 是智能体会话总超时时间的上限（秒）。
+const MaxAgentSessionTimeout = 3600
+
+type Agent struct {
+	StreamingMarkdown   bool              `json:"streamingMarkdown"` // 智能体流式输出时渲染 Markdown
+	ModelID             string            `json:"modelId"`
+	SessionTimeout      int               `json:"sessionTimeout"`
+	StreamIdleTimeout   int               `json:"streamIdleTimeout"`
+	ConfirmTimeout      int               `json:"confirmTimeout"`
+	MaxRetries          int               `json:"maxRetries"`
+	Temperature         float64           `json:"temperature"`
+	MaxCompletionTokens int               `json:"maxCompletionTokens"`
+	MaxToolCallRounds   int               `json:"maxToolCallRounds"`
+	CapabilityPolicy    *CapabilityPolicy `json:"capabilityPolicy"`
+	ApprovalPolicy      *ApprovalPolicy   `json:"approvalPolicy"`
+	Skills              *AgentSkills      `json:"skills"`
+}
+
+type AgentSkills struct {
+	UserEnabled     []string `json:"userEnabled"`
+	BuiltinDisabled []string `json:"builtinDisabled"`
+}
+
+type CapabilityPolicy struct {
+	Default   string            `json:"default"`
+	Overrides map[string]string `json:"overrides"`
+}
+
+type ApprovalPolicy struct {
+	Default   string                         `json:"default"`
+	Overrides map[string]*CapabilityApproval `json:"overrides"`
+}
+
+type CapabilityApproval struct {
+	Default string            `json:"default"`
+	Actions map[string]string `json:"actions"`
+}
+
+const (
+	ApprovalDecisionRisk    = "risk"
+	ApprovalDecisionConfirm = "confirm"
+	ApprovalDecisionAllow   = "allow"
+)
 
 // Editing holds behavior parameters used by the in-editor chat scenario. They
 // are kept here (instead of on Model) to mirror Agent and to decouple scenario
@@ -68,38 +124,166 @@ type ImageGeneration struct {
 	OutputFormat   string `json:"outputFormat"`
 }
 
+// 嵌入索引调度的默认值和资源上限，与设置控件范围保持一致。
+const (
+	DefaultEmbeddingConcurrency = 8
+	MaxEmbeddingConcurrency     = 64
+	DefaultEmbeddingBatchSize   = 10
+	MaxEmbeddingBatchSize       = 128
+)
+
 type Embedding struct {
-	ID         string `json:"id"`
-	Enabled    bool   `json:"enabled"`
-	APIKey     string `json:"apiKey"`
-	BaseURL    string `json:"baseURL"`
-	Name       string `json:"name"`
-	Timeout    int    `json:"timeout"`
-	Dimensions int    `json:"dimensions"` // 输出向量维度，仅 text-embedding-3 及以上模型支持；0 表示用模型默认值（不传该参数）
+	ID          string `json:"id"`
+	Enabled     bool   `json:"enabled"`
+	APIKey      string `json:"apiKey"`
+	BaseURL     string `json:"baseURL"`
+	Name        string `json:"name"`
+	Timeout     int    `json:"timeout"`
+	Dimensions  int    `json:"dimensions"` // 输出向量维度，仅 text-embedding-3 及以上模型支持；0 表示用模型默认值（不传该参数）
+	Concurrency int    `json:"concurrency"`
+	BatchSize   int    `json:"batchSize"`
+}
+
+// Decision 按供应商隔离凭证，平铺字段仅用于兼容旧配置输入。
+type Decision struct {
+	Enabled  bool                        `json:"enabled"`
+	Provider string                      `json:"provider"`
+	Profiles map[string]*DecisionProfile `json:"profiles"`
+	Endpoint string                      `json:"endpoint,omitempty"`
+	APIKey   string                      `json:"apiKey,omitempty"`
+	Name     string                      `json:"name,omitempty"`
+	Timeout  int                         `json:"timeout,omitempty"`
+}
+
+type DecisionProfile struct {
+	Endpoint string `json:"endpoint"`
+	APIKey   string `json:"apiKey"`
+	Name     string `json:"name"`
+	Timeout  int    `json:"timeout"`
+}
+
+func (decision *Decision) ActiveOptions() (util.DecisionOptions, error) {
+	if decision == nil {
+		return util.DecisionOptions{}, fmt.Errorf("decision model not configured")
+	}
+	provider := strings.TrimSpace(decision.Provider)
+	if provider == "" {
+		provider = "typesafe"
+	}
+	if provider != "typesafe" && provider != "openai" {
+		return util.DecisionOptions{}, fmt.Errorf("unknown decision provider")
+	}
+	profile := decision.Profiles[provider]
+	if decision.Profiles == nil && provider == "typesafe" {
+		profile = &DecisionProfile{decision.Endpoint, decision.APIKey, decision.Name, decision.Timeout}
+	}
+	if profile == nil || profile.Endpoint == "" || profile.APIKey == "" || profile.Name == "" {
+		return util.DecisionOptions{}, fmt.Errorf("decision model not configured")
+	}
+	return util.DecisionOptions{Provider: provider, Endpoint: profile.Endpoint, APIKey: profile.APIKey, Model: profile.Name, Timeout: profile.Timeout}, nil
+}
+
+func (decision *Decision) Configured() bool { _, err := decision.ActiveOptions(); return err == nil }
+
+func defaultDecisionProfile(provider string) *DecisionProfile {
+	if provider == "openai" {
+		return &DecisionProfile{Endpoint: "https://api.openai.com/v1/decisions", Name: "gpt-6-luna", Timeout: 30}
+	}
+	return &DecisionProfile{Endpoint: "https://api.typesafe.ai/v1/systemone", Name: "jev-latest", Timeout: 30}
+}
+
+func defaultDecision() *Decision {
+	return &Decision{Provider: "typesafe", Profiles: map[string]*DecisionProfile{"typesafe": defaultDecisionProfile("typesafe"), "openai": defaultDecisionProfile("openai")}}
+}
+
+func (decision *Decision) Normalize() {
+	decision.Provider = strings.TrimSpace(decision.Provider)
+	if decision.Provider == "" {
+		decision.Provider = "typesafe"
+	}
+	if decision.Profiles == nil {
+		decision.Profiles = map[string]*DecisionProfile{"typesafe": {Endpoint: decision.Endpoint, APIKey: decision.APIKey, Name: decision.Name, Timeout: decision.Timeout}}
+	}
+	for _, provider := range []string{"typesafe", "openai"} {
+		profile := decision.Profiles[provider]
+		defaults := defaultDecisionProfile(provider)
+		if profile == nil {
+			profile = defaults
+			decision.Profiles[provider] = profile
+		}
+		profile.Endpoint = strings.TrimSpace(profile.Endpoint)
+		profile.APIKey = strings.TrimSpace(profile.APIKey)
+		profile.Name = strings.TrimSpace(profile.Name)
+		if profile.Endpoint == "" {
+			profile.Endpoint = defaults.Endpoint
+		}
+		if profile.Name == "" {
+			profile.Name = defaults.Name
+		}
+		if profile.Timeout < 1 {
+			profile.Timeout = 30
+		} else if profile.Timeout > 600 {
+			profile.Timeout = 600
+		}
+	}
+	decision.Endpoint, decision.APIKey, decision.Name, decision.Timeout = "", "", "", 0
+}
+
+func (decision *Decision) Clone() *Decision {
+	if decision == nil {
+		return nil
+	}
+	result := *decision
+	if decision.Profiles != nil {
+		result.Profiles = make(map[string]*DecisionProfile, len(decision.Profiles))
+		for id, profile := range decision.Profiles {
+			if profile != nil {
+				copy := *profile
+				result.Profiles[id] = &copy
+			} else {
+				result.Profiles[id] = nil
+			}
+		}
+	}
+	return &result
 }
 
 // Rerank 配置语义搜索结果的重排模型。重排在向量召回后对 query 与候选文档逐对精排，
 // 采用主流重排服务的 /rerank 协议（OpenAI 官方暂无 rerank API）。
 // 各服务商端点路径不一（Jina /v1/rerank、阿里云 /v1/reranks 等），故 Endpoint 为完整端点地址。
 type Rerank struct {
-	ID             string `json:"id"`
-	Enabled        bool   `json:"enabled"`
-	APIKey         string `json:"apiKey"`
-	Endpoint       string `json:"endpoint"` // 完整重排端点 URL，按目标模型文档填写
-	Name           string `json:"name"`
-	Timeout        int    `json:"timeout"`
-	CandidateCount int    `json:"candidateCount"` // 向量召回后送入重排的候选文档数，默认 30；越大越准但越慢
+	ID             string                   `json:"id"`
+	Enabled        bool                     `json:"enabled"`
+	APIKey         string                   `json:"apiKey"`
+	Endpoint       string                   `json:"endpoint"` // 完整重排端点 URL，按目标模型文档填写
+	Name           string                   `json:"name"`
+	RequestFormat  util.RerankRequestFormat `json:"requestFormat"`
+	Timeout        int                      `json:"timeout"`
+	CandidateCount int                      `json:"candidateCount"` // 向量召回后送入重排的候选文档数，默认 30；越大越准但越慢
 }
 
 type Provider struct {
-	ID             string   `json:"id"`
-	DisplayName    string   `json:"displayName,omitempty"`
-	Enabled        bool     `json:"enabled"`
-	APIKey         string   `json:"apiKey"`
-	BaseURL        string   `json:"baseURL"`
-	Protocol       string   `json:"protocol,omitempty"`
-	RequestTimeout int      `json:"requestTimeout"`
-	Models         []*Model `json:"models"`
+	AuthType string `json:"authType,omitempty"`
+	// AccountID 是本机绑定的运行时投影；工作空间配置持久化和设置导出时排除。
+	AccountID      string            `json:"accountID,omitempty"`
+	Headers        map[string]string `json:"headers,omitempty"`
+	ID             string            `json:"id"`
+	DisplayName    string            `json:"displayName,omitempty"`
+	Enabled        bool              `json:"enabled"`
+	APIKey         string            `json:"apiKey"`
+	BaseURL        string            `json:"baseURL"`
+	Protocol       string            `json:"protocol,omitempty"`
+	RequestTimeout int               `json:"requestTimeout"`
+	Models         []*Model          `json:"models"`
+}
+
+// ClearChatGPTAccountIDs 清除可复制配置中的本机账户引用，不修改登录凭证。
+func (ai *AI) ClearChatGPTAccountIDs() {
+	for _, provider := range ai.Providers {
+		if provider != nil {
+			provider.AccountID = ""
+		}
+	}
 }
 
 // Model is the provider-scoped model registry entry. MaxTokens/Temperature/
@@ -114,7 +298,8 @@ type Model struct {
 }
 
 type MCP struct {
-	Servers []MCPServer `json:"servers"`
+	Servers        []MCPServer       `json:"servers"`
+	ExposurePolicy *CapabilityPolicy `json:"exposurePolicy"`
 }
 
 type MCPServer struct {
@@ -124,30 +309,100 @@ type MCPServer struct {
 	Type                 string            `json:"type"`
 	Command              string            `json:"command"`
 	Args                 []string          `json:"args"`
+	InheritEnv           []string          `json:"inheritEnv"`
+	Env                  map[string]string `json:"env"`
 	URL                  string            `json:"url"`
 	Headers              map[string]string `json:"headers"`
 	Timeout              int               `json:"timeout"`
+	DisableStandaloneSSE bool              `json:"disableStandaloneSSE"`
 	TrustToolAnnotations bool              `json:"trustToolAnnotations"`
 }
 
 func defaultEmbedding() *Embedding {
-	return &Embedding{Timeout: 30}
+	return &Embedding{Timeout: 30, Concurrency: DefaultEmbeddingConcurrency, BatchSize: DefaultEmbeddingBatchSize}
 }
 
 func defaultRerank() *Rerank {
-	return &Rerank{Timeout: 30, CandidateCount: 30}
+	return &Rerank{
+		RequestFormat:  util.RerankRequestFormatCohere,
+		Timeout:        30,
+		CandidateCount: 30,
+	}
 }
 
 func defaultAgent() *Agent {
 	return &Agent{
-		SessionTimeout:      600,
+		SessionTimeout:      DefaultAgentSessionTimeout,
 		StreamIdleTimeout:   120,
-		ConfirmTimeout:      120,
+		ConfirmTimeout:      DefaultAgentConfirmTimeout,
 		MaxRetries:          3,
 		Temperature:         1.0,
 		MaxCompletionTokens: 0,
 		MaxToolCallRounds:   64,
+		CapabilityPolicy:    defaultCapabilityPolicy(),
+		ApprovalPolicy:      defaultApprovalPolicy(),
+		Skills:              &AgentSkills{UserEnabled: []string{}, BuiltinDisabled: []string{}},
 	}
+}
+
+func defaultApprovalPolicy() *ApprovalPolicy {
+	return &ApprovalPolicy{
+		Default:   ApprovalDecisionRisk,
+		Overrides: map[string]*CapabilityApproval{},
+	}
+}
+
+func defaultCapabilityPolicy() *CapabilityPolicy {
+	return &CapabilityPolicy{
+		Default:   "allow",
+		Overrides: map[string]string{},
+	}
+}
+
+func normalizeCapabilityPolicy(policy *CapabilityPolicy) *CapabilityPolicy {
+	if policy == nil {
+		return defaultCapabilityPolicy()
+	}
+	if policy.Default != "deny" {
+		policy.Default = "allow"
+	}
+	if policy.Overrides == nil {
+		policy.Overrides = map[string]string{}
+	}
+	for id, decision := range policy.Overrides {
+		if id == "" || decision != "allow" && decision != "deny" {
+			delete(policy.Overrides, id)
+		}
+	}
+	return policy
+}
+
+func (policy *CapabilityPolicy) Allows(id string) bool {
+	if policy == nil {
+		return true
+	}
+	if decision := policy.Overrides[id]; decision != "" {
+		return decision == "allow"
+	}
+	return policy.Default != "deny"
+}
+
+func (policy *ApprovalPolicy) Decision(id, action string) string {
+	if policy == nil {
+		return ApprovalDecisionRisk
+	}
+	if override := policy.Overrides[id]; override != nil {
+		if decision := override.Actions[action]; decision != "" {
+			return decision
+		}
+		if override.Default != "" {
+			return override.Default
+		}
+	}
+	if policy.Default == "" {
+		return ApprovalDecisionRisk
+	}
+	return policy.Default
 }
 
 func defaultEditing() *Editing {
@@ -164,15 +419,23 @@ func defaultImageGeneration() *ImageGeneration {
 
 func NewAI() *AI {
 	ai := &AI{
+		Memory:          defaultMemory(),
 		Providers:       []*Provider{},
-		MCP:             &MCP{Servers: []MCPServer{}},
+		MCP:             &MCP{Servers: []MCPServer{}, ExposurePolicy: defaultCapabilityPolicy()},
 		Embedding:       defaultEmbedding(),
 		Rerank:          defaultRerank(),
+		Decision:        defaultDecision(),
+		Web:             &AIWeb{SearchProvider: "exa", FetchProvider: "direct", Timeout: 30},
 		Agent:           defaultAgent(),
 		Editing:         defaultEditing(),
 		ImageGeneration: defaultImageGeneration(),
 	}
 
+	return ai
+}
+
+// ApplyAIEnvironment 仅由启动适配器调用，环境变量不参与默认值或日常规范化。
+func ApplyAIEnvironment(ai *AI) {
 	apiKey := os.Getenv("SIYUAN_OPENAI_API_KEY")
 	apiModel := os.Getenv("SIYUAN_OPENAI_API_MODEL")
 	apiBaseURL := os.Getenv("SIYUAN_OPENAI_API_BASE_URL")
@@ -262,7 +525,6 @@ func NewAI() *AI {
 		}
 	}
 
-	return ai
 }
 
 func (ai *AI) HasAnyProvider() bool {
@@ -337,7 +599,11 @@ func (ai *AI) GetImageGenerationModel() (*Provider, *Model) {
 	if ai.ImageGeneration == nil || ai.ImageGeneration.ModelID == "" {
 		return nil, nil
 	}
-	return ai.GetModel(ai.ImageGeneration.ModelID)
+	provider, model := ai.GetModel(ai.ImageGeneration.ModelID)
+	if provider != nil && provider.AuthType == "chatgpt" {
+		return nil, nil
+	}
+	return provider, model
 }
 
 // ReconcileModelIDs 校正各使用场景引用的模型，并将旧版名称引用转换为模型 ID。
@@ -387,28 +653,74 @@ func (ai *AI) ReconcileModelIDs() {
 }
 
 func (ai *AI) Normalize() {
+	if ai.Memory == nil {
+		ai.Memory = defaultMemory()
+	}
+	ai.Memory.Normalize()
 	if ai.Providers == nil {
 		ai.Providers = []*Provider{}
 	}
 	if ai.MCP == nil {
-		ai.MCP = &MCP{Servers: []MCPServer{}}
+		ai.MCP = &MCP{Servers: []MCPServer{}, ExposurePolicy: defaultCapabilityPolicy()}
 	} else if ai.MCP.Servers == nil {
 		ai.MCP.Servers = []MCPServer{}
 	}
+	ai.MCP.ExposurePolicy = normalizeCapabilityPolicy(ai.MCP.ExposurePolicy)
 	serverIDs := map[string]bool{}
 	for i := range ai.MCP.Servers {
 		if ai.MCP.Servers[i].ID == "" || serverIDs[ai.MCP.Servers[i].ID] {
-			ai.MCP.Servers[i].ID = uuid.New().String()
+			data := fmt.Appendf(nil, "mcp:%d:%s:%s", i, ai.MCP.Servers[i].Name, ai.MCP.Servers[i].Type)
+			ai.MCP.Servers[i].ID = uuid.NewSHA1(uuid.NameSpaceOID, data).String()
 		}
 		serverIDs[ai.MCP.Servers[i].ID] = true
 	}
 	if ai.Agent == nil {
 		ai.Agent = defaultAgent()
 	} else {
+		if ai.Agent.Skills == nil {
+			ai.Agent.Skills = &AgentSkills{UserEnabled: []string{}, BuiltinDisabled: []string{}}
+		} else {
+			seen := map[string]struct{}{}
+			normalized := []string{}
+			for _, id := range ai.Agent.Skills.UserEnabled {
+				id = strings.TrimSpace(id)
+				key := strings.ToLower(id)
+				if id == "" || id == "." || id == ".." || strings.ContainsAny(id, `/\`) {
+					continue
+				}
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+				normalized = append(normalized, id)
+			}
+			ai.Agent.Skills.UserEnabled = normalized
+			// 保留未知内置 ID，升级或降级后不丢失用户的禁用选择。
+			seen = map[string]struct{}{}
+			normalized = []string{}
+			for _, id := range ai.Agent.Skills.BuiltinDisabled {
+				id = strings.TrimSpace(id)
+				if id == "" {
+					continue
+				}
+				if _, ok := seen[id]; ok {
+					continue
+				}
+				seen[id] = struct{}{}
+				normalized = append(normalized, id)
+			}
+			ai.Agent.Skills.BuiltinDisabled = normalized
+		}
+		ai.Agent.CapabilityPolicy = normalizeCapabilityPolicy(ai.Agent.CapabilityPolicy)
+		if ai.Agent.ApprovalPolicy == nil {
+			ai.Agent.ApprovalPolicy = defaultApprovalPolicy()
+		} else {
+			normalizeApprovalPolicy(ai.Agent.ApprovalPolicy)
+		}
 		if ai.Agent.SessionTimeout < 0 {
 			ai.Agent.SessionTimeout = 0
-		} else if ai.Agent.SessionTimeout > 3600 {
-			ai.Agent.SessionTimeout = 3600
+		} else if ai.Agent.SessionTimeout > MaxAgentSessionTimeout {
+			ai.Agent.SessionTimeout = MaxAgentSessionTimeout
 		}
 		if ai.Agent.StreamIdleTimeout < 1 {
 			ai.Agent.StreamIdleTimeout = 120
@@ -420,7 +732,16 @@ func (ai *AI) Normalize() {
 		} else if ai.Agent.MaxRetries > 10 {
 			ai.Agent.MaxRetries = 10
 		}
+		if ai.Agent.ConfirmTimeout < 0 {
+			ai.Agent.ConfirmTimeout = DefaultAgentConfirmTimeout
+		}
+		ai.Agent.MaxToolCallRounds = max(0, ai.Agent.MaxToolCallRounds)
+		if ai.Agent.Temperature < 0 || ai.Agent.Temperature > 2 || math.IsNaN(ai.Agent.Temperature) {
+			ai.Agent.Temperature = defaultAgent().Temperature
+		}
+		ai.Agent.MaxCompletionTokens = max(0, ai.Agent.MaxCompletionTokens)
 	}
+	ai.pruneOrphanedMCPCapabilityPolicies()
 	if ai.Editing == nil {
 		ai.Editing = defaultEditing()
 	} else {
@@ -459,19 +780,31 @@ func (ai *AI) Normalize() {
 		ai.ImageGeneration.OutputFormat = "png"
 	}
 	providers := make([]*Provider, 0, len(ai.Providers))
-	for _, p := range ai.Providers {
+	for providerIndex, p := range ai.Providers {
 		if p == nil {
 			continue
 		}
 		p.BaseURL = strings.TrimSpace(p.BaseURL)
 		if "" == p.BaseURL {
 			p.BaseURL = "https://api.openai.com/v1"
+			if util.IsAnthropicMessagesProtocol(p.Protocol) {
+				p.BaseURL = "https://api.anthropic.com/v1"
+			}
+			if util.IsGeminiInteractionsProtocol(p.Protocol) {
+				p.BaseURL = "https://generativelanguage.googleapis.com/v1beta"
+			}
 		}
 		p.DisplayName = strings.TrimSpace(p.DisplayName)
 		p.APIKey = strings.TrimSpace(p.APIKey)
+		if p.AuthType == "chatgpt" {
+			p.APIKey = ""
+			p.BaseURL = "https://api.openai.com/v1"
+			p.Protocol = util.OpenAIProtocolResponses
+			p.Headers = nil
+		}
 		p.Protocol = strings.ToLower(strings.TrimSpace(p.Protocol))
 		if p.Protocol == "" {
-			p.Protocol = "openai"
+			p.Protocol = util.OpenAIProtocolChatCompletions
 		}
 		if 1 > p.RequestTimeout {
 			p.RequestTimeout = 120
@@ -479,10 +812,10 @@ func (ai *AI) Normalize() {
 			p.RequestTimeout = 600
 		}
 		if !ast.IsNodeIDPattern(p.ID) {
-			p.ID = ast.NewNodeID()
+			p.ID = normalizedAIID(fmt.Sprintf("provider:%d:%s", providerIndex, p.DisplayName))
 		}
 		models := make([]*Model, 0, len(p.Models))
-		for _, m := range p.Models {
+		for modelIndex, m := range p.Models {
 			if m == nil {
 				continue
 			}
@@ -495,7 +828,7 @@ func (ai *AI) Normalize() {
 				m.ContextLength = 0
 			}
 			if !ast.IsNodeIDPattern(m.ID) {
-				m.ID = ast.NewNodeID()
+				m.ID = normalizedAIID(fmt.Sprintf("model:%s:%d:%s", p.ID, modelIndex, m.Name))
 			}
 			models = append(models, m)
 		}
@@ -512,14 +845,34 @@ func (ai *AI) Normalize() {
 	if ai.Embedding.Dimensions < 0 {
 		ai.Embedding.Dimensions = 0 // 负值非法，归零表示用模型默认维度
 	}
+	if ai.Embedding.Concurrency < 1 {
+		ai.Embedding.Concurrency = DefaultEmbeddingConcurrency
+	}
+	ai.Embedding.Concurrency = min(ai.Embedding.Concurrency, MaxEmbeddingConcurrency)
+	if ai.Embedding.BatchSize < 1 {
+		ai.Embedding.BatchSize = DefaultEmbeddingBatchSize
+	}
+	ai.Embedding.BatchSize = min(ai.Embedding.BatchSize, MaxEmbeddingBatchSize)
 	if !ast.IsNodeIDPattern(ai.Embedding.ID) {
-		ai.Embedding.ID = ast.NewNodeID()
+		ai.Embedding.ID = normalizedAIID("embedding")
 	}
 	if ai.Rerank == nil {
 		ai.Rerank = defaultRerank()
 	}
+	if ai.Decision == nil {
+		ai.Decision = defaultDecision()
+	}
+	ai.Decision.Normalize()
+	if ai.Web == nil {
+		ai.Web = &AIWeb{}
+	}
+	ai.Web.Normalize()
 	if ai.Rerank.Timeout < 1 {
 		ai.Rerank.Timeout = 30
+	}
+	if util.RerankRequestFormatCohere != ai.Rerank.RequestFormat &&
+		util.RerankRequestFormatDashScope != ai.Rerank.RequestFormat {
+		ai.Rerank.RequestFormat = util.RerankRequestFormatCohere
 	}
 	if ai.Rerank.CandidateCount < 5 {
 		ai.Rerank.CandidateCount = 5
@@ -527,11 +880,108 @@ func (ai *AI) Normalize() {
 		ai.Rerank.CandidateCount = 100
 	}
 	if !ast.IsNodeIDPattern(ai.Rerank.ID) {
-		ai.Rerank.ID = ast.NewNodeID()
+		ai.Rerank.ID = normalizedAIID("rerank")
+	}
+}
+
+// normalizedAIID 补全缺失标识时仅依赖公开配置位置，保持区块 ID 形态且不包含凭据。
+func normalizedAIID(seed string) string {
+	id := uuid.NewSHA1(uuid.NameSpaceOID, []byte(seed))
+	return "20000101000000-" + hex.EncodeToString(id[:])[:7]
+}
+
+func (ai *AI) pruneOrphanedMCPCapabilityPolicies() {
+	configuredServerIDs := make(map[string]bool, len(ai.MCP.Servers))
+	for _, server := range ai.MCP.Servers {
+		configuredServerIDs[url.PathEscape(server.ID)] = true
+	}
+
+	isOrphaned := func(id string) bool {
+		const prefix = "mcp/backend/"
+		if !strings.HasPrefix(id, prefix) {
+			return false
+		}
+		serverID, _, ok := strings.Cut(strings.TrimPrefix(id, prefix), "/")
+		return ok && !configuredServerIDs[serverID]
+	}
+	for id := range ai.Agent.CapabilityPolicy.Overrides {
+		if isOrphaned(id) {
+			delete(ai.Agent.CapabilityPolicy.Overrides, id)
+		}
+	}
+	for id := range ai.Agent.ApprovalPolicy.Overrides {
+		if isOrphaned(id) {
+			delete(ai.Agent.ApprovalPolicy.Overrides, id)
+		}
+	}
+}
+
+func normalizeApprovalPolicy(policy *ApprovalPolicy) {
+	// 旧版中的 confirm 表示未自动批准，实际仍按操作风险判断，因此迁移为 risk。
+	if policy.Default == ApprovalDecisionConfirm ||
+		policy.Default != ApprovalDecisionAllow && policy.Default != ApprovalDecisionRisk {
+		policy.Default = ApprovalDecisionRisk
+	}
+	if policy.Overrides == nil {
+		policy.Overrides = map[string]*CapabilityApproval{}
+	}
+	for id, override := range policy.Overrides {
+		if id == "" || override == nil {
+			delete(policy.Overrides, id)
+			continue
+		}
+		if override.Default != ApprovalDecisionAllow && override.Default != ApprovalDecisionConfirm &&
+			override.Default != ApprovalDecisionRisk {
+			override.Default = ""
+		}
+		if override.Actions == nil {
+			override.Actions = map[string]string{}
+		}
+		for action, decision := range override.Actions {
+			if decision != ApprovalDecisionAllow && decision != ApprovalDecisionConfirm &&
+				decision != ApprovalDecisionRisk {
+				delete(override.Actions, action)
+			}
+		}
+		if override.Default == "" && len(override.Actions) == 0 {
+			delete(policy.Overrides, id)
+		}
 	}
 }
 
 func (ai *AI) DecryptAPIKeys() {
+	if ai.Web != nil && ai.Web.ExaAPIKey != "" {
+		if dec := util.AESDecrypt(ai.Web.ExaAPIKey); dec != nil {
+			if plain, err := hex.DecodeString(string(dec)); err == nil {
+				ai.Web.ExaAPIKey = string(plain)
+			}
+		}
+	}
+	if ai.Web != nil && ai.Web.APIKey != "" {
+		if dec := util.AESDecrypt(ai.Web.APIKey); dec != nil {
+			if plain, err := hex.DecodeString(string(dec)); err == nil {
+				ai.Web.APIKey = string(plain)
+			}
+		}
+	}
+	if ai.Decision != nil {
+		decrypt := func(key *string) {
+			if *key != "" {
+				if dec := util.AESDecrypt(*key); dec != nil {
+					if plain, err := hex.DecodeString(string(dec)); err == nil {
+						*key = string(plain)
+					}
+				}
+			}
+		}
+		decrypt(&ai.Decision.APIKey)
+		for _, profile := range ai.Decision.Profiles {
+			if profile != nil {
+				decrypt(&profile.APIKey)
+			}
+		}
+	}
+
 	for _, p := range ai.Providers {
 		if p == nil || p.APIKey == "" {
 			continue
@@ -565,6 +1015,21 @@ func (ai *AI) DecryptAPIKeys() {
 }
 
 func (ai *AI) EncryptAPIKeys() {
+	if ai.Web != nil && ai.Web.ExaAPIKey != "" {
+		ai.Web.ExaAPIKey = util.AESEncrypt(ai.Web.ExaAPIKey)
+	}
+	if ai.Web != nil && ai.Web.APIKey != "" {
+		ai.Web.APIKey = util.AESEncrypt(ai.Web.APIKey)
+	}
+	if ai.Decision != nil {
+		ai.Decision.Normalize()
+		for _, profile := range ai.Decision.Profiles {
+			if profile != nil && profile.APIKey != "" {
+				profile.APIKey = util.AESEncrypt(profile.APIKey)
+			}
+		}
+	}
+
 	for _, p := range ai.Providers {
 		if p == nil || p.APIKey == "" {
 			continue
@@ -731,9 +1196,12 @@ func migrateMCP(raw map[string]any) *MCP {
 			Type:                 getString(sm, "type"),
 			Command:              getString(sm, "command"),
 			Args:                 getStringSlice(sm, "args"),
+			InheritEnv:           getStringSlice(sm, "inheritEnv"),
+			Env:                  getStringMap(sm, "env"),
 			URL:                  getString(sm, "url"),
 			Headers:              getStringMap(sm, "headers"),
 			Timeout:              getInt(sm, "timeout"),
+			DisableStandaloneSSE: getBool(sm, "disableStandaloneSSE"),
 			TrustToolAnnotations: getBool(sm, "trustToolAnnotations"),
 		})
 	}

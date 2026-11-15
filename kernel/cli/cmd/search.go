@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package cmd
 
@@ -69,10 +57,21 @@ var searchCmd = &cobra.Command{
 		var matchedBlockCount, matchedRootCount, pageCount int
 		if method == 4 {
 			blocks, matchedBlockCount, matchedRootCount, pageCount =
-				model.SemanticSearchBlock(query, notebooks, paths, types, subTypes, page, pageSize)
+				model.SemanticSearchBlock(query, notebooks, paths, types, subTypes, page, pageSize, nil, nil)
 		} else {
 			blocks, matchedBlockCount, matchedRootCount, pageCount, docMode =
-				model.FullTextSearchBlock(query, notebooks, paths, types, subTypes, method, orderBy, groupBy, page, pageSize)
+				model.FullTextSearchBlock(model.BlockSearchOptions{
+					Query:    query,
+					Boxes:    notebooks,
+					Paths:    paths,
+					Types:    types,
+					SubTypes: subTypes,
+					Method:   method,
+					OrderBy:  orderBy,
+					GroupBy:  groupBy,
+					Page:     page,
+					PageSize: pageSize,
+				})
 		}
 
 		switch outputFormat {
@@ -158,7 +157,7 @@ func printAssetSearchResult(assetContents []*model.AssetContent, matchedAssetCou
 		(page-1)*pageSize+1, (page-1)*pageSize+len(assetContents), matchedAssetCount, pageCount)
 }
 
-func printSearchResult(blocks []*model.Block, matchedBlockCount, matchedRootCount, pageCount int, docMode bool, page, pageSize, groupBy int) {
+func printSearchResult(blocks []*model.Block, matchedBlockCount, matchedRootCount, pageCount int, _ bool, page, pageSize, groupBy int) {
 	if len(blocks) == 0 {
 		fmt.Println("No results found.")
 		return
@@ -214,8 +213,8 @@ func init() {
 	searchCmd.Flags().StringArray("ext", nil, "asset file extension filter, repeatable, e.g. --ext pdf --ext docx (asset mode only)")
 	searchCmd.Flags().StringArrayP("notebook", "n", nil, "notebook ID filter (repeatable)")
 	searchCmd.Flags().StringArray("path", nil, "path prefix filter (repeatable)")
-	searchCmd.Flags().StringArrayP("type", "t", nil, "block type filter, repeatable (document heading paragraph list listItem codeBlock mathBlock table blockquote superBlock htmlBlock embedBlock databaseBlock audioBlock videoBlock iframeBlock widgetBlock callout)")
-	searchCmd.Flags().StringArray("subtype", nil, "block subtype filter, repeatable (o u t)")
+	searchCmd.Flags().StringArrayP("type", "t", nil, "block type filter, repeatable (document heading paragraph list listItem codeBlock mathBlock table blockquote superBlock htmlBlock embedBlock databaseBlock audioBlock videoBlock iframeBlock widgetBlock callout tabs tabItem)")
+	searchCmd.Flags().StringArray("subtype", nil, "block subtype filter, repeatable (h1-h6, list:o, list:u, list:t, listItem:o, listItem:u, listItem:t)")
 	searchCmd.Flags().IntP("method", "m", 0, "search method: 0=keyword 1=query-syntax 2=sql 3=regex 4=semantic (asset mode ignores 4=semantic; uses 0-3 with same meanings)")
 	searchCmd.Flags().IntP("order-by", "o", 0, "order — blocks: 0=type 1=created-asc 2=created-desc 3=updated-asc 4=updated-desc 5=content 6=relevance-asc 7=relevance-desc; asset: 0=relevance-desc 1=relevance-asc 2=updated-asc 3=updated-desc")
 	searchCmd.Flags().IntP("page", "p", 1, "page number")

@@ -121,6 +121,7 @@ interface ILuteRender {
 interface IBreadcrumb {
     id: string,
     name: string,
+    documentTitle?: string,
     type: string,
     subType: string,
     children: IBreadcrumb[],
@@ -141,14 +142,23 @@ declare class Viz {
 }
 
 declare class Viewer {
+    public viewer: HTMLElement;
     public destroyed: boolean;
+    public image: HTMLImageElement;
+    public viewed: boolean;
+    public toolbar: HTMLElement;
 
     constructor(element: Element, options: {
         title: [number, (image: HTMLImageElement, imageData: IObject) => string],
         button: boolean,
         initialViewIndex?: number,
+        magnifier?: boolean,
+        navigation?: boolean,
         transition: boolean,
         hidden: () => void,
+        ready?: (this: HTMLElement, event: CustomEvent) => void,
+        view?: (this: HTMLElement, event: CustomEvent) => void,
+        viewed?: (this: HTMLElement, event: CustomEvent) => void,
         toolbar: {
             zoomIn: boolean,
             zoomOut: boolean,
@@ -161,13 +171,17 @@ declare class Viewer {
             rotateRight: boolean,
             flipHorizontal: boolean,
             flipVertical: boolean,
-            close: () => void
+            copy?: () => void,
+            copyFile?: () => void,
+            close?: () => void
         }
     })
 
     public destroy(): void
 
     public show(): void
+
+    public hide(): void
 }
 
 declare class Lute {
@@ -178,8 +192,6 @@ declare class Lute {
     public static Caret: string;
 
     public static New(): Lute;
-
-    public static EChartsMindmapStr(text: string): string;
 
     public static NewNodeID(): string;
 
@@ -233,13 +245,20 @@ declare class Lute {
 
     public SetCallout(enable: boolean): void;
 
+    public SetTabs(enable: boolean): void;
+
+    public SetCustomBlock(enable: boolean): void;
+
     public SetTag(enable: boolean): void;
 
     public SetInlineMath(enable: boolean): void;
+    public SetLatexMath(enable: boolean): void;
 
     public SetGFMStrikethrough(enable: boolean): void;
 
     public SetGFMStrikethrough1(enable: boolean): void;
+
+    public SetFullWidthStrikethrough(enable: boolean): void;
 
     public SetMark(enable: boolean): void;
 
@@ -276,10 +295,13 @@ declare class Lute {
     public PutEmojis(emojis: IObject): void;
 
     public SpinBlockDOM(html: string): string;
+    public SpinInlineBlockDOM(html: string): string;
 
     public Md2BlockDOM(html: string): string;
 
     public Md2BlockDOMWithAutoLink(html: string): string;
+
+    public InlineMd2BlockDOM(markdown: string): string;
 
     public SetProtyleWYSIWYG(wysiwyg: boolean): void;
 
@@ -355,13 +377,13 @@ interface IUpload {
     /** 校验，成功时返回 true 否则返回错误信息 */
     validate?(files: File[]): string | boolean;
 
-    /** 自定义上传，当发生错误时返回错误信息 */
-    handler?(files: File[]): string | null;
+    /** 自定义上传，返回 Promise 时将在其完成后报告上传结果，发生错误时返回错误信息，默认 120 秒超时并中止 signal */
+    handler?(files: File[], options?: { signal: AbortSignal }): string | null | PromiseLike<string | null>;
 
     /** 对服务端返回的数据进行转换，以满足内置的数据结构 */
     format?(files: File[], responseText: string): string;
 
-    /** 将上传的文件处理后再返回  */
+    /** 将上传的文件逐项处理后再返回；返回项必须保持原有逻辑顺序 */
     file?(files: File[]): File[];
 
     /** 图片地址上传后的回调  */
@@ -473,6 +495,7 @@ interface IProtyleOptions {
         snapshot?: string
     },
     backlinkData?: {
+        referenceBlockID?: string,
         id?: string,
         revision?: string,
         blockPaths: IBreadcrumb[],
@@ -481,11 +504,12 @@ interface IProtyleOptions {
     }[],
     action?: TProtyleAction[],
     scrollPosition?: ScrollLogicalPosition,
+    scrollAttr?: IScrollAttr,
     mode?: TEditorMode,
     blockId?: string
     rootId?: string
     notebookId?: string
-    originalRefBlockIDs?: IObject
+    originalRefBlockIDs?: Record<string, string>
     key?: string
     defIds?: string[]
     render?: {
@@ -527,6 +551,24 @@ interface IProtyleOptions {
     lite?: boolean;
 }
 
+interface ITrackedRangeHandle {
+    readonly id: string;
+}
+
+interface ITrackRangeOptions {
+    /** 用于在插件卸载时自动释放句柄 */
+    owner: import("../plugin").Plugin;
+    /** 同一位置插入新内容时，锚点保留在新内容之前还是之后，默认为 before */
+    affinity?: "before" | "after";
+}
+
+type TTrackedRangeResult = {
+    status: "resolved";
+    range: Range;
+} | {
+    status: "invalid";
+};
+
 interface IProtyle {
     highlight: {
         mark: Highlight
@@ -536,6 +578,9 @@ interface IProtyle {
         styleElement: HTMLStyleElement
     }
     getInstance: () => import("../protyle").Protyle,
+    trackRange: (range: Range, options: ITrackRangeOptions) => ITrackedRangeHandle,
+    resolveTrackedRange: (handle: ITrackedRangeHandle) => TTrackedRangeResult,
+    releaseTrackedRange: (handle: ITrackedRangeHandle) => void,
     observerLoad?: ResizeObserver,
     observer?: ResizeObserver,
     app: import("../index").App,
@@ -572,7 +617,7 @@ interface IProtyle {
     gutter?: import("../protyle/gutter").Gutter,
     breadcrumb?: import("../protyle/breadcrumb").Breadcrumb,
     title?: import("../protyle/header/Title").Title,
-    background?: import("../protyle/header/background").Background,
+    background?: import("../protyle/header/Background").Background,
     databaseAttributePanel?: import("../protyle/render/av/attributePanel").AVAttributePanel,
     contentElement?: HTMLElement,
     options: IProtyleOptions;

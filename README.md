@@ -1,7 +1,7 @@
 <p align="center">
 <img alt="SiYuan" src="https://b3log.org/images/brand/siyuan-128.png">
 <br>
-<em>Refactor your thinking</em>
+<em>From thought to insight, with agents</em>
 <br><br>
 <a title="Build Status" target="_blank" href="https://github.com/siyuan-note/siyuan/actions/workflows/cd.yml"><img src="https://img.shields.io/github/actions/workflow/status/siyuan-note/siyuan/cd.yml?style=flat-square"></a>
 <a title="Releases" target="_blank" href="https://github.com/siyuan-note/siyuan/releases"><img src="https://img.shields.io/github/release/siyuan-note/siyuan.svg?style=flat-square&color=9CF"></a>
@@ -11,7 +11,7 @@
 <a title="Docker Image Size" target="_blank" href="https://hub.docker.com/r/b3log/siyuan"><img src="https://img.shields.io/docker/image-size/b3log/siyuan.svg?style=flat-square&color=ff96b4"></a>
 <a title="Hits" target="_blank" href="https://github.com/siyuan-note/siyuan"><img src="https://hits.b3log.org/siyuan-note/siyuan.svg"></a>
 <br>
-<a title="AGPLv3" target="_blank" href="https://www.gnu.org/licenses/agpl-3.0.txt"><img src="http://img.shields.io/badge/license-AGPLv3-orange.svg?style=flat-square"></a>
+<a title="AGPLv3" target="_blank" href="https://www.gnu.org/licenses/agpl-3.0.txt"><img src="https://img.shields.io/badge/license-AGPLv3-orange.svg?style=flat-square"></a>
 <a title="Code Size" target="_blank" href="https://github.com/siyuan-note/siyuan"><img src="https://img.shields.io/github/languages/code-size/siyuan-note/siyuan.svg?style=flat-square&color=yellow"></a>
 <a title="GitHub Pull Requests" target="_blank" href="https://github.com/siyuan-note/siyuan/pulls"><img src="https://img.shields.io/github/issues-pr-closed/siyuan-note/siyuan.svg?style=flat-square&color=FF9966"></a>
 <br>
@@ -28,6 +28,7 @@
 | <a href="README.zh-CN.md">中文</a>
 | <a href="README.ja.md">日本語</a>
 | <a href="README.tr.md">Türkçe</a>
+| <a href="README.pt-BR.md">Português</a>
 </p>
 
 ---
@@ -43,6 +44,7 @@
   - [Installation Package](#installation-package)
   - [Package Manager](#package-manager)
   - [Docker Hosting](#docker-hosting)
+  - [Kubernetes Hosting](#kubernetes-hosting)
   - [Unraid Hosting](#unraid-hosting)
   - [TrueNAS Hosting](#truenas-hosting)
   - [Test Channels](#test-channels)
@@ -113,7 +115,7 @@ Some features are only available to paid members, for more details please refer 
 
 ## 🏗️ Architecture and Ecosystem
 
-![SiYuan Arch](screenshots/SiYuan_Arch.png "SiYuan Arch")
+![SiYuan Arch](screenshots/SiYuan_Arch.svg "SiYuan Arch")
 
 | Project                                                  | Description           | Forks                                                                           | Stars                                                                                | 
 |----------------------------------------------------------|-----------------------|---------------------------------------------------------------------------------|--------------------------------------------------------------------------------------|
@@ -197,6 +199,8 @@ Use the following parameters when running the container with `docker run b3log/s
 
 More parameters can be found using `--help`. Here’s an example of a startup command with the new environment variables:
 
+First set `AuthCode` to your own strong password (use `export AuthCode='your-strong-password'` in Bash; Compose can also read a `.env` file in the same directory). The example stops with an error if the value is unset or empty.
+
 ```bash
 docker run -d \
   -v workspace_dir_host:workspace_dir_container \
@@ -205,7 +209,7 @@ docker run -d \
   b3log/siyuan \
   serve \
   --workspace=workspace_dir_container \
-  --accessAuthCode=xxx
+  --accessAuthCode="${AuthCode:?Set AuthCode}"
 ```
 
 - `PUID`: Custom user ID (optional, defaults to `1000` if not provided)
@@ -229,6 +233,8 @@ docker run -d \
 
 To simplify things, it is recommended to configure the workspace folder path to be consistent on the host and container, such as having both `workspace_dir_host` and `workspace_dir_container` configured as `/siyuan/workspace`. The corresponding startup command would be:
 
+First set `AuthCode` to your own strong password (use `export AuthCode='your-strong-password'` in Bash; Compose can also read a `.env` file in the same directory). The example stops with an error if the value is unset or empty.
+
 ```bash
 docker run -d \
   -v /siyuan/workspace:/siyuan/workspace \
@@ -237,19 +243,21 @@ docker run -d \
   b3log/siyuan \
   serve \
   --workspace=/siyuan/workspace/ \
-  --accessAuthCode=xxx
+  --accessAuthCode="${AuthCode:?Set AuthCode}"
 ```
 
 #### Docker Compose
 
 For users running SiYuan with Docker Compose, the environment variables `PUID` and `PGID` can be passed to customize the user and group IDs. Here's an example of a Docker Compose configuration:
 
+First set `AuthCode` to your own strong password (use `export AuthCode='your-strong-password'` in Bash; Compose can also read a `.env` file in the same directory). The example stops with an error if the value is unset or empty.
+
 ```yaml
 version: "3.9"
 services:
   main:
     image: b3log/siyuan
-    command: ['serve', '--workspace=/siyuan/workspace/', '--accessAuthCode=${AuthCode}']
+    command: ['serve', '--workspace=/siyuan/workspace/', '--accessAuthCode=${AuthCode:?Set AuthCode}']
     ports:
       - 6806:6806
     volumes:
@@ -283,6 +291,8 @@ If you use custom `PUID` and `PGID` values, the entrypoint script will ensure th
 Use an NGINX reverse proxy to hide port 6806. Please note:
 
 - Configure the WebSocket reverse proxy for `/ws`
+- Preserve the original `Host` header, including the port, for both regular requests and `/ws`. In NGINX, configure `proxy_set_header Host $http_host;` in both proxy locations. Using `$host` drops non-standard ports (such as `8443`), which can cause Origin validation to fail, leaving the page stuck on the logo with repeated reloads, API responses of `401`, or failed WebSocket connections
+- Set `proxy_set_header X-Forwarded-For $remote_addr;` in both proxy locations so the kernel receives the actual client address. Do not pass a caller-supplied `X-Forwarded-For` through unchanged, otherwise a remote client may be treated as a local administrator
 
 #### Note
 
@@ -298,6 +308,35 @@ Use an NGINX reverse proxy to hide port 6806. Please note:
 
 </details>
 
+### Kubernetes Hosting
+
+<details>
+<summary>Kubernetes Deployment</summary>
+
+The [HelmForge SiYuan chart](https://github.com/helmforgedev/charts/tree/main/charts/siyuan) is community-maintained by HelmForge, uses the official `b3log/siyuan` image, and is not an official SiYuan chart. Please report chart issues to [HelmForge](https://github.com/helmforgedev/charts/issues).
+
+Prepare Helm, kubectl, and a Kubernetes cluster with a default StorageClass that can provision a 10Gi ReadWriteOnce volume, then run the following commands:
+
+```bash
+helm repo add helmforge https://repo.helmforge.dev
+helm repo update
+helm install siyuan helmforge/siyuan --namespace siyuan --create-namespace --wait
+kubectl -n siyuan get secret siyuan-siyuan-auth -o go-template='{{index .data "access-code" | base64decode}}{{"\n"}}'
+kubectl -n siyuan port-forward service/siyuan-siyuan 6806:6806
+```
+
+Open <http://localhost:6806> and enter the generated lock screen password. Keep this password secure; it is distinct from the API token. The names above assume the default chart values and release name `siyuan`.
+
+For remote access, use a dedicated HTTPS hostname and an Ingress controller that proxies WebSockets on `/ws`, without URL rewriting. Configure `ingress` and allow the controller's namespace through `networkPolicy.ingressFrom`; the default policy allows same-namespace ingress and DNS egress only. Add explicit egress rules for cloud sync or other external services. See the [chart guide and production example](https://helmforge.dev/docs/charts/siyuan) for TLS, existing Secrets, and storage configuration.
+
+- **One workspace, one writer:** Never scale replicas or mount the same workspace in another running instance, even with ReadWriteMany storage. The chart uses `Recreate`, so upgrades stop the old writer before starting the new one and cause downtime.
+- **Persistence:** The complete workspace is mounted at `/siyuan/workspace`. The chart retains its generated PVC on uninstall by default; deleting the namespace or PVC can still destroy data. Reuse a retained or restored claim with `persistence.existingClaim`.
+- **Backups and upgrades:** Gracefully stop the writer before backing up the complete workspace, or use an application-consistent backup procedure. A copy of the live SQLite index alone is insufficient. Securely preserve authentication Secrets, encryption keys, and encrypted-notebook recovery passwords, and test restores into a separate PVC. Back up before upgrades and review storage-format changes: Helm rollback does not undo data migrations.
+
+The Docker hosting limitations also apply: browser use only, no desktop or mobile application connections, no PDF/HTML/Word export, and no Markdown file import.
+
+</details>
+
 ### Unraid Hosting
 
 <details>
@@ -310,7 +349,7 @@ Template reference:
 ```
 Web UI: 6806
 Container Port: 6806
-Container Path: /home/siyuan
+Container Path: /siyuan/workspace
 Host path: /mnt/user/appdata/siyuan
 PUID: 1000
 PGID: 1000
@@ -336,18 +375,21 @@ Navigate to Apps - DiscoverApps - More Options (on top right, besides Custom App
 
 Template reference:
 
+Before deploying, fill in your own strong password after `SIYUAN_ACCESS_AUTH_CODE=` below; do not leave it empty.
+
 ```yaml
 services:
   siyuan:
     image: b3log/siyuan
     container_name: siyuan
-    command: ['serve', '--workspace=/siyuan/workspace/', '--accessAuthCode=2222']
+    command: ['serve', '--workspace=/siyuan/workspace/']
     ports:
       - 6806:6806
     volumes:
       - /mnt/Pool_1/Apps_Data/siyuan:/siyuan/workspace  # Adjust to your dataset path 
     restart: unless-stopped
     environment:
+      - SIYUAN_ACCESS_AUTH_CODE=
       - TZ=America/New_York  # Replace with your timezone if needed
       - PUID=1001
       - PGID=1002
@@ -362,6 +404,8 @@ Select Beta or Alpha in `Settings - About - Update channel` to receive prereleas
 ## ⌨️ Command-line Interface
 
 The built-in CLI provides direct access to workspace data — no running server required.
+
+The CLI does not support operations on encrypted notebooks. Unlock and access them through the dedicated in-app workflow.
 
 ### Quick Start
 
@@ -402,24 +446,17 @@ Run `siyuan --help` for the full command tree. Use `-f json` (default is `-f tab
 
 The CLI binary is `<install-dir>/resources/kernel/SiYuan-Kernel`, invoked via the `siyuan` command.
 
-- **Windows**: the installer automatically adds the kernel directory to `PATH`, so `siyuan` works out of the box. The Microsoft Store edition runs in an MSIX sandbox and cannot modify `PATH`; deploy a `siyuan.cmd` shim once (survives Store updates):
+- **Windows**: the installer automatically adds the kernel directory to `PATH`, so `siyuan` works out of the box. The Microsoft Store edition (3.8.7+) registers the `siyuan.exe` app execution alias on Windows 10 1607 (build 14393) or later. After installing or updating, open a new terminal and run `siyuan --help`
   ```powershell
-  # Microsoft Store edition only — run once in PowerShell
-  $shimDir = "$env:LOCALAPPDATA\Microsoft\WindowsApps"   # already in PATH by default
-  @(
-      '@echo off'
-      'setlocal'
-      'set "ROOT="'
-      'for /f "delims=" %%i in (''powershell -NoProfile -Command "(Get-AppxPackage *SiYuan*).InstallLocation"'') do set "ROOT=%%i"'
-      'if not defined ROOT goto :noshim'
-      '"%ROOT%\app\resources\kernel\SiYuan-Kernel.exe" %*'
-      'exit /b %ERRORLEVEL%'
-      ':noshim'
-      '1>&2 echo siyuan: Microsoft Store edition not found'
-      'exit /b 1'
-  ) | Set-Content "$shimDir\siyuan.cmd"
+  siyuan --help
+
+  # Check which command is being used
+  Get-Command siyuan -All
+  where.exe siyuan
   ```
-  To remove on uninstall: `Remove-Item "$env:LOCALAPPDATA\Microsoft\WindowsApps\siyuan.cmd"`.
+  If the command is unavailable, check that the SiYuan app execution alias is enabled in Windows and `%LOCALAPPDATA%\Microsoft\WindowsApps` is in `PATH`. The commands above show command resolution; multiple SiYuan editions or `PATH` order may select another executable
+
+  If you created the old `siyuan.cmd` shim, first verify the Store alias directly with `& "$env:LOCALAPPDATA\Microsoft\WindowsApps\siyuan.exe" --help`, then optionally remove the shim: `Remove-Item "$env:LOCALAPPDATA\Microsoft\WindowsApps\siyuan.cmd"`
 - **macOS**: create a symlink after installing:
   ```bash
   ln -s /Applications/SiYuan.app/Contents/Resources/kernel/SiYuan-Kernel /usr/local/bin/siyuan
@@ -453,7 +490,7 @@ The data is saved in the workspace data folder:
 - `widgets` is used to save widgets
 - `plugins` is used to save plugins
 - `public` is used to save public data
-- The rest of the folders are the notebook folders created by the user, files with the suffix of `.sy` in the notebook folder are used to save the document data, and the data format is JSON
+- Notebook folders contain the document data. Ordinary notebooks store `.sy` documents as JSON; encrypted notebooks store them as ciphertext.
 
 ### Does it support data synchronization through a third-party sync disk?
 
@@ -481,20 +518,26 @@ For more details, please refer to [Development Guide](https://github.com/siyuan-
 
 You can <kbd>Check update</kbd> in <kbd>Settings</kbd> - <kbd>About</kbd> - <kbd>Current Version</kbd>, or pay attention to [Official Download](https://b3log.org/siyuan/en/download.html) or [GitHub Releases](https://github.com/siyuan-note/siyuan/releases) to get the new version.
 
+**Note:** Keep your workspace outside the installation directory; updating SiYuan clears files in the installation directory.
+
 ### What if some blocks (such as paragraph blocks in list items) cannot find the block icon?
 
 The block icon is omitted for the first sub-block under the list item. You can move the cursor into this block and trigger its block menu with <kbd>Ctrl+/</kbd> .
 
 ### What should I do if the data repo key is lost?
 
-- If the data repo key is correctly initialized on multiple devices previously, the key is the same on all devices and can be retrieved in <kbd>Settings</kbd> - <kbd>Account & Sync</kbd> - <kbd>Local Data Repo</kbd> - <kbd>Data repo key</kbd> - <kbd>Copy key string</kbd>
+The data repo key protects snapshots and sync data. It is separate from the encrypted-notebook master password and key backups. Resetting the data repo cannot recover a lost master password or replace matching encryption key backups.
+
+Before resetting, exit SiYuan normally and back up the complete workspace. If you have encrypted notebooks, also keep separate, matching encryption key backups and confirm that the master password works. Delete old cloud sync directories and snapshots only after the new sync completes, data is verified, and recovery materials are safely preserved.
+
+- If the data repo key is correctly initialized on multiple devices previously, the key is the same on all devices and can be retrieved in <kbd>Settings</kbd> - <kbd>Account & Sync</kbd> - <kbd>Data repo</kbd> - <kbd>Data repo key</kbd> - <kbd>Copy key string</kbd>
 - If it has not been configured correctly before (for example, the keys on multiple devices are inconsistent) or all devices are unavailable and the key string cannot be obtained, you can reset the key by following the steps below:
 
-  1. Manually back up the data, you can use <kbd>Export Data</kbd> or directly copy the <kbd>workspace/data/</kbd> folder on the file system
-  2. <kbd>Settings</kbd> - <kbd>Account & Sync</kbd> - <kbd>Local Data Repo</kbd> - <kbd>Data repo key</kbd> - <kbd>Reset data repo</kbd>
+  1. Exit SiYuan normally and back up the complete workspace; for encrypted notebooks, also preserve matching encryption key backups and the master password
+  2. <kbd>Settings</kbd> - <kbd>Account & Sync</kbd> - <kbd>Data repo</kbd> - <kbd>Data repo key</kbd> - <kbd>Reset data repo</kbd>
   3. Reinitialize the data repo key. After initializing the key on one device, other devices import the key
-  4. The cloud uses the new synchronization directory, the old synchronization directory is no longer available and can be deleted
-  5. The existing cloud snapshots are no longer available and can be deleted
+  4. Use a new cloud sync directory; delete the old directory only after the new sync completes, data is verified, and recovery materials are safely preserved
+  5. Delete old cloud snapshots only after the new sync completes, data is verified, and recovery materials are safely preserved
 
 ### Do I need to pay for it?
 

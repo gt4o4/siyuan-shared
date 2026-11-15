@@ -1,22 +1,11 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package plugin
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,6 +16,7 @@ import (
 	"github.com/dop251/goja"
 	"github.com/gin-gonic/gin"
 	"github.com/siyuan-note/logging"
+	"github.com/siyuan-note/siyuan/kernel/plugin/streams"
 	"github.com/siyuan-note/siyuan/kernel/util"
 )
 
@@ -94,7 +84,7 @@ type RequestContent struct {
 
 	/* Request Headers */
 	Headers map[string][]string `json:"headers"` // e.g. {"Content-Type": ["application/json"], "Accept": ["*/*"]}
-	Cookies map[string][]string `json:"cookies"` // e.g. {"siyuan": ["abc123"]}
+	Cookies map[string][]string `json:"cookies"` // e.g. {"plugin-sample": ["abc123"]}，不含思源的会话 Cookie
 
 	ContentType   string `json:"contentType"`   // e.g. "application/json"
 	ContentLength int64  `json:"contentLength"` // e.g. 123
@@ -150,6 +140,7 @@ type ResponseBody struct {
 	Raw      *ResponseRawData        `json:"raw"`      // if the response is raw data, Raw will be non-nil.
 	Redirect *ResponseRedirect       `json:"redirect"` // if the response is a redirect, Redirect will be non-nil.
 	Proxy    *ResponseProxy          `json:"proxy"`    // if the response is a streaming proxy, Proxy will be non-nil.
+	Stream   *ResponseStream         `json:"stream"`   // if the response body is a ReadableStream, Stream will be non-nil.
 }
 
 type ResponseSerializedData struct {
@@ -159,7 +150,7 @@ type ResponseSerializedData struct {
 
 type ResponseFile struct {
 	Name string `json:"name"` // e.g. "index.html". If Name is not empty, the file will be sent with Content-Disposition header.
-	Path string `json:"path"` // e.g. "/data/plugins/<plugin-name>/app/index.html"
+	Path string `json:"path"` // e.g. "/data/plugins/<plugin-name>/app/index.html"; must resolve inside the workspace, otherwise the kernel answers 404
 }
 
 type ResponseString struct {
@@ -180,6 +171,13 @@ type ResponseProxy struct {
 	URL     string              `json:"url"`     // target http/https URL
 	Method  string              `json:"method"`  // optional, defaults to the incoming request method, only GET/HEAD are supported
 	Headers map[string][]string `json:"headers"` // request headers forwarded to the target
+}
+
+// ResponseStream 对应插件处理函数返回的 response.body.stream：Stream 字段在 handleHttpRequest 里从脚本对象上
+// 单独取出赋值，不经过 JSON 编解码（ReadableStream 实例无法序列化），其余字段走正常的 JSON 转换。
+type ResponseStream struct {
+	ContentType string       `json:"contentType"` // e.g. "text/event-stream"
+	Stream      *goja.Object `json:"-"`           // the ReadableStream<Uint8Array | ArrayBuffer | string> providing the response body
 }
 
 // isSseRequest checks if the incoming HTTP request is a Server-Sent Events (SSE) request by inspecting the "Accept" header for the "text/event-stream" value.
@@ -300,6 +298,125 @@ func writeProxyResponse(c *gin.Context, proxy *ResponseProxy) {
 	}
 }
 
+// streamChunk 是从拉取一块数据的 Go 回调传给响应写入循环的一条消息：done 为真时表示流已经结束（err 非 nil
+// 说明是异常结束），否则 data 是这一块要写入响应体的字节。
+type streamChunk struct {
+	data []byte
+	done bool
+	err  error
+}
+
+// writeStreamResponse 把插件处理函数返回的 response.body.stream 逐块写入 HTTP 响应，statusCode 是插件在
+// HttpResponse.statusCode 中指定的状态码（而不是固定 200）：写入循环每写完一块、Flush 之后才向事件循环请求
+// 下一块，不提前拉取——这是背压的关键，避免插件在没有人消费数据的情况下把响应体生产得远远超前；一块数据的
+// 请求与到达都经由 p.worker.Run 异步完成，不占用事件循环线程等待任何 I/O，不会因为写入循环暂时写不出数据
+// （例如客户端读取缓慢）而卡住插件的其他脚本任务。chunk 必须是 BufferSource（ArrayBuffer 或其视图，如
+// Uint8Array）或字符串（按 UTF-8 写入），和 siyuan.client.fetch 的 response.body 用同一套鸭子类型。客户端
+// 提前断开连接时取消 reader，不再继续向一个没有人读的响应体生产数据。
+func (p *KernelPlugin) writeStreamResponse(c *gin.Context, statusCode int, response *ResponseStream) {
+	c.Writer.WriteHeader(statusCode)
+	if response.ContentType != "" {
+		c.Header("Content-Type", response.ContentType)
+	}
+
+	chunks := make(chan streamChunk, 1)
+	var consumer *streams.StreamConsumer
+
+	// pullNext 在事件循环线程上请求下一块数据，调用方必须等上一次请求的结果（通过 chunks 收到）之后才能
+	// 再次调用，不能连续发起多次拉取。
+	pullNext := func() {
+		if runErr := p.worker.Run(func(rt *goja.Runtime) (_ any, _ error) {
+			consumer.PullOnVMThread(func(chunk goja.Value) error {
+				data, convertErr := streamChunkBytes(p, rt, chunk)
+				if convertErr != nil {
+					return convertErr
+				}
+				select {
+				case chunks <- streamChunk{data: data}:
+				case <-c.Request.Context().Done():
+				case <-p.context.Done():
+				}
+				return nil
+			}, func(doneErr error) {
+				select {
+				case chunks <- streamChunk{done: true, err: doneErr}:
+				case <-c.Request.Context().Done():
+				case <-p.context.Done():
+				}
+			})
+			return nil, nil
+		}, nil); runErr != nil {
+			select {
+			case chunks <- streamChunk{done: true, err: runErr}:
+			case <-c.Request.Context().Done():
+			case <-p.context.Done():
+			}
+		}
+	}
+
+	_, runErr := p.worker.RunSync(func(rt *goja.Runtime) (_ any, err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("panic while starting response stream: %v", r)
+			}
+		}()
+		consumer, err = p.streamsHost.OpenReadableStreamConsumer(response.Stream)
+		return
+	})
+	if runErr != nil {
+		logging.LogErrorf("[plugin:%s] start response stream: %v", p.Name, runErr)
+		return
+	}
+
+	// cancelConsumer 让 reader 取消，不必等它自然读完，避免插件继续为无人读取的响应体生产数据；
+	// 写入循环的每一条退出路径（流自然结束之外）都要走这里，不止客户端断开连接那一条。
+	cancelConsumer := func(reason string) {
+		p.worker.Run(func(rt *goja.Runtime) (_ any, _ error) {
+			consumer.CancelOnVMThread(rt.NewTypeError(reason))
+			return nil, nil
+		}, nil)
+	}
+
+	pullNext()
+	for {
+		select {
+		case chunk := <-chunks:
+			if chunk.done {
+				if chunk.err != nil {
+					logging.LogWarnf("[plugin:%s] response stream ended with an error: %s", p.Name, chunk.err)
+				}
+				return
+			}
+			if _, writeErr := c.Writer.Write(chunk.data); writeErr != nil {
+				logging.LogWarnf("[plugin:%s] write response stream chunk failed: %s", p.Name, writeErr)
+				cancelConsumer("failed to write the response stream chunk")
+				return
+			}
+			c.Writer.Flush()
+			pullNext()
+		case <-c.Request.Context().Done():
+			cancelConsumer("client disconnected")
+			return
+		case <-p.context.Done():
+			cancelConsumer("plugin stopped")
+			return
+		}
+	}
+}
+
+// streamChunkBytes 把 response.body.stream 的一个 chunk 转换为要写入响应体的字节：接受 ArrayBuffer、
+// ArrayBuffer 视图（如 Uint8Array）或字符串（按 UTF-8 编码），与 siyuan.client.fetch 的 response.body
+// 的 chunk 形态保持一致；返回的切片是独立拷贝，不与引擎内存共享。
+func streamChunkBytes(p *KernelPlugin, rt *goja.Runtime, chunk goja.Value) ([]byte, error) {
+	if object, ok := chunk.(*goja.Object); ok && p.formDataHost.IsBufferSource(chunk) {
+		return bytes.Clone(p.formDataHost.BufferSourceBytes(rt, object)), nil
+	}
+	if goja.IsString(chunk) {
+		return []byte(chunk.String()), nil
+	}
+	return nil, fmt.Errorf("stream chunk must be a BufferSource or a string, got %T", chunk.Export())
+}
+
 func parseRequest(c *gin.Context) (request *Request, err error) {
 	var form *RequestForm
 	var data *[]byte
@@ -370,6 +487,10 @@ func parseRequest(c *gin.Context) (request *Request, err error) {
 
 	cookies := make(map[string][]string)
 	for _, cookie := range c.Request.Cookies() {
+		// 会话 Cookie 是内核的登录凭据，不交给插件
+		if util.SessionCookieName == cookie.Name {
+			continue
+		}
 		cookies[cookie.Name] = append(cookies[cookie.Name], cookie.Value)
 	}
 
@@ -421,128 +542,4 @@ func parseRequest(c *gin.Context) (request *Request, err error) {
 		},
 	}
 	return
-}
-
-func HandleHttpRequest(c *gin.Context, scope AccessScope) {
-	// /plugin/(public|private)/:name/*path
-	name := c.Param("name")
-	// path := c.Param("path")
-
-	p := GetManager().GetPlugin(name)
-	if p == nil {
-		c.String(http.StatusNotFound, "[plugin:%s] not found", name)
-		return
-	}
-	if p.State() != PluginStateRunning {
-		c.String(http.StatusServiceUnavailable, "[plugin:%s] is not running", name)
-		return
-	}
-
-	request, parseErr := parseRequest(c)
-	if parseErr != nil {
-		c.String(http.StatusBadRequest, "[plugin:%s] Error occurred while parsing HTTP request: %s", name, parseErr)
-		return
-	}
-
-	if request.Context.IsWebsocket {
-		handleErr := p.handleWebSocketRequest(c, request, scope)
-		if handleErr != nil {
-			msg := fmt.Sprintf("[plugin:%s] Error occurred while handling WebSocket request: %s", name, handleErr)
-			logging.LogWarn(msg)
-			c.String(http.StatusInternalServerError, msg)
-		}
-		return
-	}
-
-	if request.Context.IsSse {
-		handleErr := p.handleServerSentEventRequest(c, request, scope)
-		if handleErr != nil {
-			msg := fmt.Sprintf("[plugin:%s] Error occurred while handling SSE request: %s", name, handleErr)
-			logging.LogWarn(msg)
-			c.String(http.StatusInternalServerError, msg)
-		}
-		return
-	}
-
-	response, handleErr := p.handleHttpRequest(c, request, scope)
-	if handleErr != nil {
-		msg := fmt.Sprintf("[plugin:%s] Error occurred while handling HTTP request: %s", name, handleErr)
-		logging.LogWarn(msg)
-		c.String(http.StatusInternalServerError, msg)
-		return
-	}
-
-	// Set response headers
-	for headerKey, headerValues := range response.Headers {
-		for _, headerValue := range headerValues {
-			c.Header(headerKey, headerValue)
-		}
-	}
-
-	// Set response cookies
-	for _, cookie := range response.Cookies {
-		http.SetCookie(c.Writer, cookie)
-	}
-
-	// Write response body
-	if response.Body != nil {
-		if response.Body.Data != nil {
-			// Serialized data
-			switch response.Body.Data.Type {
-			case SerializedTypeJSON:
-				c.JSON(response.StatusCode, response.Body.Data.Data)
-			case SerializedTypeJSONP:
-				c.JSONP(response.StatusCode, response.Body.Data.Data)
-			case SerializedTypeAsciiJSON:
-				c.AsciiJSON(response.StatusCode, response.Body.Data.Data)
-			case SerializedTypeIndentedJSON:
-				c.IndentedJSON(response.StatusCode, response.Body.Data.Data)
-			case SerializedTypePureJSON:
-				c.PureJSON(response.StatusCode, response.Body.Data.Data)
-			case SerializedTypeSecureJSON:
-				c.SecureJSON(response.StatusCode, response.Body.Data.Data)
-
-			case SerializedTypeXML:
-				c.XML(response.StatusCode, response.Body.Data.Data)
-			case SerializedTypeYAML:
-				c.YAML(response.StatusCode, response.Body.Data.Data)
-			case SerializedTypeTOML:
-				c.TOML(response.StatusCode, response.Body.Data.Data)
-			case SerializedTypeProtoBuf:
-				c.ProtoBuf(response.StatusCode, response.Body.Data.Data)
-
-			default:
-				c.String(http.StatusInternalServerError, "[plugin:%s] Unsupported serialized data type [%s] in response", name, response.Body.Data.Type)
-			}
-			return
-		} else if response.Body.File != nil {
-			// If Path is not empty, use it as the file content and ignore Data.
-			// This is for streaming large files without loading the whole content into memory.
-			if response.Body.File.Name != "" {
-				c.FileAttachment(response.Body.File.Path, response.Body.File.Name)
-			} else {
-				c.File(response.Body.File.Path)
-			}
-			return
-		} else if response.Body.String != nil {
-			// Format the string with the provided values and write it to the response.
-			c.String(response.StatusCode, response.Body.String.Format, response.Body.String.Values...)
-			return
-		} else if response.Body.Raw != nil {
-			// Raw data
-			c.Data(response.StatusCode, response.Body.Raw.ContentType, response.Body.Raw.Data)
-			return
-		} else if response.Body.Redirect != nil {
-			// Redirect
-			c.Redirect(response.StatusCode, response.Body.Redirect.Location)
-			return
-		} else if response.Body.Proxy != nil {
-			// Streaming proxy
-			writeProxyResponse(c, response.Body.Proxy)
-			return
-		} else {
-			// No body
-		}
-	}
-	c.Status(response.StatusCode)
 }

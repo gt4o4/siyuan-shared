@@ -1,34 +1,28 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package tools
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/siyuan-note/siyuan/kernel/model"
-	"github.com/siyuan-note/siyuan/kernel/util"
 )
 
 var TemplateTool = &Tool{
 	Name:        "template",
-	Description: "Template management. Actions: search(keyword?), get(path), remove(path), render(path, id), save_as(id, name, overwrite?), create(name, content, overwrite?).",
+	Description: "Markdown document template management. Actions: search(keyword?), get(path), remove(path), render(path, id), save_as(id, name, overwrite?), create(name, content, overwrite?). Templates supply reusable document content; use snippet for CSS/JS customization of the frontend.",
+	EffectScope: EffectScopeLocal,
+	ActionEffects: map[string]ToolEffects{
+		"search":  {LocalRead: true},
+		"get":     {LocalRead: true},
+		"render":  {LocalRead: true},
+		"remove":  {LocalWrite: true},
+		"save_as": {LocalWrite: true},
+		"create":  {LocalWrite: true},
+	},
 	InputSchema: ToolSchema{
 		Type: "object",
 		Properties: map[string]Property{
@@ -37,7 +31,7 @@ var TemplateTool = &Tool{
 			"path":      {Type: "string", Description: "Template file path as returned by search (for get, remove, render)"},
 			"id":        {Type: "string", Description: "Block ID (for render, save_as)"},
 			"name":      {Type: "string", Description: "Template name without extension (for save_as, create)"},
-			"content":   {Type: "string", Description: "Markdown content (for create)"},
+			"content":   {Type: "string", Description: "Markdown content (for create).\n\n" + markdownContentSyntax},
 			"overwrite": {Type: "boolean", Description: "Overwrite if exists (for save_as, create, default false)"},
 		},
 		Required: []string{"action"},
@@ -79,38 +73,17 @@ func templateSearch(args map[string]any) (CallToolResult, error) {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Templates (%d):\n\n", len(results)))
+	fmt.Fprintf(&sb, "Templates (%d):\n\n", len(results))
 	for _, r := range results {
-		sb.WriteString(fmt.Sprintf("- %s\n", r.Content))
-		sb.WriteString(fmt.Sprintf("  path: %s\n", r.Path))
+		fmt.Fprintf(&sb, "- %s\n", r.Content)
+		fmt.Fprintf(&sb, "  path: %s\n", r.Path)
 	}
 	return CallToolResult{Content: []ContentItem{{Type: "text", Text: sb.String()}}}, nil
 }
 
-func resolveTemplatePath(p string) (string, error) {
-	if p == "" {
-		return "", fmt.Errorf("path is required")
-	}
-	abs := p
-	if !filepath.IsAbs(abs) {
-		abs = filepath.Join(util.DataDir, "templates", p)
-	}
-	abs = filepath.Clean(abs)
-	templatesBase := filepath.Clean(filepath.Join(util.DataDir, "templates"))
-	rel, err := filepath.Rel(templatesBase, abs)
-	if err != nil || strings.HasPrefix(rel, "..") || rel == ".." {
-		return "", fmt.Errorf("path escapes templates dir: %s", p)
-	}
-	return abs, nil
-}
-
 func templateGet(args map[string]any) (CallToolResult, error) {
 	p, _ := args["path"].(string)
-	abs, err := resolveTemplatePath(p)
-	if err != nil {
-		return CallToolResult{Content: []ContentItem{{Type: "text", Text: err.Error()}}, IsError: true}, nil
-	}
-	data, err := os.ReadFile(abs)
+	data, err := model.ReadTemplateFile(p)
 	if err != nil {
 		return CallToolResult{Content: []ContentItem{{Type: "text", Text: "read template failed: " + err.Error()}}, IsError: true}, nil
 	}
@@ -119,7 +92,7 @@ func templateGet(args map[string]any) (CallToolResult, error) {
 
 func templateRemove(args map[string]any) (CallToolResult, error) {
 	p, _ := args["path"].(string)
-	abs, err := resolveTemplatePath(p)
+	abs, err := model.ResolveTemplatePath(p)
 	if err != nil {
 		return CallToolResult{Content: []ContentItem{{Type: "text", Text: err.Error()}}, IsError: true}, nil
 	}
@@ -135,7 +108,7 @@ func templateRender(args map[string]any) (CallToolResult, error) {
 	if id == "" {
 		return CallToolResult{Content: []ContentItem{{Type: "text", Text: "id is required"}}, IsError: true}, nil
 	}
-	abs, err := resolveTemplatePath(p)
+	abs, err := model.ResolveTemplatePath(p)
 	if err != nil {
 		return CallToolResult{Content: []ContentItem{{Type: "text", Text: err.Error()}}, IsError: true}, nil
 	}

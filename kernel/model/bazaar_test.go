@@ -1,30 +1,23 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
 import (
+	"archive/zip"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/siyuan-note/siyuan/kernel/bazaar"
+	"github.com/siyuan-note/siyuan/kernel/util"
 )
 
 func TestIsValidPackageName(t *testing.T) {
-	valid := []string{"plugin-sample", "plugin.sample_1", "plugin sample (v1) + beta!", "CON.123", strings.Repeat("a", 255)}
+	valid := []string{"plugin-sample", "plugin.sample_1", "plugin sample (v1) + beta!", "时间线-Timeline", "CON.123",
+		strings.Repeat("a", 255)}
 	for _, name := range valid {
 		if !isValidPackageName(name) {
 			t.Fatalf("expected package name %q to be valid", name)
@@ -32,7 +25,7 @@ func TestIsValidPackageName(t *testing.T) {
 	}
 
 	invalid := []string{"", strings.Repeat("a", 256), ".hidden", " leading-space", "trailing-space ",
-		"trailing-period.", "plugin/sample", "plugin..sample", "插件", "CON", "com1", "LPT9"}
+		"trailing-period.", "plugin/sample", "plugin..sample", "zero\u200bwidth", "CON", "com1", "LPT9"}
 	for _, name := range invalid {
 		if isValidPackageName(name) {
 			t.Fatalf("expected package name %q to be invalid", name)
@@ -43,6 +36,17 @@ func TestIsValidPackageName(t *testing.T) {
 func TestIsBuiltInAppearancePackageIgnoresCase(t *testing.T) {
 	if !isBuiltInTheme("Daylight") || !isBuiltInTheme("MIDNIGHT") || !isBuiltInIcon("Litheness") {
 		t.Fatal("expected built-in appearance package names to be case-insensitive")
+	}
+}
+
+func TestInstalledPackageBaseURLPathEscapesPackageNameOnce(t *testing.T) {
+	got := installedPackageBaseURLPath("/plugins/", "A B#C%D(E)+F")
+	if got != "/plugins/A%20B%23C%25D%28E%29+F/" {
+		t.Fatalf("unexpected installed package URL: %q", got)
+	}
+	got = installedPackageBaseURLPath("/widgets/", "时间线-Timeline")
+	if got != "/widgets/%E6%97%B6%E9%97%B4%E7%BA%BF-Timeline/" {
+		t.Fatalf("unexpected Unicode package URL: %q", got)
 	}
 }
 
@@ -102,9 +106,11 @@ func TestBuildUpdatedPackagesIgnoresMissingAndCurrentPackages(t *testing.T) {
 	installedPackages := []*bazaar.Package{
 		{Name: "current", Version: "2.0.0"},
 		{Name: "missing", Version: "1.0.0"},
+		{Name: "invalid", Version: "1.0.0", InvalidReason: bazaar.PackageInvalidReasonNameMismatch},
 	}
 	bazaarPackagesMap := map[string]*bazaar.Package{
-		"current": &bazaar.Package{Name: "current", Version: "2.0.0"},
+		"current": {Name: "current", Version: "2.0.0"},
+		"invalid": {Name: "invalid", Version: "2.0.0"},
 	}
 
 	updated := buildUpdatedPackages(installedPackages, bazaarPackagesMap)
@@ -113,11 +119,240 @@ func TestBuildUpdatedPackagesIgnoresMissingAndCurrentPackages(t *testing.T) {
 	}
 }
 
+func TestRefreshInstalledPackageREADMEUsesOnlyMatchingVersion(t *testing.T) {
+	oldDataDir := util.DataDir
+	util.DataDir = t.TempDir()
+	t.Cleanup(func() { util.DataDir = oldDataDir })
+
+	packageName := "sample #%(test)+ package"
+	installPath := filepath.Join(util.DataDir, "plugins", packageName)
+	if err := os.MkdirAll(installPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"name":"sample #%(test)+ package","version":"1.0.0","readme":{"default":"README.md"}}`
+	if err := os.WriteFile(filepath.Join(installPath, "plugin.json"), []byte(manifest), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(installPath, "README.md"), []byte("![missing](missing.webp)"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	installed := &bazaar.Package{
+		Name:        packageName,
+		Version:     "1.0.0",
+		Readme:      bazaar.LocaleStrings{"default": "README.md"},
+		InstallTime: 42,
+	}
+	available := &bazaar.Package{
+		Name:    packageName,
+		Version: "1.0.0",
+		RepoURL: "https://github.com/owner/repo",
+		RepoRef: "v1.0.0",
+	}
+	refreshInstalledPackageREADME("plugins", installed, available)
+	if !strings.Contains(installed.PreferredReadme,
+		"https://cdn.jsdelivr.net/gh/owner/repo@v1.0.0/missing.webp") {
+		t.Fatalf("matching version did not use the pinned README source: %q", installed.PreferredReadme)
+	}
+	if installed.RepoRef != "v1.0.0" {
+		t.Fatalf("matching version did not expose its repo ref: %q", installed.RepoRef)
+	}
+
+	installed.PreferredReadme = "unchanged"
+	installed.RepoRef = ""
+	available.Version = "2.0.0"
+	available.RepoRef = "v2.0.0"
+	refreshInstalledPackageREADME("plugins", installed, available)
+	if installed.PreferredReadme != "unchanged" || installed.RepoRef != "" {
+		t.Fatalf("outdated installed README used the latest source: %#v", installed)
+	}
+}
+
+func TestGetInstalledPackageInfosIncludesInvalidPackages(t *testing.T) {
+	oldDataDir := util.DataDir
+	util.DataDir = t.TempDir()
+	t.Cleanup(func() { util.DataDir = oldDataDir })
+
+	pluginsPath := filepath.Join(util.DataDir, "plugins")
+	packages := map[string]string{
+		"valid":        `{"name":"valid","version":"1.0.0"}`,
+		"mismatch":     `{"name":"other","version":"1.0.0"}`,
+		"invalid-json": `{`,
+		"插件":           `{"name":"插件","version":"1.0.0"}`,
+	}
+	for name, manifest := range packages {
+		dir := filepath.Join(pluginsPath, name)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "plugin.json"), []byte(manifest), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	missingPath := filepath.Join(pluginsPath, "missing")
+	if err := os.MkdirAll(missingPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(missingPath, "index.js"), nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(pluginsPath, "empty", "i18n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	infos, _, _, err := GetInstalledPackageInfos("plugins")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, info := range infos {
+		got[info.Pkg.Name] = info.Pkg.InvalidReason
+		if info.Pkg.Name != info.DirName {
+			t.Fatalf("expected package name %q to use directory name %q", info.Pkg.Name, info.DirName)
+		}
+	}
+	want := map[string]string{
+		"valid":        "",
+		"mismatch":     bazaar.PackageInvalidReasonNameMismatch,
+		"invalid-json": bazaar.PackageInvalidReasonInvalidManifest,
+		"missing":      bazaar.PackageInvalidReasonMissingManifest,
+		"插件":           "",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d packages, got %#v", len(want), got)
+	}
+	for name, reason := range want {
+		if got[name] != reason {
+			t.Fatalf("expected package %q reason %q, got %q", name, reason, got[name])
+		}
+	}
+}
+
+func TestGetInstalledPackageInfosKeepsPlainTemplateDirectories(t *testing.T) {
+	oldDataDir := util.DataDir
+	util.DataDir = t.TempDir()
+	t.Cleanup(func() { util.DataDir = oldDataDir })
+
+	templatesPath := filepath.Join(util.DataDir, "templates")
+	if err := os.MkdirAll(filepath.Join(templatesPath, "plain"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	mismatchPath := filepath.Join(templatesPath, "mismatch")
+	if err := os.MkdirAll(mismatchPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mismatchPath, "template.json"), []byte(`{"name":"other"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	infos, _, _, err := GetInstalledPackageInfos("templates")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 1 || infos[0].Pkg.Name != "mismatch" ||
+		infos[0].Pkg.InvalidReason != bazaar.PackageInvalidReasonNameMismatch {
+		t.Fatalf("unexpected template package infos: %#v", infos)
+	}
+}
+
+func TestGetPackageUninstallPathUsesInvalidPackageDirectory(t *testing.T) {
+	oldDataDir := util.DataDir
+	util.DataDir = t.TempDir()
+	t.Cleanup(func() { util.DataDir = oldDataDir })
+
+	pluginsPath := filepath.Join(util.DataDir, "plugins")
+	for name, manifestName := range map[string]string{"actual": "other", "other": "other"} {
+		dir := filepath.Join(pluginsPath, name)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		manifest := `{"name":"` + manifestName + `"}`
+		if err := os.WriteFile(filepath.Join(dir, "plugin.json"), []byte(manifest), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	installPath, err := getPackageUninstallPath("plugins", "actual")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if installPath != filepath.Join(pluginsPath, "actual") {
+		t.Fatalf("expected invalid package directory, got %q", installPath)
+	}
+}
+
+func TestInstallLocalBazaarPackageReplacesEmptyDirectoryTree(t *testing.T) {
+	setupSyncMutationTest(t)
+	changes := captureBazaarChanges(t)
+	oldDataDir, oldTempDir := util.DataDir, util.TempDir
+	root := t.TempDir()
+	util.DataDir = filepath.Join(root, "data")
+	util.TempDir = filepath.Join(root, "temp")
+	t.Cleanup(func() {
+		util.DataDir, util.TempDir = oldDataDir, oldTempDir
+	})
+
+	installPath := filepath.Join(util.DataDir, "plugins", "sample")
+	if err := os.MkdirAll(filepath.Join(installPath, "i18n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	archivePath := filepath.Join(root, "sample.zip")
+	archiveFile, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := zip.NewWriter(archiveFile)
+	for name, content := range map[string]string{
+		"plugin.json": `{"name":"sample","version":"1.0.0"}`,
+		"index.js":    "export default {};",
+	} {
+		entry, createErr := writer.Create(name)
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		if _, writeErr := entry.Write([]byte(content)); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	}
+	if err = writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = archiveFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := InstallLocalBazaarPackage(archivePath, "", false)
+	if err != nil {
+		t.Fatalf("expected local install into empty directory tree to succeed: %s", err)
+	}
+	if result.Updated {
+		t.Fatal("expected empty directory tree to be treated as a new installation")
+	}
+	if _, err = os.Stat(filepath.Join(installPath, "plugin.json")); err != nil {
+		t.Fatalf("installed package manifest is missing: %s", err)
+	}
+	if len(*changes) != 1 || (*changes)[0] != "plugins" {
+		t.Fatalf("local installation notification = %v", *changes)
+	}
+	if _, err = InstallLocalBazaarPackage(archivePath, "", false); err == nil {
+		t.Fatal("expected existing package error")
+	}
+	if len(*changes) != 1 {
+		t.Fatal("rejected installation must not notify")
+	}
+	if _, err = InstallLocalBazaarPackage(archivePath, "", true); err != nil {
+		t.Fatal(err)
+	}
+	if len(*changes) != 2 {
+		t.Fatal("local overwrite must notify even when the plugin is disabled")
+	}
+}
+
 func TestFilterUpdatableBazaarPackages(t *testing.T) {
 	allowed := &UpdatedPackage{Available: &bazaar.Package{Name: "allowed"}}
 	blocked := &UpdatedPackage{Available: &bazaar.Package{Name: "blocked", DisallowUpdate: true}}
 
-	updatable, unmetRequirementCount := filterUpdatableBazaarPackages([]*UpdatedPackage{allowed, blocked, &UpdatedPackage{}})
+	updatable, unmetRequirementCount := filterUpdatableBazaarPackages([]*UpdatedPackage{allowed, blocked, {}})
 	if len(updatable) != 1 || updatable[0] != allowed {
 		t.Fatalf("expected only the allowed package, got %#v", updatable)
 	}

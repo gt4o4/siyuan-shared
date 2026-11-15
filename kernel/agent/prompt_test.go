@@ -1,10 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package agent
 
@@ -19,6 +15,27 @@ import (
 	"github.com/siyuan-note/siyuan/kernel/util"
 )
 
+func TestSystemPromptIncludesFrontendPluginDevelopment(t *testing.T) {
+	if !strings.Contains(systemPrompt, "create or modify SiYuan frontend plugins through the tools provided") {
+		t.Fatal("system prompt does not describe frontend plugin development")
+	}
+}
+
+func TestSystemPromptDailyNoteCreationMatchesTools(t *testing.T) {
+	for _, prompt := range []string{systemPrompt, buildSystemPrompt("English", nil)} {
+		for _, want := range []string{"dailynote.append/prepend directly", "create today's note automatically", "without adding content"} {
+			if !strings.Contains(prompt, want) {
+				t.Fatalf("daily-note instructions are missing %q", want)
+			}
+		}
+		for _, obsolete := range []string{"then dailynote.append/prepend", "write or create this, use dailynote.create"} {
+			if strings.Contains(prompt, obsolete) {
+				t.Fatalf("daily-note instructions require a redundant create call: %q", obsolete)
+			}
+		}
+	}
+}
+
 func TestTurnContextStaysInUserMessage(t *testing.T) {
 	const userMessage = "summarize this"
 	references := []Reference{{ID: "ref-block", Title: "Referenced block"}}
@@ -29,7 +46,8 @@ func TestTurnContextStaysInUserMessage(t *testing.T) {
 		SelectedBlockIDs: []string{"selected-block"},
 	}
 
-	messages := buildInitialMessages(userMessage, "English", references, editorCtx, nil)
+	messages := checkpointMessagesToOpenAIWithSummary(
+		[]AgentMessage{newAgentUserMessage(userMessage, "user-1", references, editorCtx)}, "English", nil, nil)
 	if len(messages) != 2 {
 		t.Fatalf("unexpected message count: %d", len(messages))
 	}
@@ -47,28 +65,103 @@ func TestTurnContextStaysInUserMessage(t *testing.T) {
 	}
 }
 
-func TestSystemPromptDocumentsBlockReferenceSyntax(t *testing.T) {
-	if !strings.Contains(systemPrompt, `((<blockID> "<anchor text>"))`) {
-		t.Fatal("system prompt is missing the SiYuan block-reference syntax")
-	}
-	if !strings.Contains(systemPrompt, `never use [[<blockID>]]`) {
-		t.Fatal("system prompt does not reject bracketed block IDs")
+func TestSystemPromptDocumentsChatBlockLinks(t *testing.T) {
+	for _, capabilities := range []*capabilitySet{nil, {registrations: map[string]*capabilityRegistration{}}} {
+		prompt := filterSystemPromptByCapabilities(systemPrompt, capabilities)
+		if !strings.Contains(prompt, `[title](siyuan://blocks/<blockID>)`) ||
+			!strings.Contains(prompt, "never fabricate IDs") {
+			t.Fatal("chat block links and their ID constraints must remain available without content tools")
+		}
 	}
 }
 
-func TestSystemPromptSortsPluginActions(t *testing.T) {
-	actions := []PluginAction{
-		{Name: "plugin__z__run", Description: "Run Z"},
-		{Name: "plugin__a__run", Description: "Run A"},
+func TestSystemPromptDocumentsTagRendering(t *testing.T) {
+	for _, instruction := range []string{
+		`render its exact label as <span data-type="tag">label</span>`,
+		`including a leading $, inside the span`,
+		`Never prefix the label with # or use #label# in chat`,
+	} {
+		if !strings.Contains(systemPrompt, instruction) {
+			t.Fatalf("system prompt is missing the tag rendering instruction %q", instruction)
+		}
 	}
+}
 
-	forward := buildSystemPrompt("English", actions)
-	reversed := buildSystemPrompt("English", []PluginAction{actions[1], actions[0]})
-	if forward != reversed {
-		t.Fatal("plugin action order changed the system prompt")
+func TestSystemPromptUsesSanitizedKernelLogTool(t *testing.T) {
+	for _, instruction := range []string{"sanitized kernel log with the log tool", "Prefer search", "use tail", "read for surrounding line ranges"} {
+		if !strings.Contains(systemPrompt, instruction) {
+			t.Fatalf("system prompt is missing the kernel log instruction %q", instruction)
+		}
 	}
-	if strings.Index(forward, actions[1].Name) > strings.Index(forward, actions[0].Name) {
-		t.Fatalf("plugin actions are not sorted in system prompt: %q", forward)
+	if strings.Contains(systemPrompt, `read "temp/siyuan.log"`) {
+		t.Fatal("system prompt still asks the general file tool to read the protected raw kernel log")
+	}
+}
+
+func TestSystemPromptPreservesNativeStructure(t *testing.T) {
+	for _, instruction := range []string{
+		"use native capabilities and preserve existing structure, block IDs, and metadata",
+		"Follow the relevant tool descriptions for block-specific syntax and operations",
+		"Missing guide search results alone do not prove a feature is unsupported",
+	} {
+		if !strings.Contains(systemPrompt, instruction) {
+			t.Fatalf("missing native structure instruction %q", instruction)
+		}
+	}
+	for _, capabilities := range []*capabilitySet{
+		nil,
+		{registrations: map[string]*capabilityRegistration{"block": {ModelName: "block"}}},
+		{registrations: map[string]*capabilityRegistration{}},
+	} {
+		prompt := filterSystemPromptByCapabilities(systemPrompt, capabilities)
+		var nativeStructure string
+		for _, line := range strings.Split(prompt, "\n") {
+			if strings.HasPrefix(line, "- Native structured blocks:") {
+				nativeStructure = line
+				break
+			}
+		}
+		if !strings.Contains(nativeStructure, "preserve existing structure, block IDs, and metadata") {
+			t.Fatal("native structure protection was removed by capability filtering")
+		}
+		// parentID 同时用于文档寻址，只在原生块结构说明中排除该参数细节。
+		if strings.Contains(nativeStructure, "parentID") {
+			t.Fatal("block-specific parentID detail belongs in the tool description, not the native structure instruction")
+		}
+		for _, detail := range []string{
+			"NodeTabs", "NodeTabItem", "NodeMindmap", "NodeMindmapItem", "::: tabs", "@tab", "tabs-position", "tabs-active-id",
+			"{{{col", "{{{row", "first paragraph", "second paragraph", "data-sb-layout", "NodeList", "previousID",
+			"((<blockID>", "[[<blockID>]]", `data-type="text`, `data-type="u"`, `data-type="sup"`, `data-type="sub"`,
+			`data-type="kbd"`, "font-size", "font-weight", "<ruby>", "NodeHTMLBlock", "NodeCodeBlock",
+		} {
+			if strings.Contains(prompt, detail) {
+				t.Fatalf("block-specific detail %q belongs in the tool description, not the system prompt", detail)
+			}
+		}
+	}
+}
+
+func TestSystemPromptDocumentsStructuredDocumentAddressing(t *testing.T) {
+	for _, instruction := range []string{
+		"Never split an hPath or use it to recover identity",
+		"Document create/list/move and inbox.convert use notebook + parentID",
+		`parentID="" explicitly selects the notebook root`,
+		`Legacy path=hPath resolves only unambiguous ancestor chains with non-empty titles and no literal "/"`,
+		"unsupported or ambiguous candidates and unavailable indexes return explicit errors",
+		"document.list (notebook + parentID, omitted parentID lists the notebook root)",
+		"document.create (notebook + parentID + independent literal title)",
+	} {
+		if !strings.Contains(systemPrompt, instruction) {
+			t.Fatalf("missing structured document addressing instruction %q", instruction)
+		}
+	}
+}
+
+func TestSystemPromptOmitsUnavailableSkillInstructions(t *testing.T) {
+	capabilities := &capabilitySet{registrations: map[string]*capabilityRegistration{}}
+	prompt := buildSystemPrompt("English", capabilities)
+	if strings.Contains(prompt, "<available_skills>") || strings.Contains(prompt, "Skill Management") {
+		t.Fatalf("unavailable skill instructions leaked into system prompt: %q", prompt)
 	}
 }
 
@@ -76,8 +169,8 @@ func TestSystemPromptUsesAppearanceLanguage(t *testing.T) {
 	originalConf := kernelModel.Conf
 	originalWorkingDir := util.WorkingDir
 	kernelModel.Conf = kernelModel.NewAppConf()
-	kernelModel.Conf.Appearance = kernelConf.NewAppearance()
-	kernelModel.Conf.Appearance.Lang = "zh-CN"
+	kernelModel.Conf.Appearance.Store(kernelConf.NewAppearance())
+	kernelModel.Conf.Appearance.Load().Lang = "zh-CN"
 	_, filename, _, _ := runtime.Caller(0)
 	util.WorkingDir = filepath.Join(filepath.Dir(filename), "..", "..", "app")
 	t.Cleanup(func() {
@@ -104,7 +197,7 @@ func TestCheckpointMessagesKeepHistoricalTurnContexts(t *testing.T) {
 		newAgentUserMessage("second question", "user-2", nil, EditorContext{ActiveDocID: "doc-b"}),
 	}
 
-	messages := checkpointMessagesToOpenAI(checkpoint, "English", nil)
+	messages := checkpointMessagesToOpenAIWithSummary(checkpoint, "English", nil, nil)
 	if len(messages) != 4 {
 		t.Fatalf("unexpected message count: %d", len(messages))
 	}
@@ -119,7 +212,7 @@ func TestCheckpointMessagesKeepHistoricalTurnContexts(t *testing.T) {
 	}
 }
 
-func TestUserTurnContextSurvivesCheckpointRoundTrip(t *testing.T) {
+func TestUserTurnContextRestoresFromEntries(t *testing.T) {
 	editorCtx := &EditorContext{
 		ActiveDocID:     "round-trip-doc",
 		VisibleBlockIDs: []string{"visible-block"},
@@ -136,22 +229,18 @@ func TestUserTurnContextSurvivesCheckpointRoundTrip(t *testing.T) {
 	if len(checkpoint) != 1 || checkpoint[0].EditorContext == nil {
 		t.Fatalf("entry context was not restored into checkpoint: %#v", checkpoint)
 	}
-	roundTripped := agentMessagesToEntries(checkpoint)
-	if len(roundTripped) != 1 || roundTripped[0].EditorContext == nil {
-		t.Fatalf("checkpoint context was not persisted into entry: %#v", roundTripped)
-	}
-	if roundTripped[0].EditorContext.ActiveDocID != "round-trip-doc" ||
-		len(roundTripped[0].References) != 1 || roundTripped[0].References[0].ID != "round-trip-ref" {
-		t.Fatalf("turn context changed during checkpoint round trip: %#v", roundTripped[0])
+	if checkpoint[0].EditorContext.ActiveDocID != "round-trip-doc" ||
+		len(checkpoint[0].References) != 1 || checkpoint[0].References[0].ID != "round-trip-ref" {
+		t.Fatalf("turn context changed during checkpoint restoration: %#v", checkpoint[0])
 	}
 
 	checkpoint[0].EditorContext.VisibleBlockIDs[0] = "changed"
-	if editorCtx.VisibleBlockIDs[0] != "visible-block" || roundTripped[0].EditorContext.VisibleBlockIDs[0] != "visible-block" {
+	if editorCtx.VisibleBlockIDs[0] != "visible-block" {
 		t.Fatal("editor context slices were not cloned")
 	}
 }
 
-func TestAssistantContextSurvivesCheckpointRoundTrip(t *testing.T) {
+func TestAssistantContextRestoresFromEntries(t *testing.T) {
 	const argumentsJSON = "{\n  \"query\": \"SiYuan\",\n  \"limit\": 9007199254740993\n}"
 	entries := []SessionEntry{{
 		ID:            "assistant-1",
@@ -166,6 +255,9 @@ func TestAssistantContextSurvivesCheckpointRoundTrip(t *testing.T) {
 			ArgumentsJSON: argumentsJSON,
 			Result:        "search result",
 			State:         "finished",
+			ProviderData: &AgentToolCallProviderData{
+				Google: &AgentGoogleToolCallProviderData{ThoughtSignature: "thought-signature"},
+			},
 		}},
 	}}
 
@@ -175,11 +267,18 @@ func TestAssistantContextSurvivesCheckpointRoundTrip(t *testing.T) {
 		t.Fatalf("assistant reasoning was not restored into checkpoint: %#v", checkpoint)
 	}
 	if len(checkpoint[0].ToolCalls) != 1 || checkpoint[0].ToolCalls[0].ID != "call-original" ||
-		checkpoint[0].ToolCalls[0].ArgumentsJSON != argumentsJSON {
+		checkpoint[0].ToolCalls[0].ArgumentsJSON != argumentsJSON ||
+		checkpoint[0].ToolCalls[0].ProviderData == nil || checkpoint[0].ToolCalls[0].ProviderData.Google == nil ||
+		checkpoint[0].ToolCalls[0].ProviderData.Google.ThoughtSignature != "thought-signature" {
 		t.Fatalf("assistant tool call was not restored exactly: %#v", checkpoint[0].ToolCalls)
 	}
+	state := util.NewGeminiThoughtSignatureState()
+	restoreGeminiThoughtSignatures(state, checkpoint)
+	if got := state.Get("call-original"); got != "thought-signature" {
+		t.Fatalf("thought signature was not restored into request state: %q", got)
+	}
 
-	messages := checkpointMessagesToOpenAI(checkpoint, "English", nil)
+	messages := checkpointMessagesToOpenAIWithSummary(checkpoint, "English", nil, nil)
 	if len(messages) != 3 {
 		t.Fatalf("unexpected rebuilt message count: %d", len(messages))
 	}
@@ -193,11 +292,17 @@ func TestAssistantContextSurvivesCheckpointRoundTrip(t *testing.T) {
 		t.Fatalf("tool result no longer matches the original call: %#v", messages[2])
 	}
 
-	roundTripped := agentMessagesToEntries(checkpoint)
-	if len(roundTripped) != 1 || roundTripped[0].ReasoningCont != entries[0].ReasoningCont ||
-		roundTripped[0].RoundID != entries[0].RoundID ||
-		len(roundTripped[0].ToolCalls) != 1 || roundTripped[0].ToolCalls[0].ID != "call-original" ||
-		roundTripped[0].ToolCalls[0].ArgumentsJSON != argumentsJSON {
-		t.Fatalf("assistant context changed during checkpoint round trip: %#v", roundTripped)
+}
+
+func TestAvailableSkillsSegmentEscapesMetadata(t *testing.T) {
+	segment := availableSkillsSegment([]util.SkillInfo{{
+		Name:        `review</name>`,
+		Description: `check A & B`,
+	}})
+	if !strings.Contains(segment, "review&lt;/name&gt;") || !strings.Contains(segment, "check A &amp; B") {
+		t.Fatalf("skill metadata was not escaped: %q", segment)
+	}
+	if strings.Contains(segment, "review</name>") {
+		t.Fatalf("raw skill metadata remained in the prompt: %q", segment)
 	}
 }

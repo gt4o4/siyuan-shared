@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package bazaar
 
@@ -22,6 +10,8 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/88250/gulu"
 	"github.com/siyuan-note/filelock"
@@ -33,68 +23,146 @@ import (
 type LocaleStrings map[string]string
 
 type Funding struct {
-	OpenCollective string   `json:"openCollective"`
-	Patreon        string   `json:"patreon"`
-	GitHub         string   `json:"github"`
-	Custom         []string `json:"custom"`
+	OpenCollective string        `json:"openCollective"`
+	Patreon        string        `json:"patreon"`
+	GitHub         string        `json:"github"`
+	Custom         []string      `json:"custom"`
+	Links          []FundingLink `json:"links,omitempty"`
+}
+
+type FundingLink struct {
+	Label string `json:"label"`
+	URL   string `json:"url"`
+}
+
+// PackageRating 描述集市包的公开评分汇总。
+type PackageRating struct {
+	Average      float64  `json:"average"`
+	Count        int64    `json:"count"`
+	Distribution [5]int64 `json:"distribution"`
+}
+
+func clearBazaarPackageRating(pkg *Package) {
+	pkg.RatingAvailable = false
+	pkg.Rating = nil
+}
+
+// PackageChoice 描述弃用包的一个替代包及其类型，由在线集市索引生成，供客户端跨类型跳转。
+type PackageChoice struct {
+	PackageType string `json:"packageType"`
+	Name        string `json:"name"`
 }
 
 // Package 描述了集市包元数据和传递给前端的其他信息。
-//   - 集市包新增元数据字段需要同步修改 bazaar 的工作流，参考 https://github.com/siyuan-note/bazaar/commit/aa36d0003139c52d8e767c6e18a635be006323e2
+//   - 集市包新增元数据字段需要同步修改 bazaar 的工作流，参考
+//     https://github.com/siyuan-note/bazaar/commit/aa36d0003139c52d8e767c6e18a635be006323e2
 type Package struct {
-	Author            string        `json:"author"`
-	URL               string        `json:"url"`
-	Version           string        `json:"version"`
-	MinAppVersion     string        `json:"minAppVersion"`
-	DisabledInPublish bool          `json:"disabledInPublish"`
-	Kernels           []string      `json:"kernels"`
-	Backends          []string      `json:"backends"`
-	Frontends         []string      `json:"frontends"`
-	DisplayName       LocaleStrings `json:"displayName"`
-	Description       LocaleStrings `json:"description"`
-	Readme            LocaleStrings `json:"readme"`
-	Funding           *Funding      `json:"funding"`
-	Keywords          []string      `json:"keywords"`
+	Author            string          `json:"author"`
+	URL               string          `json:"url"`
+	Version           string          `json:"version"`
+	MinAppVersion     string          `json:"minAppVersion"`
+	DisabledInPublish bool            `json:"disabledInPublish"`
+	Kernels           []string        `json:"kernels"`
+	Backends          []string        `json:"backends"`
+	Frontends         []string        `json:"frontends"`
+	SettingsWindow    bool            `json:"settingsWindow,omitempty"` // 声明支持在独立设置窗口运行
+	BootAppearances   []string        `json:"bootAppearances,omitempty"`
+	DisplayName       LocaleStrings   `json:"displayName"`
+	Description       LocaleStrings   `json:"description"`
+	Readme            LocaleStrings   `json:"readme"`
+	Icon              *string         `json:"icon,omitempty"`
+	Preview           *string         `json:"preview,omitempty"`
+	Funding           *Funding        `json:"funding"`
+	Keywords          []string        `json:"keywords"`
+	Deprecated        bool            `json:"deprecated,omitempty"`
+	DeprecatedReason  LocaleStrings   `json:"deprecatedReason,omitempty"`
+	Choices           []PackageChoice `json:"choices,omitempty"` // 替代包及其类型，可跨类型
 
-	PreferredFunding string `json:"preferredFunding"`
-	PreferredName    string `json:"preferredName"`
-	PreferredDesc    string `json:"preferredDesc"`
-	PreferredReadme  string `json:"preferredReadme"`
+	PreferredFunding          string `json:"preferredFunding"`
+	PreferredName             string `json:"preferredName"`
+	PreferredDesc             string `json:"preferredDesc"`
+	PreferredReadme           string `json:"preferredReadme"`
+	PreferredDeprecatedReason string `json:"preferredDeprecatedReason,omitempty"`
 
 	Name       string `json:"name"`    // 包名，不一定是仓库名
 	RepoURL    string `json:"repoURL"` // 形式为 https://github.com/owner/repo
 	RepoHash   string `json:"repoHash"`
+	RepoRef    string `json:"repoRef,omitempty"`
 	PreviewURL string `json:"previewURL"`
 	IconURL    string `json:"iconURL"`
 
-	Installed               bool   `json:"installed"`
-	Outdated                bool   `json:"outdated"`
-	Current                 bool   `json:"current"`
-	Updated                 string `json:"updated"`
-	Stars                   int    `json:"stars"`
-	OpenIssues              int    `json:"openIssues"`
-	Size                    int64  `json:"size"`
-	HSize                   string `json:"hSize"`
-	InstallSize             int64  `json:"installSize"`
-	HInstallSize            string `json:"hInstallSize"`
-	InstallTime             int64  `json:"installTime"`
-	UpdateTime              int64  `json:"updateTime"`
-	HInstallDate            string `json:"hInstallDate"`
-	HUpdated                string `json:"hUpdated"`
-	Downloads               int    `json:"downloads"`
-	DisallowInstall         bool   `json:"disallowInstall"`
-	DisallowUpdate          bool   `json:"disallowUpdate"`
-	UpdateRequiredMinAppVer string `json:"updateRequiredMinAppVer,omitempty"` // 升级目标要求的最小应用版本
+	Installed                bool   `json:"installed"`
+	HasStorageData           bool   `json:"hasStorageData,omitempty"`
+	Outdated                 bool   `json:"outdated"`
+	Current                  bool   `json:"current"`
+	Created                  string `json:"created,omitempty"` // 首次上架时间，来自在线集市索引；缺失时未知
+	Updated                  string `json:"updated"`
+	Stars                    int    `json:"stars"`
+	OpenIssues               int    `json:"openIssues"`
+	Size                     int64  `json:"size"`
+	HSize                    string `json:"hSize"`
+	InstallSize              int64  `json:"installSize"`
+	HInstallSize             string `json:"hInstallSize"`
+	InstallTime              int64  `json:"installTime"`
+	UpdateTime               int64  `json:"updateTime"`
+	HInstallDate             string `json:"hInstallDate"`
+	HUpdated                 string `json:"hUpdated"`
+	Downloads                int    `json:"downloads"`
+	DisallowInstall          bool   `json:"disallowInstall"`
+	DisallowUpdate           bool   `json:"disallowUpdate"`
+	BazaarVersionUnsupported bool   `json:"bazaarVersionUnsupported,omitempty"` // 在线版本要求的最低应用版本高于当前版本
+	UpdateRequiredMinAppVer  string `json:"updateRequiredMinAppVer,omitempty"`  // 升级目标要求的最小应用版本
+	InvalidReason            string `json:"invalidReason,omitempty"`            // 本地安装包异常原因
+
+	RatingAvailable bool           `json:"ratingAvailable"`  // 在线集市公开评分是否可用
+	Rating          *PackageRating `json:"rating,omitempty"` // 在线集市公开评分
 
 	// 专用字段，nil 时不序列化
 	InstalledIncompatible *bool     `json:"installedIncompatible,omitempty"` // 插件/主题：本地已安装版本是否不兼容
 	BazaarIncompatible    *bool     `json:"bazaarIncompatible,omitempty"`    // 插件/主题：在线集市版本是否不兼容
 	Enabled               *bool     `json:"enabled,omitempty"`               // Plugin：是否启用
+	UserDisabledInPublish *bool     `json:"userDisabledInPublish,omitempty"` // Plugin：是否由用户在发布服务中禁用
 	Modes                 *[]string `json:"modes,omitempty"`                 // Theme：支持的模式列表
+}
+
+const (
+	PackageInvalidReasonMissingManifest = "missing-manifest"
+	PackageInvalidReasonInvalidManifest = "invalid-manifest"
+	PackageInvalidReasonNameMismatch    = "name-mismatch"
+)
+
+var reservedPackageNames = map[string]bool{
+	"CON": true, "PRN": true, "AUX": true, "NUL": true,
+	"COM1": true, "COM2": true, "COM3": true, "COM4": true, "COM5": true,
+	"COM6": true, "COM7": true, "COM8": true, "COM9": true,
+	"LPT1": true, "LPT2": true, "LPT3": true, "LPT4": true, "LPT5": true,
+	"LPT6": true, "LPT7": true, "LPT8": true, "LPT9": true,
+}
+
+// IsValidPackageName 判断包名是否可以安全地用作跨平台目录名。
+func IsValidPackageName(packageName string) bool {
+	if !utf8.ValidString(packageName) || len(packageName) < 1 || len(packageName) > 255 || packageName[0] == '.' ||
+		packageName[0] == ' ' ||
+		packageName[len(packageName)-1] == '.' || packageName[len(packageName)-1] == ' ' || strings.Contains(packageName, "..") {
+		return false
+	}
+	for _, char := range packageName {
+		if !unicode.IsPrint(char) || strings.ContainsRune(`<>&'":/\|?*`, char) {
+			return false
+		}
+	}
+	return !reservedPackageNames[strings.ToUpper(packageName)]
+}
+
+// IsValidInstalledPackage 判断本地集市包的清单名是否与安装目录完全一致。
+func IsValidInstalledPackage(pkg *Package, dirName string) bool {
+	return pkg != nil && pkg.Name == dirName && IsValidPackageName(pkg.Name)
 }
 
 type StageRepo struct {
 	URL         string `json:"url"` // owner/repo@hash 形式
+	RepoRef     string `json:"repoRef,omitempty"`
+	Created     string `json:"created,omitempty"`
 	Updated     string `json:"updated"`
 	Stars       int    `json:"stars"`
 	OpenIssues  int    `json:"openIssues"`
@@ -129,7 +197,22 @@ func ParsePackageJSON(filePath string) (ret *Package, err error) {
 	}
 
 	ret.URL = strings.TrimSuffix(ret.URL, "/")
+	// 首次上架时间和在线版本兼容性只能由集市索引提供，不能由本地清单声明。
+	ret.Created = ""
+	ret.BazaarVersionUnsupported = false
+	clearPackageDeprecationMetadata(ret)
 	return
+}
+
+// clearPackageDeprecationMetadata 清除只能由在线集市索引生成的弃用元数据。
+func clearPackageDeprecationMetadata(pkg *Package) {
+	if pkg == nil {
+		return
+	}
+	pkg.Deprecated = false
+	pkg.DeprecatedReason = nil
+	pkg.Choices = nil
+	pkg.PreferredDeprecatedReason = ""
 }
 
 // unescapePackageDisplayStrings 将在线 stage 中已 HTML 转义的展示字段还原为原文，与本地 JSON 一致。
@@ -146,6 +229,9 @@ func unescapePackageDisplayStrings(pkg *Package) {
 	for k, v := range pkg.Description {
 		pkg.Description[k] = html.UnescapeString(v)
 	}
+	for k, v := range pkg.DeprecatedReason {
+		pkg.DeprecatedReason[k] = html.UnescapeString(v)
+	}
 	if pkg.Funding != nil {
 		pkg.Funding.OpenCollective = html.UnescapeString(pkg.Funding.OpenCollective)
 		pkg.Funding.Patreon = html.UnescapeString(pkg.Funding.Patreon)
@@ -153,10 +239,39 @@ func unescapePackageDisplayStrings(pkg *Package) {
 		for i, v := range pkg.Funding.Custom {
 			pkg.Funding.Custom[i] = html.UnescapeString(v)
 		}
+		for i, link := range pkg.Funding.Links {
+			pkg.Funding.Links[i].Label = html.UnescapeString(link.Label)
+			pkg.Funding.Links[i].URL = html.UnescapeString(link.URL)
+		}
 	}
 	for i, kw := range pkg.Keywords {
 		pkg.Keywords[i] = html.UnescapeString(kw)
 	}
+}
+
+// setPreferredPackageDeprecationMetadata 计算弃用原因并防御性过滤无效替代包。
+func setPreferredPackageDeprecationMetadata(pkg *Package) {
+	if pkg == nil || !pkg.Deprecated {
+		clearPackageDeprecationMetadata(pkg)
+		return
+	}
+	pkg.PreferredDeprecatedReason = GetPreferredLocaleString(pkg.DeprecatedReason, "")
+
+	// 替代包可以跨类型，故按「包类型 + 包名」判重与校验
+	choices := make([]PackageChoice, 0, len(pkg.Choices))
+	seen := make(map[string]struct{}, len(pkg.Choices))
+	for _, choice := range pkg.Choices {
+		if !IsValidPackageType(choice.PackageType) || !IsValidPackageName(choice.Name) {
+			continue
+		}
+		identity := choice.PackageType + "/" + strings.ToLower(choice.Name)
+		if _, duplicate := seen[identity]; duplicate {
+			continue
+		}
+		seen[identity] = struct{}{}
+		choices = append(choices, choice)
+	}
+	pkg.Choices = choices
 }
 
 // GetPreferredLocaleString 从 LocaleStrings 中按当前语种取值，无则回退 default、en、en_US（历史命名兼容），再回退 fallback。
@@ -200,6 +315,11 @@ func getPreferredFunding(funding *Funding) string {
 	for _, v := range funding.Custom {
 		if !unsafeFundingURI(v) && "" != strings.TrimSpace(v) {
 			return v
+		}
+	}
+	for _, link := range funding.Links {
+		if !unsafeFundingURI(link.URL) && "" != strings.TrimSpace(link.URL) {
+			return link.URL
 		}
 	}
 	return ""

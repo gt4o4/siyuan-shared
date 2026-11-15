@@ -1,7 +1,7 @@
 <p align="center">
 <img alt="SiYuan" src="https://b3log.org/images/brand/siyuan-128.png">
 <br>
-<em>あなたの思考をリファクタリングする</em>
+<em>思考から洞察へ、エージェントとともに</em>
 <br><br>
 <a title="Build Status" target="_blank" href="https://github.com/siyuan-note/siyuan/actions/workflows/cd.yml"><img src="https://img.shields.io/github/actions/workflow/status/siyuan-note/siyuan/cd.yml?style=flat-square"></a>
 <a title="Releases" target="_blank" href="https://github.com/siyuan-note/siyuan/releases"><img src="https://img.shields.io/github/release/siyuan-note/siyuan.svg?style=flat-square&color=9CF"></a>
@@ -11,7 +11,7 @@
 <a title="Docker Image Size" target="_blank" href="https://hub.docker.com/r/b3log/siyuan"><img src="https://img.shields.io/docker/image-size/b3log/siyuan.svg?style=flat-square&color=ff96b4"></a>
 <a title="Hits" target="_blank" href="https://github.com/siyuan-note/siyuan"><img src="https://hits.b3log.org/siyuan-note/siyuan.svg"></a>
 <br>
-<a title="AGPLv3" target="_blank" href="https://www.gnu.org/licenses/agpl-3.0.txt"><img src="http://img.shields.io/badge/license-AGPLv3-orange.svg?style=flat-square"></a>
+<a title="AGPLv3" target="_blank" href="https://www.gnu.org/licenses/agpl-3.0.txt"><img src="https://img.shields.io/badge/license-AGPLv3-orange.svg?style=flat-square"></a>
 <a title="Code Size" target="_blank" href="https://github.com/siyuan-note/siyuan"><img src="https://img.shields.io/github/languages/code-size/siyuan-note/siyuan.svg?style=flat-square&color=yellow"></a>
 <a title="GitHub Pull Requests" target="_blank" href="https://github.com/siyuan-note/siyuan/pulls"><img src="https://img.shields.io/github/issues-pr-closed/siyuan-note/siyuan.svg?style=flat-square&color=FF9966"></a>
 <br>
@@ -28,6 +28,7 @@
 | <a href="README.zh-CN.md">中文</a>
 | <b>日本語</b>
 | <a href="README.tr.md">Türkçe</a>
+| <a href="README.pt-BR.md">Português</a>
 </p>
 
 ---
@@ -43,6 +44,7 @@
   - [インストールパッケージ](#インストールパッケージ)
   - [パッケージマネージャー](#パッケージマネージャー)
   - [Docker ホスティング](#docker-ホスティング)
+  - [Kubernetes ホスティング](#kubernetes-ホスティング)
   - [Unraid ホスティング](#unraid-ホスティング)
   - [TrueNAS ホスティング](#truenas-ホスティング)
   - [テストチャンネル](#テストチャンネル)
@@ -112,7 +114,7 @@ SiYuanは、プライバシーを最優先とする個人の知識管理シス�
 
 ## 🏗️ アーキテクチャとエコシステム
 
-![SiYuan Arch](screenshots/SiYuan_Arch.png "SiYuan Arch")
+![SiYuan Arch](screenshots/SiYuan_Arch.svg "SiYuan Arch")
 
 | プロジェクト                                                   | 説明              | フォーク                                                                           | スター                                                                                | 
 |----------------------------------------------------------|-----------------|---------------------------------------------------------------------------------|--------------------------------------------------------------------------------------|
@@ -196,6 +198,8 @@ SiYuanは、プライバシーを最優先とする個人の知識管理シス�
 
 詳細なパラメータは `--help` を参照してください。以下は新しい環境変数を使用した起動コマンドの例です：
 
+先に `AuthCode` に自分の強力なパスワードを設定してください（Bash では `export AuthCode='自分の強力なパスワード'` を使用し、Compose では同じディレクトリの `.env` ファイルからも読み込めます）。未設定または空の場合、例はエラーで停止します。
+
 ```bash
 docker run -d \
   -v workspace_dir_host:workspace_dir_container \
@@ -205,7 +209,7 @@ docker run -d \
   b3log/siyuan \
   serve \
   --workspace=workspace_dir_container \
-  --accessAuthCode=xxx
+  --accessAuthCode="${AuthCode:?Set AuthCode}"
 ```
 
 - `PUID`: カスタムユーザーID（オプション、指定しない場合はデフォルトで `1000`）
@@ -216,10 +220,20 @@ docker run -d \
 - `accessAuthCode`: ロック画面パスワード（**必ず変更してください**、そうしないと誰でもデータにアクセスできます）
   - また、`SIYUAN_ACCESS_AUTH_CODE` 環境変数を設定することでロック画面パスワードを指定することもできます。両方が設定されている場合、コマンドラインの値が優先されます
   - 環境変数 `SIYUAN_ACCESS_AUTH_CODE_BYPASS=true` を設定することで、ロック画面パスワードを無効にすることができます
+- OIDC はロック画面パスワードの代わりに Docker アクセス認証として利用できます。`SIYUAN_OIDC_ENABLED=true`、`SIYUAN_OIDC_PROVIDER`（`custom`、`google`、`microsoft`、`github` のいずれか）、`SIYUAN_OIDC_CLIENT_ID`、および以下のプロバイダー固有の値を設定してください。GitHub は OAuth 2.0 ユーザー API アダプターを使用し、その他のプロバイダーは OpenID Connect ディスカバリーと ID Token 検証を使用します。ロック画面パスワードが利用できない状態で無効な構成を有効にすると、Docker の起動が中断されます
+  - `SIYUAN_OIDC_ISSUER_URL`：`custom` および `microsoft` プロバイダーに必要な Issuer URL。Microsoft は `https://login.microsoftonline.com/<tenant-id>/v2.0` のようなテナント固有の issuer を使用する必要があります
+  - `SIYUAN_OIDC_CLIENT_SECRET`：OpenID Connect プロバイダー向けの任意のクライアントシークレット。GitHub OAuth アダプターでは必須です。すべての認可コードフローで PKCE を使用します
+  - `SIYUAN_OIDC_SCOPES`：カンマまたはスペース区切りのスコープ。`openid` は常に含まれます
+  - `SIYUAN_OIDC_REDIRECT_URL`：`/api/system/oidc/callback` で終わる公開 HTTPS コールバック URL。リモートブラウザーアクセスに必須です
+  - `SIYUAN_OIDC_ALLOW_ALL`：プロバイダーで認証されたすべての ID に SiYuan 管理者アクセスを明示的に付与します
+  - `SIYUAN_OIDC_CLAIM_RULES`：allow-all が無効な場合に使用するクレームルールの JSON 配列。例：`[{"claim":"email","operator":"equals","values":["user@example.com"]},{"claim":"email_verified","operator":"equals","values":["true"]}]`。ルール内の値は OR、ルール間は AND で評価されます
+  - ネイティブモバイルアプリは固定のコールバック URI `siyuan:/oidc-callback` を使用します。記載どおりに登録してください。モバイル構成の検証は保存前にこのコールバックを使用します。カスタムプロバイダー、Microsoft、GitHub は、アプリ登録がこのコールバック URI を受け入れる場合にのみ使用できます。Google は Android クライアントタイプでこのプライベート URI を受け付けないため、Google ログインはブラウザーおよびデスクトップフローに限定されます
 - `SIYUAN_LANG`：インターフェース言語（オプション、Docker で未設定の場合はデフォルト `en`）。BCP 47 タグ（`zh-CN`/`zh-TW`/`en`/`ja`/`pt-BR` など）を受け付けます。従来のアンダースコア形式（`zh_CN`/`en_US` など）も互換性のため受け付けます。**設定**で選択した言語を再起動後も維持したい場合は、デプロイ時にこの変数を省略してください。設定した場合は起動のたびに適用され、保存済みの言語設定を上書きします
   - あるいは `--lang` コマンドライン引数でも設定できます。両方が設定されている場合、コマンドラインの値が優先されます
 
 簡略化するために、ホストとコンテナでワークスペースフォルダーのパスを一致させることをお勧めします。たとえば、`workspace_dir_host` と `workspace_dir_container` の両方を `/siyuan/workspace` に設定します。対応する起動コマンドは次のようになります：
+
+先に `AuthCode` に自分の強力なパスワードを設定してください（Bash では `export AuthCode='自分の強力なパスワード'` を使用し、Compose では同じディレクトリの `.env` ファイルからも読み込めます）。未設定または空の場合、例はエラーで停止します。
 
 ```bash
 docker run -d \
@@ -230,19 +244,21 @@ docker run -d \
   b3log/siyuan \
   serve \
   --workspace=/siyuan/workspace/ \
-  --accessAuthCode=xxx
+  --accessAuthCode="${AuthCode:?Set AuthCode}"
 ```
 
 #### Docker Compose
 
 Docker Composeを使用してSiYuanを実行するユーザー向けに、環境変数 `PUID` と `PGID` を使用してユーザーとグループのIDをカスタマイズできます。以下はDocker Composeの設定例です：
 
+先に `AuthCode` に自分の強力なパスワードを設定してください（Bash では `export AuthCode='自分の強力なパスワード'` を使用し、Compose では同じディレクトリの `.env` ファイルからも読み込めます）。未設定または空の場合、例はエラーで停止します。
+
 ```yaml
 version: "3.9"
 services:
   main:
     image: b3log/siyuan
-    command: ['serve', '--workspace=/siyuan/workspace/', '--accessAuthCode=${AuthCode}']
+    command: ['serve', '--workspace=/siyuan/workspace/', '--accessAuthCode=${AuthCode:?Set AuthCode}']
     ports:
       - 6806:6806
     volumes:
@@ -277,6 +293,8 @@ chown -R 1001:1002 /siyuan/workspace
 NGINXリバースプロキシを使用してポート6806を隠します。注意点：
 
 - WebSocketリバースプロキシ `/ws` を設定します
+- 通常のリクエストと `/ws` の両方で、ポートを含む元の `Host` ヘッダーを保持してください。NGINX の両方のプロキシ設定に `proxy_set_header Host $http_host;` を指定します。`$host` を使用すると標準以外のポート（例：`8443`）が失われ、Origin の検証に失敗する場合があります。その結果、ログイン後にロゴ画面で再読み込みを繰り返す、API が `401` を返す、WebSocket 接続に失敗するなどの問題が発生します
+- 両方のプロキシ設定で `proxy_set_header X-Forwarded-For $remote_addr;` を設定し、カーネルが実際のクライアントアドレスを取得できるようにします。呼び出し元が指定した `X-Forwarded-For` をそのまま転送しないでください。転送すると、リモートクライアントがローカル管理者として扱われる可能性があります
 
 #### 注意
 
@@ -292,6 +310,35 @@ NGINXリバースプロキシを使用してポート6806を隠します。注�
 
 </details>
 
+### Kubernetes ホスティング
+
+<details>
+<summary>Kubernetes デプロイメント</summary>
+
+[HelmForge SiYuan チャート](https://github.com/helmforgedev/charts/tree/main/charts/siyuan) は HelmForge コミュニティが保守しており、公式の `b3log/siyuan` イメージを使用します。SiYuan 公式のチャートではありません。チャートに関する問題は [HelmForge](https://github.com/helmforgedev/charts/issues) に報告してください。
+
+Helm、kubectl、およびデフォルトの StorageClass で 10Gi の ReadWriteOnce ボリュームを動的に確保できる Kubernetes クラスターを用意して、次を実行します：
+
+```bash
+helm repo add helmforge https://repo.helmforge.dev
+helm repo update
+helm install siyuan helmforge/siyuan --namespace siyuan --create-namespace --wait
+kubectl -n siyuan get secret siyuan-siyuan-auth -o go-template='{{index .data "access-code" | base64decode}}{{"\n"}}'
+kubectl -n siyuan port-forward service/siyuan-siyuan 6806:6806
+```
+
+<http://localhost:6806> を開き、生成されたロック画面パスワードを入力します。このパスワードは安全に保管してください。API トークンとは異なる認証情報です。上記のリソース名は、チャートのデフォルト設定とリリース名 `siyuan` を前提としています。
+
+リモートアクセスには、専用の HTTPS ホスト名と、`/ws` の WebSocket 接続を中継できる Ingress コントローラーを使用し、URL の書き換えは行わないでください。`ingress` を設定し、`networkPolicy.ingressFrom` でコントローラーの名前空間からの通信を許可します。デフォルトのポリシーでは、同じ名前空間からの受信と DNS への送信のみが許可されます。クラウド同期などの外部サービスには、明示的な送信ルールが必要です。TLS、既存の Secret、ストレージの設定は、[チャートガイドと本番環境の設定例](https://helmforge.dev/docs/charts/siyuan)を参照してください。
+
+- **ワークスペースに書き込むインスタンスは 1 つだけ：** レプリカ数を増やしたり、同じワークスペースを別の実行中インスタンスにマウントしたりしないでください。ReadWriteMany ストレージでも同様です。チャートは `Recreate` を使用し、古いインスタンスの停止後に新しいインスタンスを起動するため、アップグレード中はサービスが停止します。
+- **永続化：** ワークスペース全体を `/siyuan/workspace` にマウントします。チャートが作成した PVC はアンインストール時にデフォルトで保持されますが、名前空間や PVC を削除するとデータが失われる可能性があります。保持または復元した PVC は `persistence.existingClaim` で再利用します。
+- **バックアップとアップグレード：** 書き込みインスタンスを正常に停止してからワークスペース全体をバックアップするか、アプリケーションの整合性を保証するバックアップ手順を使用してください。使用中の SQLite インデックスをコピーするだけでは不十分です。認証用 Secret、暗号鍵、暗号化ノートブックの復旧パスワードを安全に保管し、別の PVC への復元をテストしてください。アップグレード前にバックアップを取得し、ストレージ形式の変更を確認してください。Helm のロールバックではデータの移行は元に戻りません。
+
+Docker ホスティングの制限も適用されます。ブラウザーでのみ利用でき、デスクトップおよびモバイルアプリからの接続、PDF・HTML・Word へのエクスポート、Markdown ファイルのインポートはサポートされません。
+
+</details>
+
 ### Unraid ホスティング
 
 <details>
@@ -304,7 +351,7 @@ NGINXリバースプロキシを使用してポート6806を隠します。注�
 ```
 Web UI: 6806
 Container Port: 6806
-Container Path: /home/siyuan
+Container Path: /siyuan/workspace
 Host path: /mnt/user/appdata/siyuan
 PUID: 1000
 PGID: 1000
@@ -331,18 +378,21 @@ Apps - DiscoverApps - More Options（右上、Custom App を除く）- YAML で�
 
 テンプレート例：
 
+デプロイ前に、以下の `SIYUAN_ACCESS_AUTH_CODE=` の後に自分の強力なパスワードを入力してください。空のままにしないでください。
+
 ```yaml
 services:
   siyuan:
     image: b3log/siyuan
     container_name: siyuan
-    command: ['serve', '--workspace=/siyuan/workspace/', '--accessAuthCode=2222']
+    command: ['serve', '--workspace=/siyuan/workspace/']
     ports:
       - 6806:6806
     volumes:
       - /mnt/Pool_1/Apps_Data/siyuan:/siyuan/workspace  # Adjust to your dataset path 
     restart: unless-stopped
     environment:
+      - SIYUAN_ACCESS_AUTH_CODE=
       - TZ=Asia/Tokyo  # 必要に応じてタイムゾーンに置き換えてください
       - PUID=1001
       - PGID=1002
@@ -358,6 +408,8 @@ services:
 ## ⌨️ コマンドラインインターフェース
 
 組み込み CLI で、サーバー起動なしにワークスペースデータへ直接アクセスできます。
+
+CLI は暗号化ノートブックの操作をサポートしていません。アプリ内の専用手順でロックを解除して操作してください。
 
 ### クイックスタート
 
@@ -426,7 +478,7 @@ ln -s /インストール先/SiYuan/resources/kernel/SiYuan-Kernel /usr/local/bi
 - `widgets` はウィジェットを保存するために使用されます
 - `plugins` はプラグインを保存するために使用されます
 - `public` は公開データを保存するために使用されます
-- 残りのフォルダーはユーザーが作成したノートブックフォルダーであり、ノートブックフォルダー内の `.sy` サフィックスのファイルはドキュメントデータを保存するために使用され、データ形式はJSONです
+- ノートブックフォルダーには文書データが保存されます。通常のノートブックの `.sy` 文書は JSON で保存され、暗号化ノートブックの `.sy` 文書は暗号文で保存されます。
 
 ### サードパーティの同期ディスクを介したデータ同期をサポートしていますか？
 
@@ -454,20 +506,26 @@ SiYuanは完全にオープンソースであり、貢献を歓迎します：
 
 <kbd>設定</kbd> - <kbd>情報</kbd> - <kbd>現在のバージョン</kbd> で <kbd>更新を確認</kbd> できます。また、[公式ダウンロード](https://b3log.org/siyuan/en/download.html) または [GitHub Releases](https://github.com/siyuan-note/siyuan/releases) をフォローして新しいバージョンを入手することもできます。
 
+**注意：** ワークスペースをインストール先に置かないでください。更新時にインストール先のファイルが削除されます。
+
 ### 一部のブロック（リスト項目内の段落ブロックなど）がブロックアイコンを見つけられない場合はどうすればよいですか？
 
 リスト項目の最初のサブブロックはブロックアイコンが省略されています。このブロックにカーソルを移動し、<kbd>Ctrl+/</kbd> を使用してそのブロックメニューをトリガーできます。
 
 ### データリポジトリキーを紛失した場合はどうすればよいですか？
 
-- データリポジトリキーが以前に複数のデバイスで正しく初期化されている場合、キーはすべてのデバイスで同じであり、<kbd>設定</kbd> - <kbd>アカウントと同期</kbd> - <kbd>ローカルデータリポジトリ</kbd> - <kbd>データリポジトリキー</kbd> - <kbd>キー文字列をコピー</kbd> で見つけることができます
+データリポジトリキーはスナップショットと同期データを保護するもので、暗号化ノートブックのマスターパスワードやキーバックアップとは別のものです。データリポジトリをリセットしても、紛失したマスターパスワードを復元したり、対応する暗号化キーのバックアップを代替したりすることはできません。
+
+リセット前に思源を正常に終了し、ワークスペース全体をバックアップしてください。暗号化ノートブックがある場合は、対応する暗号化キーのバックアップを別途保存し、マスターパスワードが使えることを確認してください。古い同期ディレクトリとクラウドスナップショットは、新しい同期の完了、データの完全性、復元に必要な情報の保管を確認してから、必要に応じて削除してください。
+
+- データリポジトリキーが以前に複数のデバイスで正しく初期化されている場合、キーはすべてのデバイスで同じであり、<kbd>設定</kbd> - <kbd>アカウントと同期</kbd> - <kbd>データリポジトリ</kbd> - <kbd>データリポジトリキー</kbd> - <kbd>キー文字列をコピー</kbd> で見つけることができます
 - 以前に正しく構成されていない場合（たとえば、複数のデバイスでキーが一致しない場合）またはすべてのデバイスが使用できず、キー文字列を取得できない場合は、以下の手順でキーをリセットできます：
 
-  1. データを手動でバックアップします。<kbd>データのエクスポート</kbd> を使用するか、ファイルシステム上で <kbd>ワークスペース/data/</kbd> フォルダーをコピーします
-  2. <kbd>設定</kbd> - <kbd>アカウントと同期</kbd> - <kbd>ローカルデータリポジトリ</kbd> - <kbd>データリポジトリキー</kbd> - <kbd>データリポジトリをリセット</kbd>
+  1. 思源を正常に終了してワークスペース全体をバックアップし、暗号化ノートブックがある場合は対応する暗号化キーのバックアップとマスターパスワードも保管する
+  2. <kbd>設定</kbd> - <kbd>アカウントと同期</kbd> - <kbd>データリポジトリ</kbd> - <kbd>データリポジトリキー</kbd> - <kbd>データリポジトリのリセット</kbd>
   3. データリポジトリキーを再初期化します。1台のデバイスでキーを初期化した後、他のデバイスでキーをインポートします
-  4. クラウドは新しい同期ディレクトリを使用します。古い同期ディレクトリは使用できなくなり、削除できます
-  5. 既存のクラウドスナップショットは使用できなくなり、削除できます
+  4. クラウドで新しい同期ディレクトリを使用し、新しい同期の完了、データの完全性、復元に必要な情報の保管を確認してから、必要に応じて古いディレクトリを削除する
+  5. 新しい同期の完了、データの完全性、復元に必要な情報の保管を確認してから、必要に応じて古いクラウドスナップショットを削除する
 
 ### 支払いが必要ですか？
 

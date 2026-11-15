@@ -1,23 +1,12 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package util
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -33,7 +22,8 @@ func TestTestRerankModelValidatesResults(t *testing.T) {
 	}{
 		{name: "valid", body: `{"results":[{"index":1,"relevance_score":0.9},{"index":0,"relevance_score":0.8}]}`, matched: true},
 		{name: "empty", body: `{"results":[]}`},
-		{name: "nested", body: `{"output":{"results":[{"index":1,"relevance_score":0.9},{"index":0,"relevance_score":0.8}]}}`},
+		{name: "nested", body: `{"output":{"results":[{"index":1,"relevance_score":0.9},{"index":0,"relevance_score":0.8}]}}`, matched: true},
+		{name: "missing", body: `{"output":{}}`},
 		{name: "duplicate", body: `{"results":[{"index":0,"relevance_score":0.9},{"index":0,"relevance_score":0.8}]}`},
 	}
 
@@ -45,7 +35,12 @@ func TestTestRerankModelValidatesResults(t *testing.T) {
 			}))
 			defer server.Close()
 
-			matched, err := TestRerankModel("key", server.URL, "model", 5)
+			matched, err := TestRerankModel(RerankOptions{
+				APIKey:   "key",
+				Endpoint: server.URL,
+				Model:    "model",
+				Timeout:  5,
+			})
 			if matched != test.matched {
 				t.Fatalf("matched = %v, want %v", matched, test.matched)
 			}
@@ -59,8 +54,71 @@ func TestTestRerankModelValidatesResults(t *testing.T) {
 	}
 }
 
+func TestRerankRequestFormats(t *testing.T) {
+	tests := []struct {
+		name          string
+		requestFormat RerankRequestFormat
+		topN          int
+		expected      string
+	}{
+		{
+			name:     "default cohere",
+			topN:     1,
+			expected: `{"model":"model","query":"query","documents":["document"],"top_n":1}`,
+		},
+		{
+			name:          "cohere without top n",
+			requestFormat: RerankRequestFormatCohere,
+			expected:      `{"model":"model","query":"query","documents":["document"]}`,
+		},
+		{
+			name:          "dashscope",
+			requestFormat: RerankRequestFormatDashScope,
+			topN:          1,
+			expected:      `{"model":"model","input":{"query":"query","documents":["document"]},"parameters":{"top_n":1}}`,
+		},
+		{
+			name:          "dashscope without top n",
+			requestFormat: RerankRequestFormatDashScope,
+			expected:      `{"model":"model","input":{"query":"query","documents":["document"]}}`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				if nil != err {
+					t.Fatalf("read request failed: %v", err)
+				}
+				if string(body) != test.expected {
+					t.Fatalf("request body = %s, want %s", body, test.expected)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"results":[{"index":0,"relevance_score":1}]}`))
+			}))
+			defer server.Close()
+
+			indices, _, err := Rerank("query", []string{"document"}, RerankOptions{
+				APIKey:        "key",
+				Endpoint:      server.URL,
+				Model:         "model",
+				RequestFormat: test.requestFormat,
+				TopN:          test.topN,
+				Timeout:       5,
+			})
+			if nil != err {
+				t.Fatalf("Rerank failed: %v", err)
+			}
+			if len(indices) != 1 || 0 != indices[0] {
+				t.Fatalf("unexpected indices: %v", indices)
+			}
+		})
+	}
+}
+
 func TestRerankTruncatesDocumentsByRunes(t *testing.T) {
-	var received rerankRequest
+	var received rerankCohereRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&received); nil != err {
 			t.Fatalf("decode request failed: %v", err)
@@ -71,7 +129,13 @@ func TestRerankTruncatesDocumentsByRunes(t *testing.T) {
 	defer server.Close()
 
 	document := strings.Repeat("中", rerankDocTextMaxRunes+1)
-	indices, _, err := Rerank("query", []string{document}, "key", server.URL, "model", 1, 5)
+	indices, _, err := Rerank("query", []string{document}, RerankOptions{
+		APIKey:   "key",
+		Endpoint: server.URL,
+		Model:    "model",
+		TopN:     1,
+		Timeout:  5,
+	})
 	if nil != err {
 		t.Fatalf("Rerank failed: %v", err)
 	}

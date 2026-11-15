@@ -1,12 +1,14 @@
-# SiYuan `.sy` File JSON Structure — AI Read/Write Guide
+# SiYuan `.sy` File JSON Structure — Read/write reference
 
-> Canonical Spec baseline: `2` (the current writer output; compatible readers may encounter an older or missing `Spec` and upgrade it).
+[中文](SY-FORMAT.zh-CN.md)
+
+> Canonical Spec baseline: `2` for ordinary documents, `3` for documents containing tabs, `4` for documents using table-cell rich text, `5` for documents containing mind map nodes, `6` for document titles containing ASCII `/`, and `7` for document titles with a complete inline source; compatible readers may upgrade older or missing versions.
 > Verified against samples: `20200825162036-4dx365o.sy` (formatting elements), `20200905090211-2vixtlf.sy` (block types).
 > All conclusions are based on real samples and the current Lute / SiYuan kernel source. The cited samples contain a few known legacy artifacts; canonical write rules follow the current source when a sample differs.
 > This guide describes plaintext `.sy` JSON in an ordinary notebook, or the decrypted AST of an unlocked encrypted notebook. An encrypted notebook's on-disk `.sy` file is ciphertext and must not be edited as JSON.
 > Companion document: [`WORKSPACE.md`](./WORKSPACE.md) covers the overall on-disk layout of the workspace (how notebooks, parent/child documents, and assets are organized); this document focuses on the **internal** JSON structure of a `.sy` file.
 
-## 0. In one sentence
+## 0. Overview
 
 A plaintext `.sy` file is a Lute AST tree serialized to JSON. The root node is `NodeDocument`; the body is the recursively nested `Children` array. There is no separately maintained JSON Schema — the Lute `ast.Node` and `ListData` Go structs are the serialization source of truth. The tree contains the document AST and its IAL, while assets, AttributeView definitions, and rebuildable indexes live outside the tree.
 
@@ -16,11 +18,15 @@ This guide distinguishes the format that new writers should emit from historical
 
 | Term | Meaning |
 |---|---|
-| **Required** | Required in newly generated canonical Spec 2 data |
-| **Optional** | May be omitted because the field is empty or carries `omitempty` |
+| **Required** | Required in newly generated canonical data |
+| **Optional** | May be omitted because the field is empty or contains `omitempty` |
 | **Compatible input** | Historical or external data that the reader may accept and preserve, repair, or upgrade according to explicit compatibility rules |
 
 Unless a section explicitly says otherwise, "required" refers to canonical new writes. `dataparser.ParseJSON` is a compatibility reader rather than a strict schema validator: for example, it can add a missing empty paragraph, assign a missing block ID, and upgrade an old `Spec`.
+
+Canonical plaintext `.sy` writes use UTF-8 JSON without a byte order mark (BOM). The file-system tree and document-property readers accept one UTF-8 BOM (`EF BB BF`) at the very beginning of the plaintext, before JSON validation and parsing. For encrypted notebooks, this normalization takes place only after authenticated decryption; a BOM must not be prepended to the ciphertext. Successful tree repair or saving writes JSON without a BOM. Read-only snapshots and property queries leave the source unchanged. Malformed JSON, unsupported document specifications, and authentication failures remain errors and must preserve the original file; BOM tolerance does not bypass these checks.
+
+Only the file root is a `NodeDocument`. For compatible reads of historical files containing a `NodeDocument` inside the body, filesystem tree readers convert that nested node into a vertical `NodeSuperBlock` with the standard open/layout (`row`)/close markers. Its block ID, attributes (including the former title), existing child blocks, and their order are retained; an empty nested document receives an empty paragraph. File repair or saving persists the normalized structure through the existing authenticated write path, while read-only snapshots normalize only their in-memory tree. Header-only property queries leave the source unchanged. Reindexing replaces the matching obsolete nested-document index row without removing genuine documents or records from another source. This uses the existing super-block format and does not change the document specification or encryption envelope.
 
 ---
 
@@ -69,10 +75,33 @@ Division of labor among the four paths:
 | Top-level key | Required | Meaning |
 |---|---|---|
 | `ID` | ✅ | Document block ID. **Equals the filename without `.sy`** |
-| `Spec` | ✅ | `"2"` in canonical current files; older or missing values are compatible input and may be upgraded |
+| `Spec` | ✅ | `"2"` for ordinary documents, `"3"` for tabs, `"4"` for table-cell rich text, `"5"` for mind map nodes, `"6"` for titles containing ASCII `/`, `"7"` for a complete inline title source; use at least the highest required feature version and never lower an existing version |
 | `Type` | ✅ | `"NodeDocument"` |
 | `Properties` | ✅ | Document-level IAL — see §8 |
+| `DocumentTitle` | Optional | Authoritative inline title source, only on the root; requires Spec `7`, as described below |
 | `Children` | ✅ | Array of body child blocks; canonical files contain at least one block |
+
+Spec `6` retains the ordinary `Properties.title` string representation and requires structured document addressing when the title contains ASCII `/`. The feature release adopts that addressing mode automatically; it does not rewrite old document sources just to migrate notebook records. Existing `／`, `%2F`, Markdown-like text, and HTML entity text retain their literal meaning. This specification does not enable inline formatting in titles. Encrypted notebooks authenticate the existing ciphertext envelope before interpreting the same JSON; key derivation, AAD, and recovery material remain unchanged. See [Document titles and addressing](DOCUMENT-ADDRESSING.md) for release protection and migration requirements.
+
+### 1.1 Complete document title source (Spec 7)
+
+A rich title belongs to the document root and does not create a body block or another block ID. Its authoritative source is a versioned envelope:
+
+```json
+"DocumentTitle": {
+  "spec": 1,
+  "format": "inline-ast",
+  "content": "[{\"Type\":\"NodeText\",\"Data\":\"Title \"},{\"Type\":\"NodeTextMark\",\"TextMarkType\":\"strong\",\"TextMarkTextContent\":\"example\"}]"
+}
+```
+
+`content` is a UTF-8 JSON string containing an array of canonical `.sy` inline nodes, not Markdown and not a paragraph wrapper. Native text marks, images and their marker children, escapes, entities, emoji, and soft breaks retain their complete supported attributes. Inline nodes have no persistent `ID`; block nodes, raw HTML nodes, and unknown node or mark types are rejected. This format does not enable syntax that the normal editor disables. Existing empty rich sources (`[]`) remain readable. Title writes that can be restored losslessly as ordinary text, including an empty title, omit `DocumentTitle` and store the text in `Properties.title`; formatting, resources, references, and inline line breaks retain the inline source. Removing the inline source does not lower the document specification, and read-only access does not rewrite existing sources.
+
+`Properties.title` is a derived plain-text summary for compact surfaces, paths, and indexes. Visible text, image alt text, and formulas contribute to it; inline memo contents and resource destinations do not. Full title rendering and export use `DocumentTitle` rather than reconstructing rich content from the summary. Dynamic reference labels are derived caches and do not alter the source edit revision. Title references belong to the root document ID for backlinks and relationship indexing; title assets belong to the same document for resource handling. Neither title inlines nor their temporary paragraph become body children.
+
+Notebook documents use the same title representation, with their root ID equal to the notebook ID. `Properties.custom-sy-notebook-title-source = "document"` records that the document title is authoritative, including after conversion to plain text or an empty title. The notebook configuration name is derived from the plain-text summary, with an untitled placeholder for an empty summary. Preserve this attribute during body edits, export and recovery; existing notebook documents without it or a rich title source continue to follow the configured notebook name.
+
+Readers validate the original source envelope before tolerant AST repair. `spec`, `format`, and `content` are required, case-sensitive, and non-null; unknown or duplicate fields, invalid UTF-8, NUL, unsupported versions, malformed nodes, and exceeded limits are errors. The content limit is 1 MiB, with at most 8192 nodes and a maximum nesting depth of 64. Invalid source is preserved and must not be replaced with the summary or silently repaired away. Documents without `DocumentTitle` keep `Properties.title` as literal plain text; opening them does not parse Markdown or change the source. Existing document versions are never lowered. `.sy` export, history, backup, and recovery preserve the complete source; encrypted readers authenticate the existing ciphertext envelope before these checks.
 
 > ⚠️ The file path strictly corresponds to the root ID: `data/<box>/<...>/<rootID>.sy`. Changing the root ID means renaming the file — don't change it casually. For the full file-system layout see [`WORKSPACE.md`](./WORKSPACE.md).
 > A compatible reader inserts an empty paragraph when `Children` is missing or empty, but new writers should emit that paragraph themselves.
@@ -90,7 +119,7 @@ Division of labor among the four paths:
 | `Children` | array | containers and structurally composite nodes | Child node array |
 | Type-specific fields | - | per type | e.g. `HeadingLevel`, `ListData`, `TextMarkType`, `AttributeViewID` |
 
-**Core discriminator rule:** `Type` determines whether a node is a block (`ast.Node.IsBlock()` is authoritative); the presence of `ID` does not. In canonical Spec 2 data, every block has an `ID` and matching `Properties.id`, while new inline/marker nodes have neither. Historical files produced by old bugs may contain IDs on non-block nodes such as `NodeCodeBlockCode` or `NodeMathBlockContent`. Compatible readers and editors may remove those legacy `ID` / `Properties.id` fields during normalization, but must classify the node by `Type` and must not delete the node merely because its `ID` conflicts with the canonical rule.
+**Core discriminator rule:** `Type` determines whether a node is a block (`ast.Node.IsBlock()` is authoritative); the presence of `ID` does not. In canonical data, every block has an `ID` and matching `Properties.id`, while new inline/marker nodes have neither. Historical files produced by old bugs may contain IDs on non-block nodes such as `NodeCodeBlockCode` or `NodeMathBlockContent`. Compatible readers and editors may remove those legacy `ID` / `Properties.id` fields during normalization, but must classify the node by `Type` and must not delete the node merely because its `ID` conflicts with the canonical rule.
 
 ---
 
@@ -103,7 +132,7 @@ Division of labor among the four paths:
 - `Properties.updated` is the same 14-digit timestamp; semantics: "last updated time".
 - When changing block content or structure, refresh `Properties.updated` on the changed block, its block-level ancestors, applicable preceding headings, and the document root.
 - When you change any block's `ID`, you must **sync** `Properties.id`. Its `Properties.updated` must be no earlier than the creation time encoded by the new ID.
-- Compatible historical input may lack `updated`; canonical new writes should always include it on block nodes.
+- Compatible historical input may lack `updated`; however, canonical new writes should always include it on block nodes.
 
 ---
 
@@ -113,7 +142,7 @@ Division of labor among the four paths:
 
 **Leaf blocks:** `NodeParagraph`, `NodeHeading`, `NodeThematicBreak`, `NodeHTMLBlock`, `NodeCodeBlock`, `NodeMathBlock`, `NodeTable`, `NodeBlockQueryEmbed`, `NodeAttributeView`, `NodeIFrame`, `NodeVideo`, `NodeAudio`, `NodeWidget`, `NodeCustomBlock`
 
-**Container blocks:** `NodeList`, `NodeListItem`, `NodeBlockquote`, `NodeCallout`, `NodeSuperBlock`
+**Container blocks:** `NodeList`, `NodeListItem`, `NodeBlockquote`, `NodeCallout`, `NodeSuperBlock`, `NodeTabs`, `NodeTabItem`, `NodeMindmap`, `NodeMindmapItem`
 
 ### Inline / marker nodes (no ID in canonical data)
 
@@ -157,7 +186,7 @@ NodeList                         NodeList
    └─ NodeParagraph               └─ NodeCodeBlock         ← illegal
 ```
 
-**Nested lists** are written by wrapping another `NodeList` (`NodeListItem` falls into the default `CanContain` branch and cannot directly contain another `NodeListItem`):
+**Nested lists** are written by wrapping another `NodeList` (`NodeListItem` follows the default `CanContain` branch and cannot directly contain another `NodeListItem`):
 
 ```
 ✅ Correct                       ❌ Wrong
@@ -218,7 +247,7 @@ NodeList                         NodeList
   ] }
 ```
 
-### 5.4 `ListData` fields in full (★ easiest to get wrong)
+### 5.4 `ListData` fields in full
 
 | Field | Type (code) | JSON form | Meaning |
 |---|---|---|---|
@@ -233,7 +262,7 @@ NodeList                         NodeList
 | `Checked` | bool | boolean | Compatibility metadata derived while parsing a task marker; it is not an aggregate for the whole list and may be omitted |
 | `Marker` | []byte | **base64 string** | The marker text, **base64-encoded**; may include a delimiter (`"MS4="` = `1.`) or not (`"MQ=="` = `1`) |
 
-> Key distinction: **`BulletChar`/`Delimiter` are `byte` in code and appear as int codepoints in JSON**; **`Marker` is `[]byte` in code and appears as a base64 string in JSON**. `Marker`/`BulletChar`/`Delimiter` all carry `omitempty` and may be omitted.
+> Key distinction: **`BulletChar`/`Delimiter` are `byte` in code and appear as int codepoints in JSON**; **`Marker` is `[]byte` in code and appears as a base64 string in JSON**. `Marker`/`BulletChar`/`Delimiter` all contain `omitempty` and may be omitted.
 
 ### 5.5 Task marker
 
@@ -288,7 +317,7 @@ An arbitrary non-space marker such as `!` is also treated as checked and preserv
 | `WARNING` | `Warning` | `⚠️` |
 | `CAUTION` | `Caution` | `🚨` |
 
-The table lists the five built-in types and their defaults. Custom `CalloutType`, title, and icon values are also supported. `CalloutIcon` is a literal emoji for `CalloutIconType: 0` (the default, omitted by `omitempty`); `CalloutIconType: 1` means `CalloutIcon` is a custom icon path.
+The table lists the five built-in types and their defaults. However, custom `CalloutType`, title, and icon values are also supported. `CalloutIcon` is a literal emoji for `CalloutIconType: 0` (the default, omitted by `omitempty`); `CalloutIconType: 1` means `CalloutIcon` is a custom icon path.
 
 ### 5.8 Super block (nestable; three-marker envelope)
 
@@ -302,7 +331,7 @@ The table lists the five built-in types and their defaults. Custom `CalloutType`
   ] }
 ```
 
-> `NodeSuperBlockLayoutMarker.Data` can only be `"row"` (horizontal) or `"col"` (vertical). A canonical super block contains the open marker, layout marker, at least one content block, and close marker — at least four children total. It may contain multiple content blocks, can nest, and is the only container that can hold any block (including itself).
+> `NodeSuperBlockLayoutMarker.Data` can only be `"row"` (vertical) or `"col"` (horizontal). A canonical super block contains the open marker, layout marker, at least one content block, and close marker — at least four children total. It may contain multiple content blocks, can nest, and can contain ordinary content blocks including itself, but not a bare tab item.
 
 ### 5.9 Embed block (five-part structure `{{ ... }}`)
 
@@ -316,6 +345,39 @@ The table lists the five built-in types and their defaults. Custom `CalloutType`
     { "Type": "NodeCloseBrace" }
   ] }
 ```
+
+### 5.9.1 Tabbed container and tab item (Spec 3)
+
+`NodeTabs` and `NodeTabItem` are real container blocks with their own `ID`, `Properties.id` and `Properties.updated`. A tabs container contains only tab items; each item contains ordinary content blocks, including nested tabs, and always has at least one body block. Use an empty paragraph for an empty body. A standalone tab item is an editing fragment and cannot be a direct document child.
+
+```json
+{
+  "Type": "NodeTabs",
+  "ID": "20260905120000-tabs001",
+  "Properties": {"id": "20260905120000-tabs001", "updated": "20260905120000", "tabs-active-id": "20260905120000-item001", "tabs-position": "left"},
+  "Children": [{
+    "Type": "NodeTabItem",
+    "ID": "20260905120000-item001",
+    "TabItemTitle": "**Example**",
+    "Properties": {"id": "20260905120000-item001", "updated": "20260905120000"},
+    "Children": [{"Type": "NodeParagraph", "ID": "20260905120000-body001", "Properties": {"id": "20260905120000-body001", "updated": "20260905120000"}}]
+  }]
+}
+```
+
+`TabItemTitle` is optional inline Markdown, with the same inline text-mark representation as `CalloutTitle`. It is not a separate persistent child block. Empty and duplicate titles are valid. Tab order follows the child array. `tabs-active-id` references a direct item ID; a missing or invalid value falls back to the first item. `tabs-position` accepts `top` (default) or `left`. Both attributes are saved and synced; changing only the active item does not change body modification timestamps. Regenerating IDs must also remap active-item IDs and internal references in titles.
+
+`NodeTabs.Properties["tabs-task"] = "true"` enables task status for every direct tab item; items without an explicit marker default to incomplete. `NodeTabItem.Properties["tabs-task"]` optionally preserves the original task-list marker. Without the group setting, absence means an ordinary tab. One ASCII space means incomplete, and other supported single-character task markers (including `X`, `/`, and `?`) retain their exact values. Task status is independent of title content and active-tab selection. Markdown export preserves the group setting in the group IAL and item states in an item IAL immediately after the `@tab` title line, for example `{: tabs-task="/"}`. Attribute values must use the same escaping as other IAL values. Conversion back to a task list restores the current marker; conversion to an ordinary list removes the task attribute. Existing item-only task states and mixed groups remain supported.
+
+Documents containing either tab node require at least `Spec: "3"`; table-cell rich text requires Spec 4, mind map nodes require Spec 5, document titles containing ASCII `/` require Spec 6, and complete inline title sources require Spec 7. Ordinary documents remain on Spec 2. Never lower the version after removing a feature. Check the raw root `Spec` before passing JSON to a tolerant parser, because unknown node types can otherwise cause their children to be lost. Unsupported versions must not be repaired and written back.
+
+The internal Markdown syntax uses `::: tabs` to open a group and `@tab <inline title>` to start each item; `@tab:active <inline title>` identifies the selected item. The opening fence requires at least three colons and whitespace (spaces or tabs) before `tabs`; canonical output uses one space. Items have no closing marker; the group closes with a standalone fence containing the same number of colons as its opening fence. Outer fences must be longer than nested fences. Indentation is optional, and canonical output computes fence lengths from nesting depth without adding indentation to tab bodies. Old `:::tabs` and `:::tab` syntax is not recognized; existing `.sy` tab nodes retain the same structure.
+
+An item's IAL appears immediately after its title marker, with no intervening blank line; a blank line separates that metadata from its body. The group's IAL follows its closing fence, and body-block IALs follow their respective blocks. On import, the first valid `@tab:active` marker sets `tabs-active-id`, taking precedence over the group's IAL. Without an active marker, a valid `tabs-active-id` is preserved; a missing or invalid value falls back to the first item. Each nested group has its own selection. Code-block markers are literal; use `\@tab` or `\@tab:active` for literal markers at the start of a body line. Standard Markdown exports title paragraphs followed by every item's body; HTML can enhance the full content into interactive tabs, while print, PDF and Word show all items. See [Tab Block](TAB-BLOCK.md) for the full contract.
+
+### 5.9.2 Mind map container and item (Spec 5)
+
+`NodeMindmap` contains only `NodeMindmapItem` blocks. Each item may contain ordinary content blocks and a nested `NodeMindmap`, but it cannot directly contain `NodeList`, `NodeListItem`, another `NodeMindmapItem`, `NodeDocument`, or `NodeFootnotesDef`. Both new types carry their own block IDs and `ListData` for ordered and task markers. New mind maps use these node types without `custom-sy-list-mindmap="1"`; opening an editable document upgrades existing list blocks with that attribute while preserving block IDs and metadata. Read-only and history content remain readable in the old format. Standard Markdown export represents mind maps as lists, while `.sy` JSON retains the dedicated types.
 
 ### 5.10 Code block (four-part structure; fenced only)
 
@@ -333,10 +395,10 @@ The table lists the five built-in types and their defaults. Custom `CalloutType`
 ```
 
 Notes:
-- `NodeCodeBlockCode` carries the code content (in `Data`, raw text with `\n` escaped); it's an inline child of `NodeCodeBlock`.
+- `NodeCodeBlockCode` contains the code content (in `Data`, raw text with `\n` escaped); it's an inline child of `NodeCodeBlock`.
 - The surrounding fence markers (Open/Info/Close) are likewise inline children.
-- `CodeBlockInfo` is the **base64-encoded language** (`"Z28="` = `go`). The parent's six fields (`IsFencedCodeBlock`/`CodeBlockFenceChar`/`CodeBlockFenceLen`/`CodeBlockOpenFence`/`CodeBlockInfo`/`CodeBlockCloseFence`) all carry `omitempty` and may be omitted as needed — newer `.sy` files often write only `"IsFencedCodeBlock": true`.
-- The current SiYuan Markdown configuration disables indented code blocks (`SetIndentCodeBlock(false)`); canonical new code blocks are fenced.
+- `CodeBlockInfo` is the **base64-encoded language** (`"Z28="` = `go`). The parent's six fields (`IsFencedCodeBlock`/`CodeBlockFenceChar`/`CodeBlockFenceLen`/`CodeBlockOpenFence`/`CodeBlockInfo`/`CodeBlockCloseFence`) all contain `omitempty` and may be omitted as needed — newer `.sy` files often write only `"IsFencedCodeBlock": true`.
+- The current SiYuan Markdown configuration disables indented code blocks (`SetIndentCodeBlock(false)`); therefore, canonical new code blocks are fenced.
 
 ### 5.11 Math block (three-part structure)
 
@@ -359,7 +421,7 @@ Notes:
 { "Type": "NodeAudio", "ID": "...", "Data": "<audio controls src=\"assets/x.wav\"></audio>", "Properties": { "id": "...", "updated": "..." } }
 ```
 
-> These five **have no `Children`**; the HTML content (JSON-escaped) goes directly in the top-level `Data`.
+> These five **have no `Children`**; the HTML content (JSON-escaped) is written directly to the top-level `Data`.
 
 ### 5.13 Table
 
@@ -383,7 +445,14 @@ Notes:
 - `Data` (`thead`/`tr`/`th`/`td`) may be **omitted** in compact files.
 - `Properties.colgroup` stores a `|`-separated CSS style string for each column; empty segments represent columns without an explicit style.
 - A table's optional `Properties.caption` stores its caption HTML.
-- A `NodeTableCell` may carry `Properties.colspan`, `Properties.rowspan`, and `Properties.style` for merged-cell and cell-style state.
+- A `NodeTableCell` may contain `Properties.colspan`, `Properties.rowspan`, and `Properties.style` for merged-cell and cell-style state.
+- A `NodeTableRow` may contain `Properties.style`, for example `height: 80px;`, to set a minimum row height. Rows without a height remain content-sized. Internal Kramdown stores row styles in a dedicated `{: row-style="..."}` IAL after the row's final pipe; ordinary standard Markdown export omits this layout metadata. Existing readers remain compatible with documents without row styles; older clients may discard the new row styling when editing.
+
+A cell with rich block content additionally contains `"TableCellRich": {"spec": 1, "format": "kramdown", "content": "- first\n- second"}`. This source is authoritative; `Children` remains an inline projection with readable list markers and line breaks. Internal paragraphs, lists, code, and math do not become document blocks and have no persistent block IDs. Images, references to existing blocks, and supported inline formatting remain in the projection for indexing and resource handling. A rich table retains `Properties.custom-sy-table-rich = "1"`; BlockDOM updates must retain this marker even when all rich cells become inline-only or empty, so a writer that omits the source cannot silently replace a rich table.
+
+Only paragraphs, headings, lists, blockquotes, ordinary code, and math are supported inside the fragment. Nested tables, databases, superblocks, tabs, callouts, query embeds, executable diagrams, media, widgets, and HTML blocks are rejected. BlockDOM stores the source envelope as UTF-8 JSON encoded with unpadded URL-safe Base64 in the cell's `data-sy-table-cell-rich` attribute. Internal Kramdown uses the corresponding `table-cell-rich` cell IAL; neither representation is a standard Markdown interchange format.
+
+Readers validate the source version and content before rebuilding the projection. Missing, null, unknown, or malformed envelope fields are errors, and unsupported input must remain unchanged. Ordinary stored cells have no envelope and are never reinterpreted as Markdown. Opening a cell or editing only ordinary inline content preserves its existing representation. Adding block content for the first time creates the rich envelope and raises the document `Spec` to `4`. Existing rich envelopes nevertheless remain present when their content becomes inline-only or empty; the document version is never lowered. Standard Markdown represents rich cells with structural HTML on one physical line, encoding pipes and code line breaks as character references; no internal source envelope is included. External Markdown import and paste restore supported structural HTML and explicit leading task-list markers into the existing rich envelope. Escaped markers, inline code, and unsupported or malformed HTML remain ordinary cell content. HTML, PDF, and Word exports expand the fragment only in a transient export tree. Encrypted notebooks authenticate the existing document envelope before parsing this same JSON; key derivation, AAD, and recovery material are unchanged.
 
 ### 5.14 AttributeView block (database; leaf)
 
@@ -410,11 +479,20 @@ Notes:
 ### 5.16 Custom block
 
 ```json
-{ "Type": "NodeCustomBlock", "ID": "...", "Data": "raw custom content",
-  "CustomBlockInfo": "info", "Properties": { "id": "...", "updated": "..." } }
+{ "Type": "NodeCustomBlock", "ID": "...", "Data": "raw custom content", "CustomBlockInfo": "info", "Properties": { "id": "...", "updated": "..." } }
 ```
 
 `NodeCustomBlock` is a leaf with no `Children`. `Data` stores its raw content and `CustomBlockInfo` stores the fence info string.
+
+Its Markdown source form uses exactly three semicolons for both fences:
+
+```markdown
+;;;encoded-plugin-name/encoded-block-type
+raw custom content
+;;;
+```
+
+The plugin package name and block type are encoded as URI components before being joined with `/`. A line that equals `;;;` after removing editor caret markers and trimming whitespace closes the block and therefore cannot occur in `Data`. Plugin-rendered DOM is transient and must not be written as `Children`; `Data`, block attributes, or plugin-owned external storage remain the persisted source of truth. Nested Protyle editors are not supported inside the render mount.
 
 ---
 
@@ -459,15 +537,15 @@ Samples:
 { "Type": "NodeTextMark", "TextMarkType": "inline-memo", "TextMarkInlineMemoContent": "an inline note", "TextMarkTextContent": "note" }
 ```
 
-- `TextMarkBlockRefSubtype`: `"s"` = static anchor text, `"d"` = dynamic anchor text (the anchor text follows the target block's content; note that "embed block" is a separate node `NodeBlockQueryEmbed`, unrelated to this).
+- `TextMarkBlockRefSubtype`: `"s"` = static anchor text, `"d"` = dynamic anchor text (the anchor text follows the target block's content; "embed block" is a separate node `NodeBlockQueryEmbed`, unrelated to this).
 - `TextMarkType` may stack multiple marks separated by spaces, e.g. `"strong em"`.
 - `TextMarkTextContent` is not present on every type (`inline-math` lacks it).
 - Strikethrough **supports only double-tilde `~~x~~`**, not single-tilde `~x~` (`SetGFMStrikethrough1(false)`).
 - Backslash escape is **not** a `NodeTextMark` subtype: it maps to the separate `NodeBackslash` node and never appears as a `TextMarkType` value.
 
-### 6.3 Styled inline text (★ must be paired)
+### 6.3 Styled inline text: pairing rules
 
-A `NodeTextMark` carrying color/effects (with `Properties.style`) **must be immediately followed by a** `NodeKramdownSpanIAL`, and the two must share the exact same style text:
+A `NodeTextMark` that contains color/effects (with `Properties.style`) **must be immediately followed by a** `NodeKramdownSpanIAL`, and the two must share the exact same style text:
 
 ```json
 { "Type": "NodeTextMark", "Properties": { "style": "color: var(--b3-font-color1); background-color: var(--b3-font-background1);" },
@@ -475,7 +553,7 @@ A `NodeTextMark` carrying color/effects (with `Properties.style`) **must be imme
 { "Type": "NodeKramdownSpanIAL", "Data": "{: style=\"color: var(--b3-font-color1); background-color: var(--b3-font-background1);\"}" }
 ```
 
-> When generating styled inline text, these two nodes must appear as a pair, otherwise the kramdown round-trip will drop the style.
+> When generating styled inline text, these two nodes must appear as a pair, otherwise the kramdown round-trip will cause the style to be lost.
 
 ### 6.4 `NodeImage` (seven-part core; optional title adds two nodes)
 
@@ -495,7 +573,7 @@ A `NodeTextMark` carrying color/effects (with `Properties.style`) **must be imme
 
 - Editor-generated image nodes normally have `Data` = `"span"`; compatible compact data may omit an empty `Data`.
 - `NodeBang`/`NodeOpenBracket`/`NodeCloseBracket`/`NodeOpenParen`/`NodeCloseParen` markers **may omit** `Data`.
-- `NodeLinkText` and `NodeLinkDest` carry the alt text and destination. When a title exists, insert `NodeLinkSpace` and `NodeLinkTitle` immediately before `NodeCloseParen`; the seven-node form without them is also valid.
+- `NodeLinkText` and `NodeLinkDest` contain the alt text and destination. When a title exists, insert `NodeLinkSpace` and `NodeLinkTitle` immediately before `NodeCloseParen`; the seven-node form without them is also valid.
 
 ### 6.5 Line breaks and backslash escapes
 
@@ -512,7 +590,7 @@ A `NodeTextMark` carrying color/effects (with `Properties.style`) **must be imme
 
 ---
 
-## 7. base64 encoding convention (★ must-read)
+## 7. base64 encoding convention
 
 | Field | Encoding | Example |
 |---|---|---|
@@ -546,11 +624,17 @@ A flat `map[string]string`.
 | Container | Can contain | Cannot contain |
 |---|---|---|
 | `NodeList` | **only** `NodeListItem` | any other block (paragraphs/code blocks/sub-lists must be wrapped in `NodeListItem` first) |
-| `NodeListItem` | any non-`NodeListItem` block (paragraph/code block/sub-`NodeList`/super block…) | `NodeListItem` (nesting requires another `NodeList`) |
-| `NodeBlockquote` | any non-`NodeListItem` block + one `NodeBlockquoteMarker` | `NodeListItem` |
-| `NodeCallout` | any non-`NodeListItem` block | `NodeListItem` |
-| `NodeSuperBlock` | **any block** (incl. nested super blocks), inside its open/layout/close marker envelope | none (most permissive) |
-| `NodeDocument` | any non-`NodeListItem` block | `NodeListItem` |
+| `NodeListItem` | ordinary content blocks, nested `NodeList` and `NodeMindmap` | bare `NodeListItem`, bare `NodeMindmapItem` |
+| `NodeBlockquote` | ordinary content blocks + one `NodeBlockquoteMarker` | bare `NodeListItem`, bare `NodeMindmapItem` |
+| `NodeCallout` | ordinary content blocks | bare `NodeListItem`, bare `NodeMindmapItem` |
+| `NodeSuperBlock` | content blocks (incl. nested super blocks), inside its open/layout/close marker envelope | `NodeDocument`, bare `NodeListItem`, bare `NodeTabItem`, bare `NodeMindmapItem` |
+| `NodeDocument` | ordinary content blocks | bare `NodeListItem`, bare `NodeMindmapItem` |
+| `NodeTabs` | only `NodeTabItem`, at least one | other content blocks |
+| `NodeTabItem` | ordinary content blocks and nested `NodeTabs`, at least one | `NodeDocument`, `NodeListItem`, `NodeTabItem` |
+| `NodeMindmap` | only `NodeMindmapItem` | other content blocks |
+| `NodeMindmapItem` | content blocks and nested `NodeMindmap` | `NodeDocument`, `NodeList`, `NodeListItem`, `NodeMindmapItem`, `NodeFootnotesDef` |
+> `NodeTabItem` must be a direct child of `NodeTabs`; none of the other containers above can directly contain it.
+
 
 > These are canonical writer constraints derived from Lute's `CanContain`. The Markdown parser applies them while building a tree, but `dataparser.ParseJSON` is not a strict containment validator and does not reject every violation. Direct writers must validate these relationships themselves; invalid trees can cause parse or render anomalies.
 
@@ -586,7 +670,7 @@ Canonical writers must not generate the following syntax or node families. Most 
 
 When generating or compatibly editing a `.sy` that SiYuan can load cleanly, verify item by item:
 
-1. ☐ Root `Type` = `"NodeDocument"`, `Spec` = `"2"`; root `ID` = filename (without `.sy`) and equals `Properties.id`
+1. ☐ Root `Type` = `"NodeDocument"`, `Spec` = `"2"`, `"3"` (tabs), `"4"` (table-cell rich text), `"5"` (mind map nodes), `"6"` (ASCII `/` in document titles), or `"7"` (complete inline title source), without lowering an existing version; root `ID` = filename (without `.sy`) and equals `Properties.id`
 2. ☐ Root `Properties` contains `id`/`title`/`type:"doc"`/`updated`
 3. ☐ Every newly generated ID is fresh and workspace-wide unique; every canonical block has a 22-char `ID`, matching `Properties.id`, and a valid 14-digit `Properties.updated`
 4. ☐ Determine block status from `Type`, not from `ID`; do not add IDs to new inline/marker nodes, and only remove historical non-block IDs as field normalization without deleting the node
@@ -622,9 +706,9 @@ When generating or compatibly editing a `.sy` that SiYuan can load cleanly, veri
 | Adding `Children` to AttributeView, Widget, or CustomBlock nodes | They are leaves — use `Data` or their type-specific fields |
 | Changing `ID` without syncing `Properties.id` | The two must match |
 | Updating only the directly edited block's timestamp | Also refresh its block ancestors, applicable preceding headings, and the document root |
-| `inline-math` carrying `TextMarkTextContent` | It only has `TextMarkInlineMathContent` |
+| `inline-math` containing `TextMarkTextContent` | It only has `TextMarkInlineMathContent` |
 | Fabricating block-ref / AV target IDs | Targets must really exist |
-| Hanging a paragraph directly under `NodeList` | `NodeList` can only contain `NodeListItem` — wrap first |
+| Making a paragraph a direct child of `NodeList` | `NodeList` can only contain `NodeListItem` — wrap first |
 | Adding U+200B text nodes on both sides of every inline element | Preserve existing U+200B; let Protyle add editor-DOM caret placeholders contextually |
 | Generating `NodeGitConflict`, footnotes, ToC, YAML, etc. | They are disabled for canonical writes; compatibility readers may still encounter historical or external nodes |
 

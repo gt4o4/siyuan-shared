@@ -1,8 +1,9 @@
+import {mobileInputDialog} from "../dialog/mobileInputDialog";
+import {mobileConfirmDialog} from "../dialog/mobileConfirmDialog";
+import {MobileDialog} from "../dialog/mobileDialog";
 import {fetchPost} from "../util/fetch";
-import {Dialog} from "../dialog";
 import {isMobile} from "../util/functions";
 import {hideMessage, showMessage} from "../dialog/message";
-import {confirmDialog} from "../dialog/confirmDialog";
 import {hideElements} from "../protyle/ui/hideElements";
 import {viewCards} from "./viewCards";
 import {Constants} from "../constants";
@@ -11,10 +12,10 @@ import {transaction} from "../protyle/wysiwyg/transaction";
 import type {App} from "../index";
 
 export const genCardItem = (item: ICardPackage) => {
-    return `<li data-id="${item.id}" data-name="${escapeAttr(item.name)}" class="b3-list-item b3-list-item--narrow${isMobile() ? "" : " b3-list-item--hide-action"}">
+    return `<li data-id="${escapeAttr(item.id)}" data-name="${escapeAttr(item.name)}" class="b3-list-item b3-list-item--narrow${isMobile() ? "" : " b3-list-item--hide-action"}">
 <span class="b3-list-item__text">
     <span>${escapeHtml(item.name)}</span>
-    <span class="b3-list-item__meta">${item.size}</span>
+    <span class="b3-list-item__meta">${escapeHtml(String(item.size))}</span>
 </span>
 <span data-type="rename" class="b3-list-item__action b3-tooltips b3-tooltips__w" aria-label="${window.siyuan.languages.rename}">
     <svg><use xlink:href="#iconEdit"></use></svg>
@@ -31,7 +32,7 @@ export const genCardItem = (item: ICardPackage) => {
 <span data-type="add" style="display: flex" class="b3-list-item__action b3-tooltips b3-tooltips__w" aria-label="${window.siyuan.languages.addDeck}">
     <svg><use xlink:href="#iconAdd"></use></svg>
 </span>
-<span class="b3-list-item__meta${isMobile() ? " fn__none" : ""}">${item.updated}</span>
+<span class="b3-list-item__meta${isMobile() ? " fn__none" : ""}">${escapeHtml(String(item.updated))}</span>
 </li>`;
 };
 
@@ -47,7 +48,7 @@ export const makeCard = (app: App, ids: string[]) => {
         response.data.forEach((item: ICardPackage) => {
             html += genCardItem(item);
         });
-        const dialog = new Dialog({
+        const dialog = new MobileDialog({
             positionId: Constants.DIALOG_MAKECARD,
             width: isMobile() ? "92vw" : "50vw",
             height: "70vh",
@@ -112,7 +113,7 @@ export const makeCard = (app: App, ids: string[]) => {
                     event.preventDefault();
                     break;
                 } else if (type === "delete") {
-                    confirmDialog(window.siyuan.languages.deleteOpConfirm, `${window.siyuan.languages.confirmDelete} <b>${escapeHtml(target.parentElement.getAttribute("data-name"))}</b>?`, () => {
+                    mobileConfirmDialog(window.siyuan.languages.deleteOpConfirm, `${window.siyuan.languages.confirmDelete} <b>${escapeHtml(target.parentElement.getAttribute("data-name"))}</b>?`, () => {
                         fetchPost("/api/riff/removeRiffDeck", {
                             deckID: target.parentElement.getAttribute("data-id"),
                         }, () => {
@@ -135,35 +136,19 @@ export const makeCard = (app: App, ids: string[]) => {
                     event.preventDefault();
                     break;
                 } else if (type === "rename") {
-                    const renameDialog = new Dialog({
+                    mobileInputDialog({
                         title: window.siyuan.languages.rename,
-                        content: `<div class="b3-dialog__content"><input class="b3-text-field fn__block" value=""></div>
-<div class="b3-dialog__action">
-    <button class="b3-button b3-button--cancel">${window.siyuan.languages.cancel}</button><div class="fn__space"></div>
-    <button class="b3-button b3-button--text">${window.siyuan.languages.confirm}</button>
-</div>`,
-                        width: isMobile() ? "92vw" : "520px",
-                    });
-                    const inputElement = renameDialog.element.querySelector("input") as HTMLInputElement;
-                    const btnsElement = renameDialog.element.querySelectorAll(".b3-button");
-                    renameDialog.bindInput(inputElement, () => {
-                        (btnsElement[1] as HTMLButtonElement).click();
-                    });
-                    inputElement.value = target.parentElement.getAttribute("data-name");
-                    inputElement.focus();
-                    inputElement.select();
-                    btnsElement[0].addEventListener("click", () => {
-                        renameDialog.destroy();
-                    });
-                    btnsElement[1].addEventListener("click", () => {
-                        fetchPost("/api/riff/renameRiffDeck", {
-                            name: inputElement.value,
-                            deckID: target.parentElement.getAttribute("data-id"),
-                        }, () => {
-                            target.parentElement.querySelector(".b3-list-item__text span").textContent = inputElement.value;
-                            target.parentElement.setAttribute("data-name", inputElement.value);
-                        });
-                        renameDialog.destroy();
+                        value: target.parentElement.getAttribute("data-name"),
+                        onConfirm: (value, renameDialog) => {
+                            fetchPost("/api/riff/renameRiffDeck", {
+                                name: value,
+                                deckID: target.parentElement.getAttribute("data-id"),
+                            }, () => {
+                                target.parentElement.querySelector(".b3-list-item__text span").textContent = value;
+                                target.parentElement.setAttribute("data-name", value);
+                            });
+                            renameDialog.destroy();
+                        },
                     });
                     event.stopPropagation();
                     event.preventDefault();

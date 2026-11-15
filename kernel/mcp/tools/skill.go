@@ -1,23 +1,15 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package tools
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"html"
+	"path/filepath"
 	"strings"
 
 	"github.com/siyuan-note/siyuan/kernel/model"
@@ -26,29 +18,34 @@ import (
 
 var SkillTool = &Tool{
 	Name:        "skill",
-	Description: "Skill operations: load(name), save(name, content), install(url), remove(name), rename(name, new_name), list().\n\n" + skillListDesc(),
+	Description: "Skill operations: load(name) loads Skill instructions; load(name/resource-path) loads a bundled text resource; save(name, content), install(url), remove(name), rename(name, new_name), list(). Explicit source=builtin selects immutable official skills and requires the server-confirmed workflow choice before load.\n\n" + skillListDesc(),
 	InputSchema: ToolSchema{
 		Type: "object",
 		Properties: map[string]Property{
-			"action":   {Type: "string", Description: "Operation", Enum: []string{"load", "save", "install", "remove", "rename", "list"}},
-			"name":     {Type: "string", Description: "Skill name (directory name)"},
+			"action": {Type: "string", Description: "Operation", Enum: []string{"load", "save", "install", "remove", "rename", "list"}},
+			"name": {
+				Type:        "string",
+				Description: "Skill name. For load, use <skill-name> for instructions or <skill-name>/<relative-resource-path> for a bundled text resource",
+			},
 			"content":  {Type: "string", Description: "SKILL.md full content with YAML frontmatter (for save)"},
 			"url":      {Type: "string", Description: "Skill source for install: 'owner/repo' shorthand (e.g. Tencent/WeChatReading), a full GitHub URL, a raw SKILL.md URL, or a release zip URL"},
 			"new_name": {Type: "string", Description: "New skill name (for rename)"},
+			"source":   {Type: "string", Description: "Omit for existing workspace/user resolution. Use builtin only for official list/load; builtin load requires a real workflow choice", Enum: []string{"builtin"}},
 		},
 		Required: []string{"action"},
 	},
-	EffectScope: EffectScopeLocal,
+	EffectScope: EffectScopeMixed,
 	ActionEffects: map[string]ToolEffects{
 		"":        {LocalRead: true},
 		"load":    {LocalRead: true},
 		"save":    {LocalWrite: true},
-		"install": {LocalWrite: true},
+		"install": {LocalWrite: true, DataEgress: true},
 		"remove":  {LocalWrite: true},
 		"rename":  {LocalWrite: true},
 		"list":    {LocalRead: true},
 	},
-	Handler: skillHandler,
+	Handler:        skillHandler,
+	ContextHandler: skillContextHandler,
 }
 
 func init() {
@@ -56,7 +53,25 @@ func init() {
 }
 
 func skillHandler(args map[string]any) (CallToolResult, error) {
+	return skillContextHandler(context.Background(), args)
+}
+
+func skillContextHandler(ctx context.Context, args map[string]any) (CallToolResult, error) {
+	source, valid := args["source"].(string)
+	if args["source"] != nil && (!valid || source != "" && source != "builtin") {
+		return skillError("unknown skill source"), nil
+	}
 	action, _ := args["action"].(string)
+	if source == "builtin" {
+		switch action {
+		case "load", "":
+			return skillLoadBuiltin(ctx, args)
+		case "list":
+			return skillBuiltinList(), nil
+		default:
+			return skillError("builtin skills are read-only"), nil
+		}
+	}
 	switch action {
 	case "load", "":
 		return skillLoad(args)
@@ -77,6 +92,54 @@ func skillHandler(args map[string]any) (CallToolResult, error) {
 	}, nil
 }
 
+func skillError(message string) CallToolResult {
+	return CallToolResult{Content: []ContentItem{{Type: "text", Text: message}}, IsError: true}
+}
+
+func skillLoadBuiltin(ctx context.Context, args map[string]any) (CallToolResult, error) {
+	name, _ := args["name"].(string)
+	root, resource, _ := strings.Cut(name, "/")
+	if root != util.PluginDevelopmentSkillName {
+		return skillError("exact builtin skill name is required"), nil
+	}
+	operation := "read"
+	if resource == "" || resource == "SKILL.md" {
+		operation = "load"
+	}
+	if _, err := util.RequirePluginDevelopment(ctx, operation); err != nil {
+		return skillError(err.Error()), nil
+	}
+	loaded, err := util.LoadBuiltinSkill(name, model.DisabledBuiltinSkills())
+	if err != nil {
+		return skillError(err.Error()), nil
+	}
+	if loaded.ResourcePath == "" {
+		text := formatSkillContent(loaded)
+		if len(text) >= util.MaxToolOutputChars {
+			return skillError("builtin skill output exceeds the tool output limit"), nil
+		}
+		// 成功读取后才记录激活；内置正文不执行用户变量替换，摘要始终对应原文。
+		if _, err = util.RequirePluginDevelopment(ctx, "loaded"); err != nil {
+			return skillError(err.Error()), nil
+		}
+		return CallToolResult{Content: []ContentItem{{Type: "text", Text: text}}}, nil
+	}
+	text := formatSkillResource(loaded)
+	if len(text) >= util.MaxToolOutputChars {
+		return skillError("builtin skill resource output exceeds the tool output limit"), nil
+	}
+	return CallToolResult{Content: []ContentItem{{Type: "text", Text: text}}}, nil
+}
+
+func skillBuiltinList() CallToolResult {
+	var text strings.Builder
+	text.WriteString("official skills (source=builtin; workflow choice required before load):\n")
+	for _, info := range util.DiscoverBuiltinSkills(model.DisabledBuiltinSkills()) {
+		fmt.Fprintf(&text, "- %s: %s (id=%s, version=%s, digest=%s, enabled=%t)\n", info.Name, info.Description, info.ID, info.Version, info.Digest, info.Enabled)
+	}
+	return CallToolResult{Content: []ContentItem{{Type: "text", Text: text.String()}}}
+}
+
 func skillLoad(args map[string]any) (CallToolResult, error) {
 	name, _ := args["name"].(string)
 	if name == "" {
@@ -86,21 +149,88 @@ func skillLoad(args map[string]any) (CallToolResult, error) {
 		}, nil
 	}
 
-	content := util.LoadSkillContent(name)
-	if content == "" {
+	loaded, err := util.LoadSkill(name, model.EnabledUserSkills())
+	if err != nil {
 		return CallToolResult{
-			Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("skill not found: %s", name)}},
+			Content: []ContentItem{{Type: "text", Text: err.Error()}},
 			IsError: true,
 		}, nil
 	}
 
-	// 变量（非敏感）在技能正文注入对话时解析，让 LLM 看到实际值；密钥不进上下文。
-	content = model.Conf.Variables.Resolve(content)
-
-	result := "<skill_content name=\"" + name + "\">\n\n" + content + "\n\n</skill_content>"
+	var result string
+	if loaded.ResourcePath == "" {
+		// Variables.Resolve 还会匹配 $NAME 和 ${NAME}。
+		// 资源可能包含脚本或模板，因此只解析技能正文，避免误改资源内容。
+		loaded.Content = model.Conf.Variables.Load().Resolve(loaded.Content)
+		result = formatSkillContent(loaded)
+	} else {
+		result = formatSkillResource(loaded)
+	}
 	return CallToolResult{
 		Content: []ContentItem{{Type: "text", Text: result}},
 	}, nil
+}
+
+func formatSkillContent(loaded *util.SkillLoadResult) string {
+	var sb strings.Builder
+	sb.WriteString(`<skill_content name="`)
+	sb.WriteString(html.EscapeString(loaded.Name))
+	sb.WriteString(skillMetadataAttributes(loaded))
+	sb.WriteString("\">\n\n")
+	sb.WriteString(loaded.Content)
+
+	if len(loaded.Resources) > 0 || loaded.ResourcesTruncated {
+		sb.WriteString("\n\n<skill_resources")
+		if loaded.ResourcesTruncated {
+			sb.WriteString(` truncated="true"`)
+		}
+		sb.WriteString(">\n")
+		for _, resource := range loaded.Resources {
+			sb.WriteString("  <file>")
+			sb.WriteString(html.EscapeString(resource))
+			sb.WriteString("</file>\n")
+		}
+		sb.WriteString("</skill_resources>")
+	}
+
+	if location := workspaceSkillLocation(loaded.SkillDir); location != "" {
+		sb.WriteString("\n\n<skill_location path=\"")
+		sb.WriteString(html.EscapeString(location))
+		sb.WriteString("\">\n")
+		sb.WriteString("  For this skill directory, use the `file` tool's read-only actions: `read`, `list`, `grep`, and `find`.\n")
+		sb.WriteString("</skill_location>")
+	}
+
+	sb.WriteString("\n\n</skill_content>")
+	return sb.String()
+}
+
+func formatSkillResource(loaded *util.SkillLoadResult) string {
+	return `<skill_resource skill="` + html.EscapeString(loaded.Name) + `" path="` +
+		html.EscapeString(loaded.ResourcePath) + skillMetadataAttributes(loaded) + "\">\n\n" + loaded.Content + "\n\n</skill_resource>"
+}
+
+func skillMetadataAttributes(loaded *util.SkillLoadResult) string {
+	if loaded.Source != "builtin" {
+		return ""
+	}
+	return `" source="builtin" id="` + html.EscapeString(loaded.ID) + `" version="` +
+		html.EscapeString(loaded.Version) + `" digest="` + html.EscapeString(loaded.Digest)
+}
+
+func workspaceSkillLocation(skillDir string) string {
+	if skillDir == "" {
+		return ""
+	}
+	location, err := filepath.Rel(util.WorkspaceDir, skillDir)
+	if err != nil {
+		return ""
+	}
+	location = filepath.ToSlash(location)
+	if _, err = resolvePath(location); err != nil {
+		return ""
+	}
+	return location
 }
 
 func skillSave(args map[string]any) (CallToolResult, error) {
@@ -149,13 +279,17 @@ func skillInstall(args map[string]any) (CallToolResult, error) {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("installed %d skill(s):\n", len(result.Names)))
+	fmt.Fprintf(&sb, "installed %d skill(s):\n", len(result.Names))
 	for i, name := range result.Names {
 		desc := ""
 		if i < len(result.Descriptions) {
 			desc = result.Descriptions[i]
 		}
-		sb.WriteString("- **" + name + "**: " + desc + "\n")
+		sb.WriteString("- **")
+		sb.WriteString(name)
+		sb.WriteString("**: ")
+		sb.WriteString(desc)
+		sb.WriteString("\n")
 	}
 	return CallToolResult{
 		Content: []ContentItem{{Type: "text", Text: sb.String()}},
@@ -211,8 +345,11 @@ func skillRename(args map[string]any) (CallToolResult, error) {
 	}, nil
 }
 
-func skillList(args map[string]any) (CallToolResult, error) {
-	skills := util.DiscoverSkills()
+func skillList(_ map[string]any) (CallToolResult, error) {
+	skills, err := util.DiscoverSkillInstallations(model.EnabledUserSkills())
+	if err != nil {
+		return skillError("cannot read skill installation records: " + err.Error()), nil
+	}
 	if len(skills) == 0 {
 		return CallToolResult{
 			Content: []ContentItem{{Type: "text", Text: "no skills available"}},
@@ -222,7 +359,22 @@ func skillList(args map[string]any) (CallToolResult, error) {
 	var sb strings.Builder
 	sb.WriteString("available skills:\n")
 	for _, s := range skills {
-		sb.WriteString("- **" + s.Name + "**: " + s.Description + "\n")
+		sb.WriteString("- **")
+		sb.WriteString(s.Name)
+		sb.WriteString("**: ")
+		sb.WriteString(s.Description)
+		if s.Installation == nil {
+			sb.WriteString(" (installation: unknown)")
+		} else {
+			metadata, _ := json.Marshal(s.Installation)
+			sb.WriteString(" (installation record, not current content verification: ")
+			sb.Write(metadata)
+			sb.WriteString(")")
+			if s.Installation.SourceScope == "manifest-only" {
+				sb.WriteString(" [source URL applies only to SKILL.md; retained resources have unknown origin; digest covers the entire installed directory]")
+			}
+		}
+		sb.WriteString("\n")
 	}
 	return CallToolResult{
 		Content: []ContentItem{{Type: "text", Text: sb.String()}},
@@ -230,14 +382,18 @@ func skillList(args map[string]any) (CallToolResult, error) {
 }
 
 func skillListDesc() string {
-	skills := util.DiscoverSkills()
+	skills := util.DiscoverSkills(model.EnabledUserSkills())
 	if len(skills) == 0 {
 		return "No skills are currently available."
 	}
 	var sb strings.Builder
 	sb.WriteString("Available skills:\n")
 	for _, s := range skills {
-		sb.WriteString("- **" + s.Name + "**: " + s.Description + "\n")
+		sb.WriteString("- **")
+		sb.WriteString(s.Name)
+		sb.WriteString("**: ")
+		sb.WriteString(s.Description)
+		sb.WriteString("\n")
 	}
 	return sb.String()
 }

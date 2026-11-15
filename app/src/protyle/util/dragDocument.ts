@@ -2,6 +2,73 @@ export const isSameDragEditor = (targetEditor: Pick<Element, "contains">, source
     return targetEditor.contains(sourceElement);
 };
 
+export const isCopyBlockDrag = (lite: boolean, ctrlKey: boolean, targetEditor: Element, sourceEditor?: Element) => {
+    // 片段块没有独立的持久化 ID，跨编辑器时创建新块，仅在片段内部移动。
+    return ctrlKey || (sourceEditor !== targetEditor && (lite || isFragmentBlockDrag(sourceEditor)));
+};
+
+export const isFragmentBlockDrag = (sourceEditor?: Element) =>
+    !!sourceEditor?.closest(".protyle-lite-fragment");
+
+export type TBlockDragData = {
+    html: string,
+    notebookID: string,
+    rootID: string,
+};
+
+export const stringifyBlockDragData = (data: TBlockDragData) => JSON.stringify({
+    version: 1,
+    ...data,
+});
+
+export const parseBlockDragData = (value: string): TBlockDragData => {
+    try {
+        const data = JSON.parse(value);
+        if (data?.version === 1 && typeof data.html === "string") {
+            return {
+                html: data.html,
+                notebookID: typeof data.notebookID === "string" ? data.notebookID : "",
+                rootID: typeof data.rootID === "string" ? data.rootID : "",
+            };
+        }
+    } catch {
+        // 兼容旧版窗口传递的原始 HTML。
+    }
+    return {
+        html: value,
+        notebookID: "",
+        rootID: "",
+    };
+};
+
+export const BLOCK_DRAGOVER_SELECTOR = [
+    ".dragover__left",
+    ".dragover__right",
+    ".dragover__bottom",
+    ".dragover__top",
+    ".dragover__bottom--sibling",
+    ".dragover__top--sibling",
+    ".dragover__bottom--child",
+    ".dragover__top--child",
+].join(", ");
+
+export const getBlockDragoverTarget = (scope: HTMLElement, cachedTarget?: Element) => {
+    const cachedTargetInScope = !!cachedTarget && scope.contains(cachedTarget);
+    if (cachedTargetInScope && cachedTarget.matches(BLOCK_DRAGOVER_SELECTOR)) {
+        return cachedTarget;
+    }
+    return scope.querySelector(BLOCK_DRAGOVER_SELECTOR) || (cachedTargetInScope ? cachedTarget : null);
+};
+
+export const getBlockDragInsertPosition = (targetElement?: Element | null): "before" | "after" | undefined => {
+    if (targetElement?.classList.contains("dragover__top") || targetElement?.classList.contains("dragover__left")) {
+        return "before";
+    }
+    if (targetElement?.classList.contains("dragover__bottom") || targetElement?.classList.contains("dragover__right")) {
+        return "after";
+    }
+};
+
 export const isAttributeViewTitleTarget = (targetNode: Node | null, point?: {x: number, y: number}) => {
     if (!targetNode) {
         return false;
@@ -43,11 +110,35 @@ export const uniqueDragIds = (ids: string[]) => {
     return Array.from(new Set(ids.filter(Boolean)));
 };
 
+export const getMissingDragIds = (selectedIds: string[], sourceIds: ReadonlySet<string>) => {
+    return selectedIds.filter(id => !sourceIds.has(id));
+};
+
 export const getAVRowDropTarget = (targetElement: HTMLElement | false): HTMLElement | false => {
     if (!targetElement || !targetElement.classList.contains("av__row--util")) {
         return targetElement;
     }
-    return targetElement.previousElementSibling as HTMLElement || targetElement;
+    let rowElement = targetElement.previousElementSibling as HTMLElement;
+    while (rowElement && !rowElement.matches(".av__row[data-id], .av__row--header")) {
+        rowElement = rowElement.previousElementSibling as HTMLElement;
+    }
+    return rowElement || targetElement;
+};
+
+export const getTabsContentDropTarget = (target: HTMLElement, hit: HTMLElement): HTMLElement | null => {
+    let item: HTMLElement;
+    if (target.getAttribute("data-type") === "NodeTabItem") {
+        item = target;
+    } else if (target.getAttribute("data-type") === "NodeTabs" &&
+        hit.closest(".tabs-header")?.parentElement === target) {
+        item = target.querySelector<HTMLElement>(':scope > .tab-item[data-tabs-hidden="false"]') ||
+            target.querySelector<HTMLElement>(":scope > .tab-item");
+    } else {
+        return target;
+    }
+    const content = item?.querySelector<HTMLElement>(":scope > .tab-item-content");
+    const blocks = content?.querySelectorAll<HTMLElement>(":scope > [data-node-id]");
+    return blocks?.[target === item ? blocks.length - 1 : 0] || content || null;
 };
 
 export const isSameSiblingMove = <T>(siblings: T[], sources: T[], target: T, isBottom: boolean) => {
@@ -75,6 +166,22 @@ export const getSameSuperBlockEdgeTarget = (sourceElements: Element[], targetEle
     return childBlocks[isRight ? childBlocks.length - 1 : 0];
 };
 
+export const getSuperBlockResizeDropTarget = (resizeElement: HTMLElement | false): HTMLElement | undefined => {
+    if (!resizeElement || !resizeElement.classList.contains("sb__resize")) {
+        return;
+    }
+    const superBlock = resizeElement.parentElement;
+    if (superBlock?.getAttribute("data-type") !== "NodeSuperBlock" ||
+        superBlock.getAttribute("data-sb-layout") !== "col") {
+        return;
+    }
+    let targetElement = resizeElement.previousElementSibling as HTMLElement;
+    while (targetElement && !targetElement.hasAttribute("data-node-id")) {
+        targetElement = targetElement.previousElementSibling as HTMLElement;
+    }
+    return targetElement;
+};
+
 export const getTopListDragTarget = (targetElement: Element) => {
     let topList = targetElement;
     while (topList.parentElement?.classList.contains("li") ||
@@ -87,9 +194,10 @@ export const getTopListDragTarget = (targetElement: Element) => {
     return topList;
 };
 
-export const shouldKeepListBlockDragTarget = (sourceType: string, isHorizontalDrop: boolean,
+export const shouldKeepListBlockDragTarget = (sourceType: string, targetClasses: string[],
                                                isColumnSuperBlockChild: boolean) =>
-    sourceType === "nodelist" && (isHorizontalDrop || isColumnSuperBlockChild);
+    sourceType === "nodelist" && (isColumnSuperBlockChild ||
+        targetClasses.some(className => ["dragover__top", "dragover__bottom", "dragover__left", "dragover__right"].includes(className)));
 
 export const replaceDragUndoOperation = <T>(operations: T[], operation: T, replacements: T[]) => {
     const index = operations.indexOf(operation);

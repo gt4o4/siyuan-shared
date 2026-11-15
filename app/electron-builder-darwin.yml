@@ -1,3 +1,4 @@
+extends: "./electron-builder-common.yml"
 productName: "SiYuan"
 appId: "org.b3log.siyuan"
 publish: null
@@ -6,18 +7,20 @@ compression: "normal"
 copyright: "© 2020-present Yunnan Liandi Technology Co., Ltd."
 artifactName: "siyuan-${version}-${os}.${ext}"
 extraMetadata:
-  main: "electron/main.js"
+  main: "electron-dist/main.js"
 directories:
   output: "build"
 files:
-  - "electron"
+  - "electron-dist"
+  - "electron/cli.js"
   - "native/build/Release"
 afterPack: "./scripts/afterPack.js"
+beforePack: "./scripts/beforePack.js"
 extraFiles:
   - from: "../LICENSE"
-    to: "LICENSE"
+    to: "Resources/LICENSE"
   - from: "../THIRD_PARTY_NOTICES.md"
-    to: "THIRD_PARTY_NOTICES.md"
+    to: "Resources/THIRD_PARTY_NOTICES.md"
 
 mac:
   identity: "Yunnan Liandi Technology Co., Ltd."
@@ -41,8 +44,12 @@ mac:
 extraResources:
   - from: "changelogs"
     to: "changelogs"
+    filter: ["v${version}/**"]
   - from: "stage"
     to: "stage"
+    filter: ["**/*", "!ocr/runtime/**/*"]
+  - from: "stage/ocr/runtime/darwin-amd64"
+    to: "stage/ocr/runtime/darwin-amd64"
   - from: "guide"
     to: "guide"
     filter: "!**/{.DS_Store,.git,.gitignore,.idea}"
@@ -54,7 +61,9 @@ extraResources:
     filter: "!**/{.DS_Store}"
   - from: "appearance/icons"
     to: "appearance/icons"
-    filter: "!**/{.DS_Store}"
+    filter:
+      - "index.html"
+      - "litheness/**/*"
   - from: "appearance/langs"
     to: "appearance/langs"
     filter: "!**/{.DS_Store}"

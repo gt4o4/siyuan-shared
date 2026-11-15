@@ -1,7 +1,10 @@
 import {describe, it} from "node:test";
 import * as assert from "node:assert/strict";
 import {
+    compactAVCellOperations,
+    getAVNestedPasteItemIDs,
     getAVPasteCellValue,
+    getAVPasteContentRowCount,
     getAVPasteValueForType,
     getAVPasteMatrixWidth,
     getUniqueAVPasteColumnName,
@@ -9,6 +12,14 @@ import {
     isAVPasteHeaderCandidate,
     shouldShowAVPasteSkeleton,
 } from "./paste";
+
+it("tree paste addresses the visible page order, includes context and deduplicates repeated occurrences", () => {
+    const rows = [{id: "context", hierarchy: {context: true}}, {id: "child-201"},
+        {id: "child-202"}, {id: "child-201"}, {id: "next-root"}] as IAVRow[];
+    assert.deepEqual(getAVNestedPasteItemIDs(rows, "context", 3), ["context", "child-201", "child-202"]);
+    assert.deepEqual(getAVNestedPasteItemIDs(rows, "child-201", 8), ["child-201", "child-202", "next-root"]);
+    assert.deepEqual(getAVNestedPasteItemIDs(rows, "unloaded-child", 2), []);
+});
 
 describe("inferAVPasteColumnType", () => {
     it("infers strict numbers while preserving identifiers with leading zeros", () => {
@@ -127,6 +138,13 @@ describe("AV paste matrix helpers", () => {
         assert.equal(getAVPasteMatrixWidth([["1", "2", "3"]], ["a"]), 3);
     });
 
+    it("ignores trailing empty table rows without removing intentional empty rows", () => {
+        assert.equal(getAVPasteContentRowCount([["value"], [""]]), 1);
+        assert.equal(getAVPasteContentRowCount([["value"], [""], ["next"]]), 3);
+        assert.equal(getAVPasteContentRowCount([["value"], [" "]]), 2);
+        assert.equal(getAVPasteContentRowCount([[""]]), 1);
+    });
+
     it("generates localized unique field names", () => {
         const usedNames = new Set(["Text", "Text 2"]);
         assert.equal(getUniqueAVPasteColumnName("Text", usedNames), "Text 3");
@@ -144,6 +162,43 @@ describe("AV paste matrix helpers", () => {
         assert.equal(shouldShowAVPasteSkeleton(Array.from({length: 10}, () => Array(10))), true);
         assert.equal(shouldShowAVPasteSkeleton(Array.from({length: 9}, () => Array(10))), false);
         assert.equal(shouldShowAVPasteSkeleton([Array(100)]), true);
+    });
+
+    it("compacts cell updates by database after schema operations", () => {
+        const operations = compactAVCellOperations([{
+            action: "updateAttrViewColOptions",
+            avID: "av1",
+        }, {
+            action: "updateAttrViewCell",
+            id: "cell1",
+            avID: "av1",
+            keyID: "key1",
+            rowID: "row1",
+            data: {type: "text", text: {content: "a"}},
+        }, {
+            action: "updateAttrViewCell",
+            id: "cell2",
+            avID: "av1",
+            keyID: "key2",
+            rowID: "row2",
+            data: {type: "number", number: {content: 2}},
+        }]);
+
+        assert.equal(operations.length, 2);
+        assert.equal(operations[0].action, "updateAttrViewColOptions");
+        assert.deepEqual(operations[1], {
+            action: "updateAttrViewCells",
+            avID: "av1",
+            cellUpdates: [{
+                keyID: "key1",
+                rowID: "row1",
+                data: {type: "text", text: {content: "a"}},
+            }, {
+                keyID: "key2",
+                rowID: "row2",
+                data: {type: "number", number: {content: 2}},
+            }],
+        });
     });
 
 });

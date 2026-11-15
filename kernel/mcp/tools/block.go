@@ -1,25 +1,15 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package tools
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
+	"github.com/88250/lute/ast"
 	"github.com/siyuan-note/siyuan/kernel/filesys"
 	"github.com/siyuan-note/siyuan/kernel/model"
 	"github.com/siyuan-note/siyuan/kernel/treenode"
@@ -27,19 +17,86 @@ import (
 )
 
 var BlockTool = &Tool{
-	Name:        "block",
-	Description: "Block operations. Actions: get(id), get_kramdown(id), get_children(id), tree_stat(id, by document), dom(id), insert(data, dataType, parentID?, nextID?, previousID?), append(data, dataType, parentID) / prepend(...) add a NEW child — use after block.update when both modifying and adding, update(id, data, dataType, lockType?) replaces ONE block only (no append), delete(id), move(id, parentID, previousID?), breadcrumb(id), batch_get(ids) / batch_kramdown(ids) where ids is comma-separated.",
+	Name: "block",
+	Description: `Block operations, including native Tabs (NodeTabs/NodeTabItem) and Mindmap (NodeMindmap/NodeMindmapItem).
+Actions: get(id), get_kramdown(id), get_children(id), tree_stat(id, by document), dom(id), insert(data, dataType, parentID?, nextID?, previousID?), append(data, dataType, parentID) / prepend(...) add a NEW child and return its ID — use after block.update when both modifying and adding, update(id, data, dataType, lockType?) replaces ONE block only (no append), delete(id), move(id, parentID, previousID?), breadcrumb(id), batch_get(ids) / batch_kramdown(ids) where ids is comma-separated.
+
+Use document for document lifecycle and metadata, sql.query for structured discovery or statistics, and export for export-formatted output. Pass the owning notebook for encrypted content; alternative tools are not a way to bypass scope checks or authorization.
+
+Reading content:
+- Read referenced or bare block IDs with get/get_kramdown before answering about their content; anchor text is only a preview. get returns at most 5120 characters per Content/Markdown field, with ... on truncation; a document root returns its title, not its body. Use get_kramdown for complete block or document-body Markdown.
+- get_children lists block IDs with previews truncated to 200 characters and followed by ... when truncated. Read the relevant IDs with get/get_kramdown before quoting or reasoning from their content; traverse nested containers when the whole document is needed.
+- batch_get returns only metadata (name, rootID, refCount), not block content. Use batch_kramdown for multiple content reads and inspect each result for missing blocks.
+- Before update, read the current ordinary block with get_kramdown, or use dom for native structured containers. data is the complete replacement, not a delta; preserve content, IDs and metadata outside the requested edit. lockType protects the block type, not its content.
+
+Block placement:
+- Headings (h1-h6) are leaf blocks; content shown below a heading is its following siblings, not its children. To place a block below a heading, use the heading ID (or the last block currently below it) as previousID, never as parentID.
+- A list-item must have a NodeList parent and cannot directly contain another list-item. To nest lists, create a NodeList inside the outer list-item, then add list-items to the inner list.
+
+Native SQL query embeds (NodeBlockQueryEmbed):
+- Create a dynamic single-line {{SQL}} block using insert/append/prepend with dataType=markdown; see the data syntax and sql.schema for examples and how query, search and embeds differ.
+- Read a single-line embed's stored query and IAL with get_kramdown(id), edit only the SQL inside {{...}}, then update the same ID with dataType=markdown and lockType=true. Preserve the returned IAL and embed display settings; never replace the embed with static results or delete/recreate it.
+- Markdown embeds require one physical line. For multiline SQL or -- comments, use dom(id), edit only the HTML-escaped data-content attribute, and update with dataType=dom and lockType=true while retaining the ID and all other attributes. See sql.schema for newline encoding and reuse.
+
+Native container structure and operations:
+- These are native, editable blocks; do not substitute HTML widgets, Mermaid diagrams, or plugins unless requested.
+- Tabs: NodeTabs contains only NodeTabItem; each item contains at least one body block and may contain nested tabs. Use an empty paragraph for an empty body. Use attr.set for tabs-position (top/left) and tabs-active-id (an existing direct item ID).
+- Mindmap: NodeMindmap contains only NodeMindmapItem. Each item contains content blocks and may contain a nested NodeMindmap for child branches; never put a plain NodeList, NodeListItem, or a bare NodeMindmapItem directly inside an item. A mindmap code fence creates an ordinary code block, not a native mindmap.
+- To add tabs or sibling mindmap items, pass a group containing only the new items to insert/append/prepend. When the target container is of the same type, only the group's direct items are inserted and the target container's attributes are preserved. To add a child mindmap branch, insert a NodeMindmap under a NodeMindmapItem.
+- Use move/delete on existing item IDs for reordering/removal, and edit body blocks individually.
+
+Structural reads and updates:
+- get/get_kramdown/batch_kramdown return Markdown for reading, which flattens tabs and renders mindmaps as lists; use dom before editing these containers. Never rebuild these containers from their reading Markdown.
+- Preserve all existing data-node-id values and attributes, including active tabs and mindmap metadata. Update with dataType=dom and lockType=true unless the user explicitly requests a type conversion.`,
+	EffectScope: EffectScopeLocal,
+	ActionEffects: map[string]ToolEffects{
+		"get":            {LocalRead: true},
+		"get_kramdown":   {LocalRead: true},
+		"get_children":   {LocalRead: true},
+		"tree_stat":      {LocalRead: true},
+		"dom":            {LocalRead: true},
+		"breadcrumb":     {LocalRead: true},
+		"batch_get":      {LocalRead: true},
+		"batch_kramdown": {LocalRead: true},
+		"insert":         {LocalWrite: true},
+		"append":         {LocalWrite: true},
+		"prepend":        {LocalWrite: true},
+		"update":         {LocalWrite: true},
+		"delete":         {LocalWrite: true},
+		"move":           {LocalWrite: true},
+	},
 	InputSchema: ToolSchema{
 		Type: "object",
 		Properties: map[string]Property{
-			"action":     {Type: "string", Description: "Operation", Enum: []string{"get", "get_kramdown", "get_children", "tree_stat", "dom", "insert", "append", "prepend", "update", "delete", "move", "breadcrumb", "batch_get", "batch_kramdown"}},
-			"notebook":   {Type: "string", Description: "Notebook ID that owns the target blocks; required for encrypted notebooks"},
-			"id":         {Type: "string", Description: "Block ID"},
-			"ids":        {Type: "string", Description: "Comma-separated block IDs (for batch_get, batch_kramdown)"},
-			"data":       {Type: "string", Description: "Content (markdown or dom). Markdown block references use ((blockID \"anchor text\")); never [[blockID]]"},
+			"action":   {Type: "string", Description: "Operation", Enum: []string{"get", "get_kramdown", "get_children", "tree_stat", "dom", "insert", "append", "prepend", "update", "delete", "move", "breadcrumb", "batch_get", "batch_kramdown"}},
+			"notebook": {Type: "string", Description: "Notebook ID that owns the target blocks; required for encrypted notebooks"},
+			"id":       {Type: "string", Description: "Block ID"},
+			"ids":      {Type: "string", Description: "Comma-separated block IDs (for batch_get, batch_kramdown)"},
+			"data": {Type: "string", Description: `Content in markdown or block DOM. For update, provide the complete replacement after reading current content with get_kramdown or dom, preserving unrelated content and metadata; this is not an append or delta. Prefer markdown for ordinary blocks. Use insert/append/prepend to create native containers.
+
+Native Tabs Markdown (dataType=markdown):
+::: tabs
+@tab First
+
+Body
+
+@tab:active Second
+
+Other body
+
+:::
+The opening fence requires a space before tabs; never write :::tabs or :::tab. Nested groups require longer outer colon fences.
+
+Native Mindmap DOM (dataType=dom):
+<div data-type="NodeMindmap" data-subtype="u" class="mindmap"><div data-type="NodeMindmapItem" data-subtype="u" data-marker="-" class="mindmap-item"><div data-type="NodeParagraph" class="p"><div contenteditable="true">Root</div></div><div data-type="NodeMindmap" data-subtype="u" class="mindmap"><div data-type="NodeMindmapItem" data-subtype="u" data-marker="-" class="mindmap-item"><div data-type="NodeParagraph" class="p"><div contenteditable="true">Child</div></div></div></div></div></div>
+Every block needs an explicit data-type. New native DOM blocks may omit data-node-id; the tool generates IDs.
+
+Raw super-block DOM uses data-type="NodeSuperBlock" and data-sb-layout="row" or data-sb-layout="col", never data-layout, and every child needs an explicit data-type; otherwise content may become an HTML block.
+
+` + markdownContentSyntax},
 			"dataType":   {Type: "string", Description: "Content type: markdown or dom", Enum: []string{"markdown", "dom"}},
-			"lockType":   {Type: "boolean", Description: "Reject update when the parsed block type differs from the existing block type; defaults to false"},
-			"parentID":   {Type: "string", Description: "Parent block ID"},
+			"lockType":   {Type: "boolean", Description: "Reject update when the parsed block type differs from the existing block type; defaults to true for native Tabs/Mindmap containers and items, false otherwise. Set false only for an intentional type conversion"},
+			"parentID":   {Type: "string", Description: "Parent container block ID; never a heading or another leaf block. A list-item requires a NodeList parent"},
 			"nextID":     {Type: "string", Description: "Next sibling block ID (for insert)"},
 			"previousID": {Type: "string", Description: "Previous sibling block ID (for insert)"},
 		},
@@ -165,10 +222,8 @@ func blockGetChildren(args map[string]any) (CallToolResult, error) {
 		if content == "" {
 			content = c.Content
 		}
-		if len(content) > 200 {
-			content = content[:200] + "..."
-		}
-		sb.WriteString(fmt.Sprintf("- [%s] %s (%s)\n", c.Type, content, c.ID))
+		content = truncateText(content, 200)
+		fmt.Fprintf(&sb, "- [%s] %s (%s)\n", c.Type, content, c.ID)
 	}
 	return CallToolResult{Content: []ContentItem{{Type: "text", Text: sb.String()}}}, nil
 }
@@ -189,6 +244,9 @@ func blockInsert(args map[string]any) (CallToolResult, error) {
 	if v, ok := args["nextID"].(string); ok {
 		nextID = v
 	}
+	if parentID == "" && previousID == "" && nextID == "" {
+		return CallToolResult{Content: []ContentItem{{Type: "text", Text: "parentID, previousID, or nextID is required"}}, IsError: true}, nil
+	}
 	boxID, release, scopeErr := beginBlockToolScope(args, true, parentID, previousID, nextID)
 	if scopeErr != nil {
 		return blockToolError(scopeErr.Error())
@@ -202,26 +260,21 @@ func blockInsert(args map[string]any) (CallToolResult, error) {
 		}
 	}
 
-	if dataType == "markdown" {
-		var err error
-		data, err = markdownToBlockDOM(data)
-		if err != nil {
-			return CallToolResult{Content: []ContentItem{{Type: "text", Text: "convert markdown failed: " + err.Error()}}, IsError: true}, nil
-		}
+	data, err := prepareBlockWriteData(data, dataType)
+	if err != nil {
+		return blockToolError("prepare block data failed: " + err.Error())
 	}
 
-	transactions := []*model.Transaction{{
-		DoOperations: []*model.Operation{{
-			Action:     "insert",
-			Data:       data,
-			ParentID:   parentID,
-			PreviousID: previousID,
-			NextID:     nextID,
-		}},
-	}}
-
-	model.PerformTransactions(&transactions)
-	model.FlushTxQueue()
+	operation := &model.Operation{
+		Action:     "insert",
+		Data:       data,
+		ParentID:   parentID,
+		PreviousID: previousID,
+		NextID:     nextID,
+	}
+	if _, err := model.PerformBlockOperation(operation); err != nil {
+		return blockToolError("insert block failed: " + err.Error())
+	}
 
 	reloadID := nextID
 	if reloadID == "" {
@@ -236,7 +289,7 @@ func blockInsert(args map[string]any) (CallToolResult, error) {
 		}
 	}
 
-	return CallToolResult{Content: []ContentItem{{Type: "text", Text: "block inserted"}}}, nil
+	return blockWriteSuccess("insert", operation.ID)
 }
 
 func blockAppend(args map[string]any) (CallToolResult, error) {
@@ -258,29 +311,24 @@ func blockAppend(args map[string]any) (CallToolResult, error) {
 		return CallToolResult{Content: []ContentItem{{Type: "text", Text: err.Error()}}, IsError: true}, nil
 	}
 
-	if dataType == "markdown" {
-		var err error
-		data, err = markdownToBlockDOM(data)
-		if err != nil {
-			return CallToolResult{Content: []ContentItem{{Type: "text", Text: "convert markdown failed: " + err.Error()}}, IsError: true}, nil
-		}
+	data, err := prepareBlockWriteData(data, dataType)
+	if err != nil {
+		return blockToolError("prepare block data failed: " + err.Error())
 	}
 
-	transactions := []*model.Transaction{{
-		DoOperations: []*model.Operation{{
-			Action:   "appendInsert",
-			Data:     data,
-			ParentID: parentID,
-		}},
-	}}
-
-	model.PerformTransactions(&transactions)
-	model.FlushTxQueue()
+	operation := &model.Operation{
+		Action:   "appendInsert",
+		Data:     data,
+		ParentID: parentID,
+	}
+	if _, err := model.PerformBlockOperation(operation); err != nil {
+		return blockToolError("append block failed: " + err.Error())
+	}
 
 	if bt := treenode.GetBlockTreeInExactBox(parentID, boxID); bt != nil {
 		util.PushReloadProtyle(bt.RootID)
 	}
-	return CallToolResult{Content: []ContentItem{{Type: "text", Text: "block appended"}}}, nil
+	return blockWriteSuccess("append", operation.ID)
 }
 
 func blockPrepend(args map[string]any) (CallToolResult, error) {
@@ -302,29 +350,45 @@ func blockPrepend(args map[string]any) (CallToolResult, error) {
 		return CallToolResult{Content: []ContentItem{{Type: "text", Text: err.Error()}}, IsError: true}, nil
 	}
 
-	if dataType == "markdown" {
-		var err error
-		data, err = markdownToBlockDOM(data)
-		if err != nil {
-			return CallToolResult{Content: []ContentItem{{Type: "text", Text: "convert markdown failed: " + err.Error()}}, IsError: true}, nil
-		}
+	data, err := prepareBlockWriteData(data, dataType)
+	if err != nil {
+		return blockToolError("prepare block data failed: " + err.Error())
 	}
 
-	transactions := []*model.Transaction{{
-		DoOperations: []*model.Operation{{
-			Action:   "prependInsert",
-			Data:     data,
-			ParentID: parentID,
-		}},
-	}}
-
-	model.PerformTransactions(&transactions)
-	model.FlushTxQueue()
+	operation := &model.Operation{
+		Action:   "prependInsert",
+		Data:     data,
+		ParentID: parentID,
+	}
+	if _, err := model.PerformBlockOperation(operation); err != nil {
+		return blockToolError("prepend block failed: " + err.Error())
+	}
 
 	if bt := treenode.GetBlockTreeInExactBox(parentID, boxID); bt != nil {
 		util.PushReloadProtyle(bt.RootID)
 	}
-	return CallToolResult{Content: []ContentItem{{Type: "text", Text: "block prepended"}}}, nil
+	return blockWriteSuccess("prepend", operation.ID)
+}
+
+type blockWriteOutput struct {
+	Action string `json:"action"`
+	ID     string `json:"id"`
+}
+
+func blockWriteSuccess(action, id string) (CallToolResult, error) {
+	if id == "" {
+		return blockToolError(action + " block failed: empty block ID")
+	}
+	output := &blockWriteOutput{Action: action, ID: id}
+	serialized, err := json.Marshal(output)
+	if err != nil {
+		return CallToolResult{}, err
+	}
+	return CallToolResult{
+		Content:              []ContentItem{{Type: "text", Text: string(serialized)}},
+		StructuredContent:    output,
+		StructuredContentSet: true,
+	}, nil
 }
 
 func blockUpdate(args map[string]any) (CallToolResult, error) {
@@ -336,12 +400,29 @@ func blockUpdate(args map[string]any) (CallToolResult, error) {
 	if _, exists := args["data"]; !exists {
 		return CallToolResult{Content: []ContentItem{{Type: "text", Text: "data is required"}}, IsError: true}, nil
 	}
-	lockType, _ := args["lockType"].(bool)
-	_, release, scopeErr := beginBlockToolScope(args, true, id)
+	boxID, release, scopeErr := beginBlockToolScope(args, true, id)
 	if scopeErr != nil {
 		return blockToolError(scopeErr.Error())
 	}
 	defer release()
+
+	lockType, explicitLockType := args["lockType"].(bool)
+	if !explicitLockType {
+		if block := treenode.GetBlockTreeInExactBox(id, boxID); block != nil {
+			switch block.Type {
+			case "tabs", "tab", "mindmap", "mindmap_item":
+				lockType = true
+			}
+		}
+	}
+
+	if dataType == "dom" {
+		var err error
+		data, err = prepareBlockWriteData(data, dataType)
+		if err != nil {
+			return blockToolError("prepare block data failed: " + err.Error())
+		}
+	}
 
 	_, rootIDs, err := model.PerformBlockUpdates([]model.BlockUpdateInput{{
 		ID:       id,
@@ -373,15 +454,9 @@ func blockDelete(args map[string]any) (CallToolResult, error) {
 
 	bt := treenode.GetBlockTreeInExactBox(id, boxID)
 
-	transactions := []*model.Transaction{{
-		DoOperations: []*model.Operation{{
-			Action: "delete",
-			ID:     id,
-		}},
-	}}
-
-	model.PerformTransactions(&transactions)
-	model.FlushTxQueue()
+	if _, err := model.PerformBlockOperation(&model.Operation{Action: "delete", ID: id}); err != nil {
+		return blockToolError("delete block failed: " + err.Error())
+	}
 
 	if bt != nil {
 		util.PushReloadProtyle(bt.RootID)
@@ -401,11 +476,56 @@ func getBlockData(args map[string]any) (data, dataType string) {
 func markdownToBlockDOM(md string) (string, error) {
 	luteEngine := util.NewLute()
 	luteEngine.SetHTMLTag2TextMark(true)
-	result, _ := luteEngine.Md2BlockDOMTree(md, true)
+	result, err := model.DataBlockDOM(md, luteEngine)
+	if err != nil {
+		return "", err
+	}
 	if result == "" {
 		return "", fmt.Errorf("empty result")
 	}
 	return result, nil
+}
+
+// 新块缺失身份时由系统生成，显式身份必须有效且在输入中唯一。
+func prepareBlockWriteData(data, dataType string) (string, error) {
+	if dataType == "markdown" {
+		return markdownToBlockDOM(data)
+	}
+	if dataType != "dom" {
+		return "", fmt.Errorf("unsupported block data type [%s]", dataType)
+	}
+	engine := util.NewLute()
+	tree := engine.BlockDOM2Tree(data)
+	if tree == nil || tree.Root == nil {
+		return "", fmt.Errorf("parse tree failed")
+	}
+	var err error
+	ids := map[string]struct{}{}
+	ast.Walk(tree.Root, func(node *ast.Node, entering bool) ast.WalkStatus {
+		if !entering || !node.IsBlock() || node.Type == ast.NodeDocument || node.Type == ast.NodeKramdownBlockIAL {
+			return ast.WalkContinue
+		}
+		if node.ID == "" {
+			node.ID = ast.NewNodeID()
+			node.SetIALAttr("id", node.ID)
+		} else if !ast.IsNodeIDPattern(node.ID) {
+			err = fmt.Errorf("found invalid ID [%s]", node.ID)
+			return ast.WalkStop
+		}
+		if _, exists := ids[node.ID]; exists {
+			err = fmt.Errorf("found duplicate ID [%s]", node.ID)
+			return ast.WalkStop
+		}
+		ids[node.ID] = struct{}{}
+		if node.IALAttr("updated") == "" {
+			node.SetIALAttr("updated", node.ID[:14])
+		}
+		return ast.WalkContinue
+	})
+	if err != nil {
+		return "", err
+	}
+	return engine.Tree2BlockDOM(tree, engine.RenderOptions, engine.ParseOptions), nil
 }
 
 func blockMove(args map[string]any) (CallToolResult, error) {
@@ -434,17 +554,18 @@ func blockMove(args map[string]any) (CallToolResult, error) {
 		}
 	}
 
-	transactions := []*model.Transaction{{
+	transaction := &model.Transaction{
 		DoOperations: []*model.Operation{{
 			Action:     "move",
 			ID:         id,
 			ParentID:   parentID,
 			PreviousID: previousID,
 		}},
-	}}
+	}
 
-	model.PerformTransactions(&transactions)
-	model.FlushTxQueue()
+	if err := model.PerformTxSync(transaction); err != nil {
+		return blockToolError("move block failed: " + err.Error())
+	}
 
 	if bt := treenode.GetBlockTreeInExactBox(id, boxID); bt != nil {
 		util.PushReloadProtyle(bt.RootID)
@@ -471,7 +592,7 @@ func blockBreadcrumb(args map[string]any) (CallToolResult, error) {
 
 	var sb strings.Builder
 	for _, p := range paths {
-		sb.WriteString(fmt.Sprintf("%s/%s (%s)\n", p.Type, p.Name, p.ID))
+		fmt.Fprintf(&sb, "%s/%s (%s)\n", p.Type, p.Name, p.ID)
 	}
 	return CallToolResult{Content: []ContentItem{{Type: "text", Text: sb.String()}}}, nil
 }
@@ -548,9 +669,9 @@ func blockBatchGet(args map[string]any) (CallToolResult, error) {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Batch get %d blocks (found %d):\n\n", len(ids), len(infos)))
+	fmt.Fprintf(&sb, "Batch get %d blocks (found %d):\n\n", len(ids), len(infos))
 	for _, info := range infos {
-		sb.WriteString(fmt.Sprintf("- %s: %s (rootID: %s, refCount: %d)\n", info.ID, info.Name, info.RootID, info.RefCount))
+		fmt.Fprintf(&sb, "- %s: %s (rootID: %s, refCount: %d)\n", info.ID, info.Name, info.RootID, info.RefCount)
 	}
 	for _, id := range ids {
 		found := false
@@ -561,7 +682,7 @@ func blockBatchGet(args map[string]any) (CallToolResult, error) {
 			}
 		}
 		if !found {
-			sb.WriteString(fmt.Sprintf("- %s: not found\n", id))
+			fmt.Fprintf(&sb, "- %s: not found\n", id)
 		}
 	}
 
@@ -592,12 +713,12 @@ func blockBatchKramdown(args map[string]any) (CallToolResult, error) {
 	kramdowns := model.GetBlockKramdownsInBox(ids, "md", boxID)
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Batch kramdown %d blocks (found %d):\n\n", len(ids), len(kramdowns)))
+	fmt.Fprintf(&sb, "Batch kramdown %d blocks (found %d):\n\n", len(ids), len(kramdowns))
 	for _, id := range ids {
 		if kd, ok := kramdowns[id]; ok {
-			sb.WriteString(fmt.Sprintf("--- %s ---\n%s\n\n", id, kd))
+			fmt.Fprintf(&sb, "--- %s ---\n%s\n\n", id, kd)
 		} else {
-			sb.WriteString(fmt.Sprintf("--- %s ---\n(not found)\n\n", id))
+			fmt.Fprintf(&sb, "--- %s ---\n(not found)\n\n", id)
 		}
 	}
 

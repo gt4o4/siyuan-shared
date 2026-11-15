@@ -1,7 +1,31 @@
 @media (max-width: 750px) {
+  #saveSyncConfig {
+    order: -1;
+  }
+
+  #networkProxyManual {
+    flex-wrap: wrap;
+
+    > .fn__space {
+      display: none;
+    }
+  }
+
   #encryptedNotebookEnabledActions {
     flex: 1 1 100%;
+    flex-wrap: wrap;
     min-width: 0;
+
+    & > .fn__space {
+      display: none;
+    }
+
+    & > .b3-button {
+      flex: 1 1 100%;
+      width: 100%;
+      max-width: 100%;
+      margin-top: 8px;
+    }
   }
 
   .config-about__motto {
@@ -14,6 +38,8 @@
         width: auto;
 
         .config__tab-title {
+          height: 45px;
+          padding-bottom: 0;
           margin-bottom: 0;
         }
 
@@ -44,14 +70,10 @@
       }
     }
 
-    &-wrap {
+    &-item,
+    &-item > .fn__flex,
+    &-item .b3-label--inner {
       flex-wrap: wrap;
-      align-items: flex-start;
-
-      & > .fn__flex-1 {
-        flex: 1 1 100%;
-        min-width: 0;
-      }
 
       & > .fn__space {
         display: none;
@@ -62,8 +84,21 @@
       & > .b3-button,
       & > .b3-tooltips,
       & > .b3-form__icona,
-      & > .fn__size200,
+      & > .fn__size200:not(.b3-switch),
       .searchByKeyLabel {
+        flex: 1 1 100%;
+        width: 100%;
+        max-width: 100%;
+        margin-top: 8px;
+      }
+
+      // 输入控件占满整行；普通标题（fn__flex-1）保持弹性收缩，开关行才可左右布局
+      & > .b3-text-field.fn__flex-1,
+      & > .b3-select.fn__flex-1,
+      & > .fn__flex > .b3-text-field.fn__flex-1,
+      & > .fn__flex > .b3-select.fn__flex-1,
+      & .b3-label--inner > .b3-text-field.fn__flex-1,
+      & .b3-label--inner > .b3-select.fn__flex-1 {
         flex: 1 1 100%;
         width: 100%;
         max-width: 100%;
@@ -71,7 +106,20 @@
       }
     }
 
-    &-wrap--range {
+    // 输入框和单位保持同行，单位前的间距不被隐藏
+    &-item > .config-item__number {
+      flex-wrap: nowrap;
+
+      & > .b3-text-field.fn__flex-1 {
+        margin-top: 0;
+      }
+
+      & > .fn__space {
+        display: inline-block;
+      }
+    }
+
+    &-range {
       .config-range__desktop {
         display: none;
       }
@@ -86,7 +134,7 @@
     }
 
     &-item--save-path {
-      .config-wrap {
+      .fn__flex {
         & > .fn__space {
           display: none;
         }
@@ -101,19 +149,8 @@
     }
 
     &-keymap {
-      label.b3-list-item {
-        flex-wrap: wrap;
-      }
-
-      .b3-list-item__action {
-        display: flex;
-      }
-
-      .config-keymap__key,
-      .b3-text-field {
-        width: 100%;
-        margin-left: 0 !important;
-        text-align: center;
+      .config-keymap__controls {
+        max-width: 100%;
       }
     }
   }
@@ -121,6 +158,19 @@
   .history {
     &__panel {
       flex-direction: column;
+
+      &.history__panel--empty {
+        & > .history__side {
+          flex: 1;
+          height: auto;
+          border-bottom: 0;
+        }
+
+        & > .history__resize,
+        & > .fn__flex-column {
+          display: none;
+        }
+      }
 
       & > .fn__flex-column {
         min-height: auto;

@@ -18,6 +18,8 @@ import {getUnRefList} from "../../search/unRef";
 import {toggleAssetHistory, toggleReplaceHistory, toggleSearchHistory} from "../../search/toggleHistory";
 import {Protyle} from "../../protyle";
 import {getKeysByLiElement} from "../../search/menu";
+import {getSearchAVMatches} from "../../search/avPreview";
+import {getHostCapabilities} from "../../util/hostCapabilities";
 
 export const searchKeydown = (app: App, event: KeyboardEvent) => {
     if (getSelection().rangeCount === 0) {
@@ -60,14 +62,18 @@ export const searchKeydown = (app: App, event: KeyboardEvent) => {
     const unRefElement = element.querySelector("#searchUnRefPanel");
     const searchType = assetsElement.classList.contains("fn__none") ? (unRefElement.classList.contains("fn__none") ? "doc" : "unRef") : "asset";
     const listElement = searchType === "asset" ? assetsElement.querySelector("#searchAssetList") : (searchType === "doc" ? element.querySelector("#searchList") : unRefElement.querySelector("#searchUnRefList"));
-    const searchInputElement = element.querySelector("#searchInput") as HTMLInputElement;
-    if (searchType === "doc" && matchHotKey(window.siyuan.config.keymap.general.newFile.custom, event)) {
+    const searchInputElement = element.querySelector("#searchInput") as HTMLTextAreaElement;
+    const targetId = (event.target as HTMLElement).id;
+    if (targetId === "searchInput" && config.method === 2 && !event.altKey && !event.ctrlKey && !event.metaKey &&
+        (event.key === "Enter" || event.key.startsWith("Arrow"))) {
+        return false;
+    }
+    if (searchType === "doc" && matchHotKey(window.siyuan.config.keymap.general.newFile, event)) {
         if (config.method === 0) {
             newFile(app, searchInputElement.value);
         }
         return true;
     }
-    const targetId = (event.target as HTMLElement).id;
     if (event.key === "ArrowDown" && event.altKey) {
         if (searchType === "asset") {
             toggleAssetHistory(assetsElement);
@@ -85,6 +91,10 @@ export const searchKeydown = (app: App, event: KeyboardEvent) => {
         // 不能返回 true，否则历史菜单无法使用快捷键
         return false;
     }
+    if (searchType === "doc" && targetId === "replaceInput" && event.key === "Enter") {
+        replace(element, config, edit, false);
+        return true;
+    }
     let currentList: HTMLElement = listElement.querySelector(".b3-list-item--focus");
     if (!currentList) {
         return false;
@@ -97,7 +107,7 @@ export const searchKeydown = (app: App, event: KeyboardEvent) => {
         return false;
     }
     if (searchType !== "asset") {
-        if (matchHotKey(window.siyuan.config.keymap.editor.general.insertRight.custom, event)) {
+        if (matchHotKey(window.siyuan.config.keymap.editor.general.insertRight, event)) {
             openSearchEditor({
                 protyle: edit.protyle,
                 rootId: currentList.getAttribute("data-root-id"),
@@ -115,7 +125,7 @@ export const searchKeydown = (app: App, event: KeyboardEvent) => {
             return true;
         }
         const id = currentList.getAttribute("data-node-id");
-        if (matchHotKey("⌘/", event)) {
+        if (matchHotKey(window.siyuan.config.keymap.general.openContextMenu, event)) {
             const currentRect = currentList.getBoundingClientRect();
             initSearchMenu(id).popup({
                 x: currentRect.left + 30,
@@ -123,27 +133,27 @@ export const searchKeydown = (app: App, event: KeyboardEvent) => {
             });
             return true;
         }
-        if (matchHotKey(window.siyuan.config.keymap.editor.general.copyBlockRef.custom, event)) {
+        if (matchHotKey(window.siyuan.config.keymap.editor.general.copyBlockRef, event)) {
             fetchPost("/api/block/getRefText", {id}, (response) => {
                 writeText(`((${id} '${response.data}'))`);
             });
             return true;
         }
-        if (matchHotKey(window.siyuan.config.keymap.editor.general.copyBlockEmbed.custom, event)) {
+        if (matchHotKey(window.siyuan.config.keymap.editor.general.copyBlockEmbed, event)) {
             writeText(`{{select * from blocks where id='${id}'}}`);
             return true;
         }
-        if (matchHotKey(window.siyuan.config.keymap.editor.general.copyProtocol.custom, event)) {
+        if (matchHotKey(window.siyuan.config.keymap.editor.general.copyProtocol, event)) {
             writeText(`siyuan://blocks/${id}`);
             return true;
         }
-        if (matchHotKey(window.siyuan.config.keymap.editor.general.copyProtocolInMd.custom, event)) {
+        if (matchHotKey(window.siyuan.config.keymap.editor.general.copyProtocolInMd, event)) {
             fetchPost("/api/block/getRefText", {id}, (response) => {
                 writeText(`[${response.data}](siyuan://blocks/${id})`);
             });
             return true;
         }
-        if (matchHotKey(window.siyuan.config.keymap.editor.general.copyHPath.custom, event)) {
+        if (matchHotKey(window.siyuan.config.keymap.editor.general.copyHPath, event)) {
             fetchPost("/api/filetree/getHPathByID", {
                 id
             }, (response) => {
@@ -151,7 +161,7 @@ export const searchKeydown = (app: App, event: KeyboardEvent) => {
             });
             return true;
         }
-        if (matchHotKey(window.siyuan.config.keymap.editor.general.copyID.custom, event)) {
+        if (matchHotKey(window.siyuan.config.keymap.editor.general.copyID, event)) {
             writeText(id);
             return true;
         }
@@ -237,7 +247,9 @@ export const searchKeydown = (app: App, event: KeyboardEvent) => {
             }
         } else {
             /// #if !BROWSER
-            useShell("showItemInFolder", path.join(window.siyuan.config.system.dataDir, currentList.lastElementChild.getAttribute("aria-label")));
+            if (getHostCapabilities().localFileSystem) {
+                useShell("showItemInFolder", path.join(window.siyuan.config.system.dataDir, currentList.lastElementChild.getAttribute("aria-label")));
+            }
             /// #endif
         }
         return true;
@@ -272,6 +284,7 @@ export const searchKeydown = (app: App, event: KeyboardEvent) => {
                 config,
                 value: searchInputElement.value,
                 edit,
+                matches: getSearchAVMatches(currentList),
             });
         } else {
             getArticle({
@@ -309,6 +322,7 @@ export const searchKeydown = (app: App, event: KeyboardEvent) => {
                 config,
                 value: searchInputElement.value,
                 edit,
+                matches: getSearchAVMatches(currentList),
             });
         } else if (searchType === "unRef") {
             getArticle({

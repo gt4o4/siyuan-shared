@@ -1,25 +1,25 @@
 import {Tab} from "../layout/Tab";
 import {Protyle} from "../protyle";
 import {Model} from "../layout/Model";
-import {setPadding} from "../protyle/ui/initUI";
 /// #if !BROWSER
 import {setModelsHash} from "../window/setHeader";
 /// #endif
 import {countBlockWord} from "../layout/status";
 import type {App} from "../index";
-import {fullscreen} from "../protyle/breadcrumb/action";
 import {fetchPost} from "../util/fetch";
-import {Backlink} from "../layout/dock/Backlink";
+import {BottomBacklinkPanel} from "../layout/dock/BottomBacklinkPanel";
+import type {IDatabaseRowOpenData} from "../protyle/render/av/openDatabaseRow";
 
 export class Editor extends Model {
     public element: HTMLElement;
     public editor: Protyle;
     public headElement: HTMLElement;
-    public backlink?: Backlink;
-    private backlinkElement?: HTMLElement;
-    private backlinkIntersectionObserver?: IntersectionObserver;
-    private backlinkMutationObserver?: MutationObserver;
-    private backlinkEmpty = false;
+    public databaseRow?: IDatabaseRowOpenData;
+    private bottomBacklinkPanel?: BottomBacklinkPanel;
+
+    public get backlink() {
+        return this.bottomBacklinkPanel?.backlink;
+    }
 
     constructor(options: {
         app: App,
@@ -30,7 +30,8 @@ export class Editor extends Model {
         mode?: TEditorMode,
         action?: TProtyleAction[],
         afterInitProtyle?: (editor: Protyle) => void,
-        scrollPosition?: ScrollLogicalPosition
+        scrollPosition?: ScrollLogicalPosition,
+        scrollAttr?: IScrollAttr,
     }) {
         super({
             app: options.app,
@@ -52,6 +53,7 @@ export class Editor extends Model {
         notebookId?: string,
         mode?: TEditorMode,
         scrollPosition?: ScrollLogicalPosition,
+        scrollAttr?: IScrollAttr,
         afterInitProtyle?: (editor: Protyle) => void,
     }) {
         this.editor = new Protyle(this.app, this.element, {
@@ -68,12 +70,12 @@ export class Editor extends Model {
             },
             typewriterMode: true,
             scrollPosition: options.scrollPosition,
+            scrollAttr: options.scrollAttr,
             after: (editor) => {
                 if (window.siyuan.editorIsFullscreen) {
-                    fullscreen(editor.protyle.element);
-                    setPadding(editor.protyle);
+                    editor.setFullscreen(true);
                 }
-                countBlockWord([], editor.protyle.block.rootID);
+                countBlockWord([], editor.protyle);
                 /// #if !BROWSER
                 setModelsHash();
                 /// #endif
@@ -87,85 +89,17 @@ export class Editor extends Model {
         this.editor.protyle.model = this;
     }
 
-    public updateBacklinkPanel() {
-        if (!window.siyuan.config.editor.backlinkShowBottom) {
-            this.destroyBacklinkPanel();
-            return;
-        }
-        if (this.backlinkElement) {
-            this.updateBacklinkVisibility();
-            return;
-        }
-
-        const backlinkElement = document.createElement("div");
-        backlinkElement.className = "fn__none sy__backlink--bottom sy__backlink--pending";
-        this.backlinkElement = backlinkElement;
-        this.editor.protyle.wysiwyg.element.after(backlinkElement);
-        setPadding(this.editor.protyle);
-
-        this.backlinkIntersectionObserver = new IntersectionObserver((entries) => {
-            if (this.backlinkElement !== backlinkElement || !entries[0].isIntersecting ||
-                backlinkElement.classList.contains("fn__none")) {
-                return;
-            }
-            if (!this.backlink) {
-                this.backlink = new Backlink({
-                    app: this.app,
-                    blockId: this.getBacklinkBlockId(),
-                    rootId: this.editor.protyle.block.rootID,
-                    notebookId: this.editor.protyle.notebookId,
-                    type: "bottom",
-                    element: backlinkElement,
-                    ownerProtyle: this.editor.protyle,
-                    emptyChange: (empty) => {
-                        if (this.backlinkElement !== backlinkElement) {
-                            return;
-                        }
-                        const pending = backlinkElement.classList.contains("sy__backlink--pending");
-                        if (!pending && this.backlinkEmpty === empty) {
-                            return;
-                        }
-                        const contentElement = this.editor.protyle.contentElement;
-                        contentElement.classList.add("protyle-content--backlink-reveal");
-                        backlinkElement.classList.remove("sy__backlink--pending");
-                        this.backlinkEmpty = empty;
-                        this.updateBacklinkVisibility(pending);
-                        contentElement.getBoundingClientRect();
-                        requestAnimationFrame(() => {
-                            contentElement.classList.remove("protyle-content--backlink-reveal");
-                        });
-                    },
-                });
-            } else {
-                this.backlink.refreshDirty();
-            }
-        }, {
-            root: this.editor.protyle.contentElement,
-            rootMargin: "640px 0px",
-        });
-        this.backlinkIntersectionObserver.observe(backlinkElement);
-
-        this.backlinkMutationObserver = new MutationObserver(() => {
-            this.updateBacklinkVisibility();
-        });
-        this.backlinkMutationObserver.observe(this.editor.protyle.wysiwyg.element, {
-            attributes: true,
-            attributeFilter: ["data-bottom-eof"],
-        });
-        this.updateBacklinkVisibility();
+    public updateBacklinkPanel(reset = false) {
+        this.bottomBacklinkPanel ??= new BottomBacklinkPanel(this.editor.protyle);
+        this.bottomBacklinkPanel.update(reset);
     }
 
     public refreshBottomBacklinkPanel() {
-        if (!this.backlink) {
-            return;
-        }
-        const blockId = this.getBacklinkBlockId();
-        const rootId = this.editor.protyle.block.rootID;
-        this.backlink.switchBlock(blockId, rootId, this.editor.protyle.notebookId);
+        this.bottomBacklinkPanel?.refresh();
     }
 
     public destroy() {
-        this.destroyBacklinkPanel();
+        this.bottomBacklinkPanel?.destroy();
         this.editor.destroy();
     }
 
@@ -177,38 +111,5 @@ export class Editor extends Model {
             }
         }
         return this.editor.protyle;
-    }
-
-    private getBacklinkBlockId() {
-        const protyle = this.editor.protyle;
-        return protyle.block.showAll ? protyle.block.id : (protyle.block.parentID || protyle.block.rootID);
-    }
-
-    private updateBacklinkVisibility(forcePadding = false) {
-        if (!this.backlinkElement) {
-            return;
-        }
-        const hidden = this.backlinkEmpty || (!this.editor.protyle.block.showAll && this.editor.protyle.block.scroll &&
-            !this.editor.protyle.wysiwyg.element.hasAttribute("data-bottom-eof"));
-        if (this.backlinkElement.classList.contains("fn__none") !== hidden || forcePadding) {
-            this.backlinkElement.classList.toggle("fn__none", hidden);
-            setPadding(this.editor.protyle);
-        }
-    }
-
-    private destroyBacklinkPanel() {
-        const hasBacklinkElement = !!this.backlinkElement;
-        this.backlinkIntersectionObserver?.disconnect();
-        this.backlinkMutationObserver?.disconnect();
-        this.backlink?.destroy();
-        this.backlinkElement?.remove();
-        this.backlinkIntersectionObserver = undefined;
-        this.backlinkMutationObserver = undefined;
-        this.backlink = undefined;
-        this.backlinkElement = undefined;
-        this.backlinkEmpty = false;
-        if (hasBacklinkElement) {
-            setPadding(this.editor.protyle);
-        }
     }
 }

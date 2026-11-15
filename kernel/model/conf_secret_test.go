@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
@@ -57,7 +45,7 @@ func TestGetMaskedConfHidesCookieKeyAndPreservesOIDCSecret(t *testing.T) {
 func TestHideConfSecretPreservesNotebookCryptoSettings(t *testing.T) {
 	appConf := NewAppConf()
 	appConf.CookieKey = "session-cookie-signing-key"
-	appConf.System = &conf.System{}
+	appConf.System.Store(&conf.System{})
 	kek := bytes.Repeat([]byte{1}, 32)
 	verifier, err := util.EncryptWithAAD(kek, kekVerifierMagic, []byte("siyuan:kek-verifier"))
 	if err != nil {
@@ -73,6 +61,7 @@ func TestHideConfSecretPreservesNotebookCryptoSettings(t *testing.T) {
 	appConf.NotebookCrypto.KEKVerifier = verifier
 	appConf.NotebookCrypto.VerifierNonce = nonce
 	appConf.NotebookCrypto.AutoLockMinutes = 17
+	appConf.NotebookCrypto.HistoryKEKs = [][]byte{bytes.Repeat([]byte{3}, 64)}
 	prepareBackupForWrite(appConf.NotebookCrypto)
 	appConf.NotebookCrypto.KEKMAC = computeKEKMAC(appConf.NotebookCrypto, kek)
 
@@ -96,14 +85,15 @@ func TestHideConfSecretPreservesNotebookCryptoSettings(t *testing.T) {
 		"" != notebookCrypto.BackupID ||
 		0 != notebookCrypto.CreatedAt ||
 		"" != notebookCrypto.Checksum ||
-		0 < len(notebookCrypto.KEKMAC) {
+		0 < len(notebookCrypto.KEKMAC) ||
+		0 < len(notebookCrypto.HistoryKEKs) {
 		t.Fatalf("notebook crypto key material was not hidden: %#v", notebookCrypto)
 	}
 }
 
 func TestHideConfSecretMasksIncompleteNotebookCryptoAsDisabled(t *testing.T) {
 	appConf := NewAppConf()
-	appConf.System = &conf.System{}
+	appConf.System.Store(&conf.System{})
 	appConf.NotebookCrypto = conf.NewNotebookCrypto()
 	appConf.NotebookCrypto.Enabled = true
 
@@ -116,36 +106,36 @@ func TestHideConfSecretMasksIncompleteNotebookCryptoAsDisabled(t *testing.T) {
 
 func TestHideConfSecretHidesAbsolutePaths(t *testing.T) {
 	appConf := NewAppConf()
-	appConf.Export = &conf.Export{
+	appConf.Export.Store(&conf.Export{
 		AddTitle:  true,
 		PandocBin: `C:\Users\alice\SiYuan\temp\pandoc\bin\pandoc.exe`,
-	}
-	appConf.System = &conf.System{
+	})
+	appConf.System.Store(&conf.System{
 		KernelVersion: "3.3.0",
 		HomeDir:       `C:\Users\alice`,
 		WorkspaceDir:  `C:\Users\alice\SiYuan`,
 		AppDir:        `C:\Program Files\SiYuan`,
 		ConfDir:       `C:\Users\alice\SiYuan\conf`,
 		DataDir:       `C:\Users\alice\SiYuan\data`,
-	}
+	})
 
 	HideConfSecret(appConf)
 
-	if "" != appConf.Export.PandocBin {
-		t.Fatalf("pandoc path was not hidden: %q", appConf.Export.PandocBin)
+	if "" != appConf.Export.Load().PandocBin {
+		t.Fatalf("pandoc path was not hidden: %q", appConf.Export.Load().PandocBin)
 	}
-	if !appConf.Export.AddTitle {
+	if !appConf.Export.Load().AddTitle {
 		t.Fatal("functional export settings should be preserved")
 	}
-	if "" != appConf.System.HomeDir ||
-		"" != appConf.System.WorkspaceDir ||
-		"" != appConf.System.AppDir ||
-		"" != appConf.System.ConfDir ||
-		"" != appConf.System.DataDir {
-		t.Fatalf("system paths were not hidden: %#v", appConf.System)
+	if "" != appConf.System.Load().HomeDir ||
+		"" != appConf.System.Load().WorkspaceDir ||
+		"" != appConf.System.Load().AppDir ||
+		"" != appConf.System.Load().ConfDir ||
+		"" != appConf.System.Load().DataDir {
+		t.Fatalf("system paths were not hidden: %#v", appConf.System.Load())
 	}
-	if "3.3.0" != appConf.System.KernelVersion {
-		t.Fatalf("functional system settings were changed: %#v", appConf.System)
+	if "3.3.0" != appConf.System.Load().KernelVersion {
+		t.Fatalf("functional system settings were changed: %#v", appConf.System.Load())
 	}
 }
 

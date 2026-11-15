@@ -1,10 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package server
 
@@ -24,7 +20,7 @@ import (
 func TestServeSVGSanitizesAndSetsSecurityHeaders(t *testing.T) {
 	oldConf := model.Conf
 	model.Conf = model.NewAppConf()
-	model.Conf.Editor = conf.NewEditor()
+	model.Conf.Editor.Store(conf.NewEditor())
 	t.Cleanup(func() {
 		model.Conf = oldConf
 	})
@@ -59,8 +55,8 @@ func TestServeSVGSanitizesAndSetsSecurityHeaders(t *testing.T) {
 func TestServeSVGPreservesAllowSVGScriptBehavior(t *testing.T) {
 	oldConf := model.Conf
 	model.Conf = model.NewAppConf()
-	model.Conf.Editor = conf.NewEditor()
-	model.Conf.Editor.AllowSVGScript = true
+	model.Conf.Editor.Store(conf.NewEditor())
+	model.Conf.Editor.Load().AllowSVGScript = true
 	t.Cleanup(func() {
 		model.Conf = oldConf
 	})

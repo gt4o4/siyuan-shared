@@ -2,9 +2,11 @@ import {describe, it} from "node:test";
 import * as assert from "node:assert/strict";
 import {
     getBlockRefCheckElementChain,
+    getCrossBlockEndAction,
     getCrossBlockMergeRemoveElement,
     getCrossBlockSiblingListItemMergeContext,
     getDeletedBlockElements,
+    isNativeCrossBlockCompositionSupported,
     isEntireBlockContentSelected
 } from "./removeRange";
 
@@ -86,6 +88,47 @@ const block = (name: string, type: string, ...children: TestElement[]) =>
 const attr = (name: string) => new TestElement(name);
 const asHTMLElement = (element: TestElement) => element as unknown as HTMLElement;
 
+describe("isNativeCrossBlockCompositionSupported", () => {
+    it("支持跨容器的文本块、代码块和表格组合输入", () => {
+        assert.equal(isNativeCrossBlockCompositionSupported(
+            ["NodeParagraph", "NodeParagraph"],
+            ["NodeBlockquote", "NodeParagraph", "NodeCallout", "NodeParagraph"]), true);
+        assert.equal(isNativeCrossBlockCompositionSupported(
+            ["NodeCodeBlock", "NodeParagraph"],
+            ["NodeSuperBlock", "NodeCodeBlock", "NodeParagraph"]), true);
+        assert.equal(isNativeCrossBlockCompositionSupported(
+            ["NodeParagraph", "NodeTable"], ["NodeParagraph", "NodeTable"]), true);
+    });
+
+    it("支持跨过渲染块但拒绝将其作为文本边界", () => {
+        assert.equal(isNativeCrossBlockCompositionSupported(
+            ["NodeAttributeView", "NodeParagraph"], ["NodeAttributeView", "NodeParagraph"]), false);
+        assert.equal(isNativeCrossBlockCompositionSupported(
+            ["NodeHeading", "NodeParagraph"], ["NodeHeading", "NodeMathBlock", "NodeParagraph"]), true);
+        assert.equal(isNativeCrossBlockCompositionSupported(
+            ["NodeParagraph", "NodeParagraph"], ["NodeParagraph", "NodeUnknown", "NodeParagraph"]), false);
+    });
+});
+
+describe("getCrossBlockEndAction", () => {
+    it("合并相同类型的段落和标题边界", () => {
+        assert.equal(getCrossBlockEndAction("NodeParagraph", "NodeParagraph", false, false), "merge");
+        assert.equal(getCrossBlockEndAction("NodeHeading", "NodeHeading", true, false), "merge");
+    });
+
+    it("删除有效内容被完整选中的异类型终点块", () => {
+        assert.equal(getCrossBlockEndAction("NodeParagraph", "NodeHeading", true, false), "delete");
+        assert.equal(getCrossBlockEndAction("NodeHeading", "NodeParagraph", true, false), "delete");
+        assert.equal(getCrossBlockEndAction("NodeCodeBlock", "NodeHeading", true, false), "delete");
+    });
+
+    it("保留部分选中的异类型终点块和折叠标题", () => {
+        assert.equal(getCrossBlockEndAction("NodeParagraph", "NodeHeading", false, false), undefined);
+        assert.equal(getCrossBlockEndAction("NodeParagraph", "NodeHeading", true, true), undefined);
+        assert.equal(getCrossBlockEndAction("NodeParagraph", "NodeCodeBlock", true, false), undefined);
+    });
+});
+
 describe("isEntireBlockContentSelected", () => {
     const range = (startComparison: number, endComparison: number) => ({
         compareBoundaryPoints(type: number) {
@@ -148,6 +191,19 @@ describe("getDeletedBlockElements", () => {
 });
 
 describe("getCrossBlockMergeRemoveElement", () => {
+    it("从列表跨选到顶层标题时只删除标题块", () => {
+        const start = block("start", "NodeParagraph");
+        const startItem = block("startItem", "NodeListItem", start, attr("startAttr"));
+        const startList = block("startList", "NodeList", startItem, attr("startListAttr"));
+        const end = block("end", "NodeHeading");
+        const editor = new TestElement("editor").append(startList, end);
+
+        const result = getCrossBlockMergeRemoveElement(
+            asHTMLElement(editor), asHTMLElement(start), asHTMLElement(end));
+
+        assert.equal(result, asHTMLElement(end));
+    });
+
     it("删除多层列表中起点下方的完整分支", () => {
         const start = block("start", "NodeParagraph");
         const second = block("second", "NodeParagraph");

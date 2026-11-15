@@ -1,9 +1,12 @@
-import {focusBlock, focusByOffset, focusByWbr, getEditorRange, getSelectionOffset} from "../util/selection";
+import {focusBlock, focusByOffset, focusByWbr, getEditorRange} from "../util/selection";
+import {getSelectionOffset} from "../util/selectionOffsets";
 import {Constants} from "../../constants";
-import * as dayjs from "dayjs";
-import {transaction, turnsOneInto, updateTransaction, wrapBlockInBlockquote} from "./transaction";
+import dayjs from "dayjs";
+import {transaction, turnsIntoOneTransaction, turnsOneInto, updateTransaction, wrapBlockInBlockquote} from "./transaction";
 import {mathRender} from "../render/mathRender";
 import {highlightRender} from "../render/highlightRender";
+import {restoreInlineElementBoundaryHTML} from "../util/inlineElementBoundary";
+import {suspendLongTextRuns} from "../util/longTextWrap";
 import {
     fixAdjacentTags,
     getContenteditableElement,
@@ -24,7 +27,17 @@ import {updateAVName} from "../render/av/action";
 import {setFold} from "../util/blockFold";
 import {nbsp2space} from "../util/normalizeText";
 import {getBlockquoteContext, isBlockquoteMarker, shouldCancelBlockquote} from "./blockquote";
-import {getFullWidthStrikethroughMarkerOffsets} from "./strikethrough";
+import {
+    getSemanticMarkerPrefixLengthForNode,
+    hasSemanticInlineType,
+    normalizeSemanticInlineElements,
+    removeEmptySemanticInlineElement
+} from "../util/inlineElementMarker";
+import {normalizeInlineFontFamilyStyle} from "../toolbar/fontFamilyCore";
+import {sanitizeKernelHTML} from "../../util/hostCapabilities";
+import {isProtyleListItemFirstParagraph} from "../runtimeCapabilities";
+import {isMobile} from "../../util/functions";
+import {scheduleCaretScroll} from "./caretScroll";
 
 interface IInputOperations {
     doOperations: IOperation[];
@@ -32,37 +45,27 @@ interface IInputOperations {
     undoContext?: Record<string, string>;
 }
 
-const normalizeFullWidthStrikethrough = (editElement: HTMLElement, wbrElement: HTMLElement) => {
-    const inlineContainer = wbrElement.closest("td, th") || editElement;
-    const literalElement = wbrElement.parentElement?.closest(
-        '[data-type~="a"], [data-type~="block-ref"], [data-type~="code"], [data-type~="file-annotation-ref"], ' +
-        '[data-type~="inline-math"], [data-type~="kbd"], [data-type~="tag"]'
-    );
-    if (literalElement && inlineContainer.contains(literalElement)) {
-        return false;
-    }
+interface IInputSuperBlockOperations extends IInputOperations {
+    parentID: string;
+    previousID?: string;
+}
 
-    const prefixRange = document.createRange();
-    prefixRange.setStart(inlineContainer, 0);
-    prefixRange.setEndBefore(wbrElement);
-    const prefix = prefixRange.toString().split(Constants.ZWSP).join("");
-    const offsets = getFullWidthStrikethroughMarkerOffsets(prefix);
-    if (!offsets) {
-        return false;
+const updateGutterAfterInput = (protyle: IProtyle, blockElement: HTMLElement) => {
+    if (!isMobile()) {
+        hideElements(["gutter"], protyle);
+    } else if (protyle.gutter && !protyle.gutter.element.classList.contains("fn__none")) {
+        protyle.gutter.render(protyle, blockElement);
     }
+};
 
-    const openRange = focusByOffset(inlineContainer, offsets.openStart,
-        offsets.openStart + offsets.markerLength, false, true);
-    const closeRange = focusByOffset(inlineContainer, offsets.closeStart,
-        offsets.closeStart + offsets.markerLength, false, true);
-    if (!openRange || !closeRange) {
-        return false;
-    }
-    closeRange.deleteContents();
-    closeRange.insertNode(document.createTextNode("~~"));
-    openRange.deleteContents();
-    openRange.insertNode(document.createTextNode("~~"));
-    return true;
+const normalizeInlineFontFamilyStyles = (element: ParentNode) => {
+    element.querySelectorAll<HTMLElement>("span[style]").forEach(item => {
+        const fontFamily = item.style.fontFamily;
+        const normalizedFontFamily = normalizeInlineFontFamilyStyle(fontFamily);
+        if (normalizedFontFamily !== fontFamily) {
+            item.style.fontFamily = normalizedFontFamily;
+        }
+    });
 };
 
 export const beforeBlockquoteInput = (protyle: IProtyle, event: InputEvent) => {
@@ -77,7 +80,7 @@ export const beforeBlockquoteInput = (protyle: IProtyle, event: InputEvent) => {
     if (!blockElement || blockElement.getAttribute("data-type") !== "NodeParagraph") {
         return false;
     }
-    const editElement = getContenteditableElement(blockElement) as HTMLElement;
+    const editElement = getContenteditableElement(blockElement, range.startContainer) as HTMLElement;
     const blockquoteContext = getBlockquoteContext(blockElement, protyle.wysiwyg.element);
     if (!editElement || !blockquoteContext || !editElement.contains(range.startContainer)) {
         return false;
@@ -128,7 +131,7 @@ export const beforeBlockquoteInput = (protyle: IProtyle, event: InputEvent) => {
     return true;
 };
 
-export const input = async (protyle: IProtyle, blockElement: HTMLElement, range: Range, needRender = true,
+const inputBlock = async (protyle: IProtyle, blockElement: HTMLElement, range: Range, needRender = true,
                             event?: InputEvent, inputOperations?: IInputOperations) => {
     if (!blockElement.parentElement) {
         // 不同 windows 版本下输入法会多次触发 input，导致 outerhtml 赋值的块丢失
@@ -143,7 +146,7 @@ export const input = async (protyle: IProtyle, blockElement: HTMLElement, range:
         }
         return;
     }
-    const editElement = getContenteditableElement(blockElement) as HTMLElement;
+    const editElement = getContenteditableElement(blockElement, range.startContainer) as HTMLElement;
     const type = blockElement.getAttribute("data-type");
     if (!editElement) {
         // hr、嵌入块、数学公式、iframe、音频、视频、图表渲染块等不允许输入 https://github.com/siyuan-note/siyuan/issues/3958
@@ -176,13 +179,13 @@ export const input = async (protyle: IProtyle, blockElement: HTMLElement, range:
         const wbrNextElement = hasNextSibling(wbrElement) as HTMLElement;
         // 行内代码前软换行，光标应在行内代码前
         if (!hasPreviousSibling(wbrElement) && wbrElement.parentElement.tagName === "SPAN" &&
-            wbrNextElement && wbrNextElement.textContent.startsWith(Constants.ZWSP)) {
+            getSemanticMarkerPrefixLengthForNode(wbrNextElement) > 0) {
             wbrElement.parentElement.before(wbrElement);
         }
         if (event.inputType === "deleteContentForward") {
-            if (wbrNextElement && wbrNextElement.nodeType === 1 && !wbrNextElement.textContent.startsWith(Constants.ZWSP)) {
-                const nextType = (wbrNextElement.getAttribute("data-type") || "").split(" ");
-                if (nextType.includes("code") || nextType.includes("kbd") || nextType.includes("tag")) {
+            if (wbrNextElement && wbrNextElement.nodeType === 1 &&
+                getSemanticMarkerPrefixLengthForNode(wbrNextElement.firstChild) === 0) {
+                if (hasSemanticInlineType(wbrNextElement.getAttribute("data-type"))) {
                     wbrNextElement.insertAdjacentElement("afterbegin", wbrElement);
                 }
             }
@@ -203,6 +206,15 @@ export const input = async (protyle: IProtyle, blockElement: HTMLElement, range:
             }
         }
     }
+    const removeEmptySemanticElementAtCaret = () => {
+        if (event?.inputType !== "deleteContentForward") {
+            return;
+        }
+        const semanticElement = wbrElement.closest("span[data-type]") as HTMLElement | null;
+        if (semanticElement) {
+            removeEmptySemanticInlineElement(range, semanticElement, wbrElement);
+        }
+    };
     const id = blockElement.getAttribute("data-node-id");
     const conversionOperations: IInputOperations | undefined = inputOperations ? {
         doOperations: inputOperations.doOperations,
@@ -213,6 +225,53 @@ export const input = async (protyle: IProtyle, blockElement: HTMLElement, range:
             context: inputOperations.undoContext,
         }, ...inputOperations.undoOperations]
     } : undefined;
+    if (editElement.classList.contains("callout-title")) {
+        fixAdjacentTags(editElement);
+        normalizeSemanticInlineElements(editElement);
+        removeEmptySemanticElementAtCaret();
+        normalizeInlineFontFamilyStyles(editElement);
+        let html = protyle.lute.SpinBlockDOM(blockElement.outerHTML);
+        hideElements(["util"], protyle, true);
+        const tempElement = document.createElement("template");
+        tempElement.innerHTML = html;
+        const renderedCalloutElement = tempElement.content.firstElementChild as HTMLElement;
+        const renderedTitleElement = renderedCalloutElement.querySelector(".callout-title");
+        const calloutContentElement = blockElement.querySelector(":scope > .callout-content, :scope > .tab-item-content");
+        const renderedContentElement = renderedCalloutElement.querySelector(":scope > .callout-content, :scope > .tab-item-content");
+        if (calloutContentElement && renderedContentElement) {
+            renderedContentElement.replaceWith(calloutContentElement.cloneNode(true));
+            html = renderedCalloutElement.outerHTML;
+        }
+        if (needRender && renderedTitleElement?.innerHTML !== editElement.innerHTML) {
+            if (editElement.classList.contains("tab-item-title")) {
+                // 标题规范化只更新行内内容，避免替换编辑宿主后丢失焦点及页签输入层布局。
+                editElement.innerHTML = renderedTitleElement.innerHTML;
+                blockElement.dataset.tabsEditing = "true";
+            } else {
+                blockElement.insertAdjacentHTML("afterend", html);
+                blockElement = blockElement.nextElementSibling as HTMLElement;
+                blockElement.previousElementSibling.remove();
+            }
+            mathRender(blockElement);
+            blockElement.querySelectorAll('[data-type~="block-ref"][data-subtype="d"]').forEach(refItem => {
+                if (refItem.textContent === "") {
+                    fetchPost("/api/block/getRefText", {id: refItem.getAttribute("data-id")}, (response) => {
+                        refItem.innerHTML = sanitizeKernelHTML(response.data);
+                    });
+                }
+            });
+            if (!editElement.classList.contains("tab-item-title")) {
+                html = blockElement.outerHTML;
+            }
+        }
+        focusByWbr(protyle.wysiwyg.element, range);
+        protyle.hint.render(protyle);
+        updateGutterAfterInput(protyle, blockElement);
+        // 引用移除预检会清空选区，事务需通过编辑标记识别并保留当前标题宿主。
+        blockElement.setAttribute(Constants.ATTRIBUTE_EDITING, "true");
+        updateInput(html, protyle, id, inputOperations);
+        return;
+    }
     if ((type !== "NodeCodeBlock" && type !== "NodeHeading") && // https://github.com/siyuan-note/siyuan/issues/11851
         (editElement.innerHTML.endsWith("\n<wbr>") || editElement.innerHTML.endsWith("\n<wbr>\n"))) {
         // 软换行
@@ -283,10 +342,6 @@ export const input = async (protyle: IProtyle, blockElement: HTMLElement, range:
             return;
         }
     }
-    if (type !== "NodeCodeBlock" && currentWbrElement &&
-        window.siyuan.config.editor.markdown.inlineStrikethrough) {
-        normalizeFullWidthStrikethrough(editElement, currentWbrElement);
-    }
     const trimStartHTML = editElement.innerHTML.trimStart();
     const trimStartText = editElement.textContent.trimStart();
     const enableCodeBlockMiddleDot = window.siyuan.config.editor.markdown.codeBlockMiddleDot !== false;
@@ -325,6 +380,9 @@ export const input = async (protyle: IProtyle, blockElement: HTMLElement, range:
     }
     // 相邻标签之间插入空格区隔，避免 SpinBlockDOM 解析时合并为一个标签 https://github.com/siyuan-note/siyuan/issues/18191
     fixAdjacentTags(editElement);
+    normalizeSemanticInlineElements(editElement);
+    removeEmptySemanticElementAtCaret();
+    normalizeInlineFontFamilyStyles(editElement);
     let html = blockElement.outerHTML;
     let focusHR = false;
     if (["---", "___", "***"].includes(editElement.textContent) && type !== "NodeCodeBlock") {
@@ -369,6 +427,7 @@ export const input = async (protyle: IProtyle, blockElement: HTMLElement, range:
         // 相邻标签之间插入空格区隔，避免 SpinBlockDOM 解析时合并为一个标签 https://github.com/siyuan-note/siyuan/issues/18191
         // 使用迭代替换处理多个连续相邻标签（全局正则无法匹配重叠情况）
         // 若中间含有 <wbr>（光标标记），替换后需保留 <wbr>，否则 focusByWbr 无法定位光标
+        html = restoreInlineElementBoundaryHTML(html);
         let prevHTML: string;
         do {
             prevHTML = html;
@@ -387,8 +446,9 @@ export const input = async (protyle: IProtyle, blockElement: HTMLElement, range:
     tempElement.innerHTML = html;
     // 列表项内紧挨标记的首个段落块不生成子列表，仅移除触发标记并保留现有内容
     // https://github.com/siyuan-note/siyuan/issues/17890 https://github.com/siyuan-note/siyuan/issues/18355
-    if (blockElement.closest('[data-type="NodeListItem"]') &&
-        blockElement.previousElementSibling?.classList.contains("protyle-action")) {
+    if ((blockElement.closest('[data-type="NodeListItem"]') &&
+        blockElement.previousElementSibling?.classList.contains("protyle-action")) ||
+        isProtyleListItemFirstParagraph(protyle, blockElement)) {
         if (tempElement.content.firstElementChild.classList.contains("list")) {
             if (editElement.contains(wbrElement)) {
                 const markerRange = document.createRange();
@@ -403,6 +463,7 @@ export const input = async (protyle: IProtyle, blockElement: HTMLElement, range:
             tempElement.innerHTML = html;
         }
     }
+    let superBlockOperations: IInputSuperBlockOperations;
     if (needRender && (
             getContenteditableElement(tempElement.content.firstElementChild)?.innerHTML !== getContenteditableElement(blockElement).innerHTML ||
             // 内容删空后使用上下键，光标无法到达 https://github.com/siyuan-note/siyuan/issues/4167 https://ld246.com/article/1636256333803
@@ -412,7 +473,7 @@ export const input = async (protyle: IProtyle, blockElement: HTMLElement, range:
     ) {
         if (blockElement.getAttribute("data-type") === "NodeHeading" && blockElement.getAttribute("fold") === "1" &&
             tempElement.content.firstElementChild.getAttribute("data-subtype") !== blockElement.dataset.subtype) {
-            setFold(protyle, blockElement, undefined, undefined, false);
+            setFold(protyle, blockElement, undefined, undefined, false, false);
             html = html.replace(' fold="1"', "");
             protyle.wysiwyg.lastHTMLs[id] = blockElement.outerHTML;
         }
@@ -430,10 +491,41 @@ export const input = async (protyle: IProtyle, blockElement: HTMLElement, range:
             // 使用 md 闭合后继续输入应为普通文本, 转义不需要添加 zwsp
             html = html.replace("</span><wbr>", "</span>" + Constants.ZWSP + "<wbr>");
         }
+        const sourceElement = blockElement;
+        const sourceParentElement = blockElement.parentElement;
+        const sourcePreviousID = getPreviousBlockSibling(blockElement)?.getAttribute("data-node-id");
         blockElement.insertAdjacentHTML("afterend", html);
         blockElement = blockElement.nextElementSibling as HTMLElement;
         blockElement.previousElementSibling.remove();
         blockElement.setAttribute(Constants.ATTRIBUTE_EDITING, "true");
+        if (tempElement.content.childElementCount > 1 &&
+            sourceParentElement.getAttribute("data-type") === "NodeSuperBlock" &&
+            sourceParentElement.getAttribute("data-sb-layout") === "col") {
+            const selectsElement: HTMLElement[] = [];
+            let replacementElement = blockElement;
+            for (let index = 0; index < tempElement.content.childElementCount; index++) {
+                selectsElement.push(replacementElement);
+                replacementElement = replacementElement.nextElementSibling as HTMLElement;
+            }
+            const widthSourceElement = selectsElement.find(element => element.dataset.nodeId === id) || blockElement;
+            widthSourceElement.style.width = sourceElement.style.width;
+            widthSourceElement.style.flex = sourceElement.style.flex;
+            // 解析分块保持在原列中，包装与输入共用事务，并在恢复光标前完成节点移动。
+            // https://github.com/siyuan-note/siyuan/issues/21200
+            superBlockOperations = {
+                ...await turnsIntoOneTransaction({
+                    protyle,
+                    selectsElement,
+                    type: "BlocksMergeSuperBlock",
+                    level: "row",
+                    unfocus: true,
+                    getOperations: true,
+                    widthSourceElement,
+                }),
+                parentID: sourceParentElement.dataset.nodeId,
+                previousID: sourcePreviousID,
+            };
+        }
         // https://github.com/siyuan-note/siyuan/issues/8972
         if (html.split('<span data-type="inline-math" data-subtype="math"').length > 1) {
             Array.from(blockElement.querySelectorAll('[data-type="inline-math"]')).find((item: HTMLElement) => {
@@ -448,7 +540,7 @@ export const input = async (protyle: IProtyle, blockElement: HTMLElement, range:
         Array.from(tempElement.content.children).forEach((item, index) => {
             const tempId = item.getAttribute("data-node-id");
             let realElement;
-            if (tempId === id) {
+            if (tempId === blockElement.dataset.nodeId) {
                 realElement = blockElement;
             } else {
                 realElement = protyle.wysiwyg.element.querySelector(`[data-node-id="${tempId}"]`);
@@ -483,7 +575,7 @@ export const input = async (protyle: IProtyle, blockElement: HTMLElement, range:
                 realElement.querySelectorAll('[data-type~="block-ref"][data-subtype="d"]').forEach(refItem => {
                     if (refItem.textContent === "") {
                         fetchPost("/api/block/getRefText", {id: refItem.getAttribute("data-id")}, (response) => {
-                            refItem.innerHTML = response.data;
+                            refItem.innerHTML = sanitizeKernelHTML(response.data);
                         });
                     }
                 });
@@ -526,11 +618,25 @@ export const input = async (protyle: IProtyle, blockElement: HTMLElement, range:
         focusByWbr(protyle.wysiwyg.element, range);
         protyle.hint.render(protyle);
     }
-    hideElements(["gutter"], protyle);
-    updateInput(html, protyle, id, inputOperations);
+    updateGutterAfterInput(protyle, blockElement);
+    updateInput(html, protyle, id, inputOperations, superBlockOperations);
 };
 
-const updateInput = (html: string, protyle: IProtyle, id: string, inputOperations?: IInputOperations) => {
+export const input = async (...args: Parameters<typeof inputBlock>) => {
+    const resume = suspendLongTextRuns(args[0].wysiwyg.element, args[1], args[2]);
+    try {
+        await inputBlock(...args);
+    } finally {
+        resume();
+    }
+    if (args[0].options.typewriterMode && !args[4]?.isComposing &&
+        ["insertParagraph", "insertLineBreak"].includes(args[4]?.inputType)) {
+        scheduleCaretScroll(args[0], "down");
+    }
+};
+
+const updateInput = (html: string, protyle: IProtyle, id: string, inputOperations?: IInputOperations,
+                     superBlockOperations?: IInputSuperBlockOperations) => {
     const tempElement = document.createElement("template");
     tempElement.innerHTML = html;
     const doOperations: IOperation[] = [];
@@ -562,8 +668,11 @@ const updateInput = (html: string, protyle: IProtyle, id: string, inputOperation
                 action: "insert",
                 data: item.outerHTML,
                 id: tempId,
-                previousID: index === 0 ? (firstElement ? getPreviousBlockSibling(firstElement)?.getAttribute("data-node-id") : undefined) : item.previousElementSibling.getAttribute("data-node-id"),
-                parentID: firstElement ? (getParentBlock(firstElement).getAttribute("data-node-id") || protyle.block.parentID) : protyle.block.parentID
+                previousID: index === 0 ? (superBlockOperations ? superBlockOperations.previousID :
+                    (firstElement ? getPreviousBlockSibling(firstElement)?.getAttribute("data-node-id") : undefined)) :
+                    item.previousElementSibling.getAttribute("data-node-id"),
+                parentID: superBlockOperations?.parentID || (firstElement ?
+                    (getParentBlock(firstElement).getAttribute("data-node-id") || protyle.block.parentID) : protyle.block.parentID)
             });
             undoOperations.push({
                 id: tempId,
@@ -574,6 +683,10 @@ const updateInput = (html: string, protyle: IProtyle, id: string, inputOperation
     if (inputOperations) {
         doOperations.push(...inputOperations.doOperations);
         undoOperations.push(...inputOperations.undoOperations);
+    }
+    if (superBlockOperations) {
+        doOperations.push(...superBlockOperations.doOperations);
+        undoOperations.unshift(...superBlockOperations.undoOperations);
     }
     transaction(protyle, doOperations, undoOperations);
 };

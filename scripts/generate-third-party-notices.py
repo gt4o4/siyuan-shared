@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 import re
@@ -29,18 +30,69 @@ RUNTIME_PACKAGES = [
     "@electron/remote",
     "blueimp-md5",
     "dayjs",
+    "diff-match-patch",
     "filesize",
     "path-browserify",
+    "vditor",
     "zxcvbn",
 ]
 
 BUNDLED_COMPONENTS = [
+    (
+        "KaTeX (standalone Markdown editor)",
+        "0.16.9",
+        "MIT",
+        "https://github.com/KaTeX/KaTeX/tree/v0.16.9",
+        "app/stage/build/markdown/vditor/dist/js/katex/; full license is copied to vditor/licenses/KaTeX-LICENSE",
+    ),
+    (
+        "KaTeX fonts (standalone Markdown editor)",
+        "0.16.9",
+        "OFL-1.1",
+        "https://github.com/KaTeX/KaTeX/tree/v0.16.9/fonts",
+        "app/stage/build/markdown/vditor/dist/js/katex/fonts/; embedded font attribution and license are copied to vditor/licenses/KaTeX-fonts-LICENSE",
+    ),
+    (
+        "KaTeX mhchem extension (standalone Markdown editor)",
+        "0.16.9 (mhchem 3.3.0)",
+        "MIT AND Apache-2.0",
+        "https://github.com/KaTeX/KaTeX/blob/v0.16.9/contrib/mhchem/mhchem.js",
+        "app/stage/build/markdown/vditor/dist/js/katex/mhchem.min.js; upstream attribution is copied to vditor/licenses/KaTeX-mhchem-NOTICE",
+    ),
+    (
+        "Highlight.js (standalone Markdown editor)",
+        "11.7.0",
+        "BSD-3-Clause",
+        "https://github.com/highlightjs/highlight.js/tree/11.7.0",
+        "app/stage/build/markdown/vditor/dist/js/highlight.js/; LICENSE and stylesheet attribution comments are retained",
+    ),
     (
         "Electron",
         "42.7.1",
         "MIT",
         "https://github.com/electron/electron",
         "Desktop runtime; Electron also ships LICENSES.chromium.html for Chromium and its dependencies",
+    ),
+    (
+        "ONNX Runtime",
+        "1.24.3 (Windows, Linux, Apple Silicon, Android, HarmonyOS), 1.23.2 (Intel macOS), 1.24.2 (iOS)",
+        "MIT",
+        "https://github.com/microsoft/onnxruntime",
+        "Native CPU OCR runtime; license and dependency notices in app/stage/ocr/ONNXRUNTIME-LICENSE and ONNXRUNTIME-THIRD-PARTY-NOTICES.txt; desktop libraries also include their corresponding notices",
+    ),
+    (
+        "Microsoft Visual C++ Runtime",
+        "14.x from the release builder's licensed Visual Studio redist",
+        "Microsoft Visual Studio Software License Terms",
+        "https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution#visual-c-runtime-files",
+        "Windows OCR runtime directories include unmodified app-local CRT DLLs, MICROSOFT-VC-RUNTIME-NOTICE.txt, and vc-runtime-files.json with the exact file digests",
+    ),
+    (
+        "PaddleOCR PP-OCRv6 Tiny ONNX models",
+        "Pinned revisions in scripts/ocr-assets.json",
+        "Apache-2.0",
+        "https://huggingface.co/collections/PaddlePaddle/pp-ocrv6",
+        "app/stage/ocr/models/; license text in app/stage/ocr/PADDLEOCR-LICENSE",
     ),
     (
         "DOMPurify",
@@ -57,30 +109,37 @@ BUNDLED_COMPONENTS = [
         "app/stage/protyle/js/html-to-image.min.js",
     ),
     (
+        "modern-screenshot",
+        "4.7.0",
+        "MIT",
+        "https://github.com/qq15725/modern-screenshot",
+        "app/stage/protyle/js/modern-screenshot.min.js",
+    ),
+    (
         "abcjs",
-        "6.2.2 and 6.5.0",
+        "6.7.1",
         "MIT",
         "https://github.com/paulrosen/abcjs",
         "app/stage/protyle/js/abcjs/",
     ),
     (
         "Apache ECharts",
-        "5.3.2",
+        "6.1.0",
         "Apache-2.0",
         "https://github.com/apache/echarts",
         "app/stage/protyle/js/echarts/echarts.min.js",
     ),
     (
         "ZRender",
-        "5.3.0",
+        "6.1.0",
         "BSD-3-Clause",
         "https://github.com/ecomfe/zrender",
         "Bundled by Apache ECharts",
     ),
     (
         "echarts-gl",
-        "2.0.9",
-        "MIT",
+        "2.1.0",
+        "BSD-3-Clause",
         "https://github.com/ecomfe/echarts-gl",
         "app/stage/protyle/js/echarts/echarts-gl.min.js",
     ),
@@ -89,7 +148,7 @@ BUNDLED_COMPONENTS = [
         "1.2.x snapshot",
         "BSD-2-Clause",
         "https://github.com/pissang/claygl",
-        "Bundled by echarts-gl 2.0.9",
+        "Bundled by echarts-gl 2.1.0",
     ),
     (
         "flowchart.js",
@@ -107,28 +166,28 @@ BUNDLED_COMPONENTS = [
     ),
     (
         "@viz-js/viz",
-        "3.11.0",
+        "3.31.0",
         "MIT",
         "https://github.com/mdaines/viz-js",
         "app/stage/protyle/js/graphviz/viz.js",
     ),
     (
         "Graphviz",
-        "Bundled snapshot",
+        "16.1.0",
         "EPL-1.0",
         "https://gitlab.com/graphviz/graphviz",
         "Object code bundled by @viz-js/viz",
     ),
     (
         "Expat",
-        "Bundled snapshot",
+        "2.8.5",
         "MIT",
         "https://github.com/libexpat/libexpat",
         "Object code bundled by @viz-js/viz",
     ),
     (
         "highlight.js",
-        "11.11.2",
+        "11.12.0",
         "BSD-3-Clause",
         "https://github.com/highlightjs/highlight.js",
         "app/stage/protyle/js/highlight.js/",
@@ -177,63 +236,70 @@ BUNDLED_COMPONENTS = [
     ),
     (
         "KaTeX",
-        "0.16.9",
+        "0.19.0",
         "MIT",
         "https://github.com/KaTeX/KaTeX",
         "app/stage/protyle/js/katex/",
     ),
     (
         "KaTeX fonts",
-        "0.16.9",
+        "0.19.0",
         "OFL-1.1",
-        "https://github.com/KaTeX/KaTeX/tree/v0.16.9/fonts",
+        "https://github.com/KaTeX/KaTeX/tree/v0.19.0/fonts",
         "app/stage/protyle/js/katex/fonts/",
     ),
     (
         "MathJax",
-        "3.1.2",
+        "4.1.3",
         "Apache-2.0",
         "https://github.com/mathjax/MathJax-src",
         "app/stage/protyle/js/mathjax/",
     ),
     (
+        "MathJax TeX font and font extensions",
+        "4.1.3",
+        "Apache-2.0",
+        "https://github.com/mathjax/MathJax-fonts",
+        "app/stage/protyle/js/mathjax/output/fonts/",
+    ),
+    (
         "Mermaid",
-        "11.13.0",
+        "12.2.0",
         "MIT",
         "https://github.com/mermaid-js/mermaid",
         "app/stage/protyle/js/mermaid/mermaid.min.js; bundled notices are retained in the file",
     ),
     (
         "DOMPurify",
-        "3.3.1",
+        "3.4.12",
         "Apache-2.0 OR MPL-2.0",
         "https://github.com/cure53/DOMPurify",
-        "Bundled by Mermaid 11.13.0",
+        "Bundled by Mermaid 12.2.0",
     ),
     (
-        "js-yaml",
-        "4.1.1",
-        "MIT",
-        "https://github.com/nodeca/js-yaml",
-        "Bundled by Mermaid 11.13.0",
+        "ELK.js",
+        "0.9.3",
+        "EPL-2.0",
+        "https://github.com/kieler/elkjs",
+        "Bundled by Mermaid 12.2.0; app/stage/protyle/js/mermaid/LICENSE-elkjs.md",
     ),
     (
         "lodash-es and Underscore-derived code",
         "Bundled snapshot",
         "MIT",
         "https://github.com/lodash/lodash",
-        "Bundled by Mermaid 11.13.0",
+        "Bundled by Mermaid 12.2.0",
     ),
     (
         "Cytoscape.js and retained embedded utilities",
         "Bundled snapshot",
         "MIT",
         "https://github.com/cytoscape/cytoscape.js",
-        "Bundled by Mermaid 11.13.0",
+        "Bundled by Mermaid 12.2.0",
     ),
     (
         "@mermaid-js/layout-tidy-tree",
-        "0.2.1",
+        "0.2.2",
         "MIT",
         "https://github.com/mermaid-js/mermaid-layouts",
         "app/stage/protyle/js/mermaid/mermaid-layout-tidy-tree.min.js",
@@ -246,46 +312,81 @@ BUNDLED_COMPONENTS = [
         "Bundled by @mermaid-js/layout-tidy-tree",
     ),
     (
-        "@zenuml/core and bundled dependencies",
-        "Bundled snapshot",
-        "MIT AND (Apache-2.0 OR MPL-2.0)",
-        "https://github.com/ZenUml/core",
-        "app/stage/protyle/js/mermaid/mermaid-zenuml.min.js; bundled notices are retained in the file",
+        "@mermaid-js/mermaid-zenuml",
+        "0.2.3",
+        "MIT",
+        "https://github.com/mermaid-js/mermaid/tree/develop/packages/mermaid-zenuml",
+        "Lightweight SiYuan bundle in app/stage/protyle/js/mermaid/mermaid-zenuml.min.js",
     ),
     (
-        "React, ReactDOM, and Scheduler",
-        "Bundled snapshot",
+        "@zenuml/core native SVG renderer",
+        "3.50.1",
         "MIT",
-        "https://github.com/facebook/react",
+        "https://github.com/mermaid-js/zenuml-core",
+        "Bundled without the React-based editor; output is sanitized by SiYuan's shared DOMPurify 3.3.3",
+    ),
+    (
+        "ANTLR 4 JavaScript runtime",
+        "4.11.0",
+        "BSD-3-Clause",
+        "https://github.com/antlr/antlr4",
         "Bundled by @zenuml/core",
+    ),
+    (
+        "marked",
+        "4.3.0",
+        "MIT AND BSD-3-Clause",
+        "https://github.com/markedjs/marked",
+        "Bundled by @zenuml/core for Markdown comments",
     ),
     (
         "codepointat",
         "0.2.0",
         "MIT",
         "https://github.com/mathiasbynens/codepointat",
-        "Bundled by @zenuml/core",
+        "Bundled by the ANTLR 4 JavaScript runtime",
     ),
     (
         "fromcodepoint",
         "0.2.1",
         "MIT",
         "https://github.com/mathiasbynens/fromcodepoint",
-        "Bundled by @zenuml/core",
-    ),
-    (
-        "DOMPurify",
-        "3.2.5",
-        "Apache-2.0 OR MPL-2.0",
-        "https://github.com/cure53/DOMPurify",
-        "Bundled by @zenuml/core",
+        "Bundled by the ANTLR 4 JavaScript runtime",
     ),
     (
         "PDF.js",
-        "4.8.69",
+        "6.4.299",
         "Apache-2.0",
         "https://github.com/mozilla/pdf.js",
         "app/stage/protyle/js/pdf/",
+    ),
+    (
+        "Compact ICC Profiles",
+        "Bundled snapshot",
+        "CC0-1.0",
+        "https://github.com/saucecontrol/Compact-ICC-Profiles",
+        "app/stage/protyle/js/pdf/iccs/",
+    ),
+    (
+        "PDFium JBIG2 decoder and PDF.js integration",
+        "Bundled snapshot",
+        "BSD-3-Clause AND Apache-2.0",
+        "https://pdfium.googlesource.com/pdfium/",
+        "app/stage/protyle/js/pdf/wasm/jbig2.wasm; license texts are retained in app/stage/protyle/js/pdf/wasm/",
+    ),
+    (
+        "OpenJPEG decoder and PDF.js integration",
+        "Bundled snapshot",
+        "BSD-2-Clause AND BSD-3-Clause",
+        "https://github.com/uclouvain/openjpeg",
+        "app/stage/protyle/js/pdf/wasm/openjpeg*; license texts are retained in app/stage/protyle/js/pdf/wasm/",
+    ),
+    (
+        "qcms color management and PDF.js integration",
+        "Bundled snapshot",
+        "MIT",
+        "https://github.com/FirefoxGraphics/qcms",
+        "app/stage/protyle/js/pdf/wasm/qcms_bg.wasm; license texts are retained in app/stage/protyle/js/pdf/wasm/",
     ),
     (
         "Adobe CMap resources",
@@ -303,8 +404,8 @@ BUNDLED_COMPONENTS = [
     ),
     (
         "Liberation fonts",
-        "Bundled snapshot",
-        "OFL-1.1",
+        "1.07.4",
+        "GPL-2.0 WITH Liberation font exception",
         "https://github.com/liberationfonts/liberation-fonts",
         "app/stage/protyle/js/pdf/standard_fonts/",
     ),
@@ -328,62 +429,6 @@ BUNDLED_COMPONENTS = [
         "MIT",
         "https://github.com/fengyuanchen/viewerjs",
         "app/stage/protyle/js/viewerjs/viewer.js",
-    ),
-    (
-        "vis-network",
-        "9.1.13",
-        "Apache-2.0 OR MIT",
-        "https://github.com/visjs/vis-network",
-        "app/stage/protyle/js/vis/vis-network.min.js",
-    ),
-    (
-        "@egjs/hammerjs",
-        "2.0.17",
-        "MIT",
-        "https://github.com/naver/hammer.js",
-        "Bundled by vis-network 9.1.13",
-    ),
-    (
-        "component-emitter",
-        "1.3.1",
-        "MIT",
-        "https://github.com/sindresorhus/component-emitter",
-        "Bundled by vis-network 9.1.13",
-    ),
-    (
-        "core-js",
-        "3.33.0",
-        "MIT",
-        "https://github.com/zloirock/core-js",
-        "Bundled by vis-network 9.1.13",
-    ),
-    (
-        "keycharm",
-        "0.4.0",
-        "Apache-2.0 OR MIT",
-        "https://github.com/visjs/keycharm",
-        "Bundled by vis-network 9.1.13",
-    ),
-    (
-        "uuid",
-        "9.0.1",
-        "MIT",
-        "https://github.com/uuidjs/uuid",
-        "Bundled by vis-network 9.1.13",
-    ),
-    (
-        "vis-data",
-        "7.1.9",
-        "Apache-2.0 OR MIT",
-        "https://github.com/visjs/vis-data",
-        "Bundled by vis-network 9.1.13",
-    ),
-    (
-        "vis-util",
-        "5.0.7",
-        "Apache-2.0 OR MIT",
-        "https://github.com/visjs/vis-util",
-        "Bundled by vis-network 9.1.13",
     ),
     (
         "Lute JavaScript runtime",
@@ -428,13 +473,6 @@ BUNDLED_COMPONENTS = [
         "Embedded by github.com/klippa-app/go-pdfium",
     ),
     (
-        "Color Icon",
-        "0.0.4",
-        "MIT",
-        "https://github.com/Glaube-TY/color-icon",
-        "app/appearance/icons/color-icon/",
-    ),
-    (
         "Simple Icons",
         "16.21.0 and 16.27.0",
         "CC0-1.0",
@@ -443,7 +481,7 @@ BUNDLED_COMPONENTS = [
     ),
     (
         "SVG Logos (@iconify-json/logos)",
-        "1.2.9",
+        "1.2.13",
         "CC0-1.0",
         "https://github.com/gilbarbara/logos",
         "app/stage/protyle/js/mermaid/icons.json; depicted marks remain subject to trademark rights",
@@ -470,6 +508,13 @@ BUNDLED_COMPONENTS = [
         "Localized names and search keywords in app/appearance/emojis/conf.json",
     ),
     (
+        "Unicode Emoji test data",
+        "17.0",
+        "Unicode-3.0",
+        "https://www.unicode.org/Public/17.0.0/emoji/emoji-test.txt",
+        "New fully-qualified sequences in app/tests/fixtures/unicode17-emoji.json",
+    ),
+    (
         "Pexels cover photos",
         "72 selected photographs",
         "Pexels License",
@@ -494,18 +539,18 @@ FONT_COMPONENTS = [
         "app/appearance/fonts/JetBrainsMono-2.304/LICENSE",
     ),
     (
-        "LXGW WenKai Lite",
-        "1.501",
+        "LXGW WenKai GB Lite",
+        "1.521",
         "OFL-1.1",
-        "https://github.com/lxgw/LxgwWenKai-Lite",
-        "app/appearance/fonts/LxgwWenKai-Lite-1.501/LICENSE",
+        "https://github.com/lxgw/LxgwWenkaiGB-Lite",
+        "app/appearance/fonts/LxgwWenKaiGB-Lite-1.521/LICENSE",
     ),
     (
         "Noto COLRv1 Emoji",
-        "2.047",
+        "2.051",
         "OFL-1.1",
         "https://github.com/googlefonts/noto-emoji",
-        "app/appearance/fonts/Noto-COLRv1-2.047/LICENSE",
+        "app/appearance/fonts/Noto-COLRv1-2.051/LICENSE",
     ),
 ]
 
@@ -516,9 +561,12 @@ LOCAL_NOTICE_ROOTS = [
 ]
 
 LOCAL_NOTICE_FILES = [
+    "app/scripts/markdown-licenses/KaTeX-LICENSE",
+    "app/scripts/markdown-licenses/KaTeX-fonts-LICENSE",
+    "app/scripts/markdown-licenses/KaTeX-mhchem-NOTICE",
     "app/appearance/covers/manifest.json",
-    "app/appearance/icons/color-icon/README.md",
     "app/stage/images/ai-providers/README.md",
+    "app/stage/protyle/js/echarts/echarts-gl.min.js.LICENSE.txt",
 ]
 
 LICENSE_NAME_PATTERN = re.compile(
@@ -526,7 +574,10 @@ LICENSE_NAME_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-COMMENT_PATTERN = re.compile(r"/\*[\s\S]*?\*/")
+COMMENT_PATTERN = re.compile(
+    r"/\*\s*(?:!|\*|@license\b|@preserve\b|copyright\b|license(?:d)?\b)[\s\S]*?\*/",
+    re.IGNORECASE,
+)
 
 CLAYGL_LICENSE = """Copyright (c) 2014, Yi Shen
 All rights reserved.
@@ -672,10 +723,10 @@ def collect_retained_comments():
         content = path.read_text(encoding="utf-8", errors="replace")
         comments = []
         for comment in COMMENT_PATTERN.findall(content):
+            normalized = "\n".join(line.rstrip() for line in comment.strip().splitlines())
             lowered = comment.lower()
             if not any(marker in lowered for marker in ("license", "copyright", "@preserve")):
                 continue
-            normalized = comment.strip()
             if normalized not in comments:
                 comments.append(normalized)
         if comments:
@@ -745,7 +796,9 @@ def module_license(module_path, license_files):
         "github.com/dop251/goja": "MIT AND BSD-3-Clause",
         "github.com/klauspost/compress": "BSD-3-Clause AND Apache-2.0 AND MIT",
         "github.com/mattn/go-sqlite3": "MIT AND BSD-3-Clause AND Public Domain",
+        "github.com/tphakala/go-aac": "LGPL-2.1-or-later AND BSD-3-Clause",
         "gopkg.in/yaml.v2": "Apache-2.0 AND MIT",
+        "go.yaml.in/yaml/v4": "Apache-2.0 AND MIT",
     }
     if module_path in mixed_license_overrides:
         return mixed_license_overrides[module_path]
@@ -845,6 +898,8 @@ def collect_additional_notices(go_modules):
         ("SQLCipher 4.16.0 Community - BSD-3-Clause notice", sqlcipher_notice),
         ("LibTomCrypt subset - public-domain notice", "LibTomCrypt is public domain software."),
         ("ClayGL 1.2.x - LICENSE", CLAYGL_LICENSE),
+        ("modern-screenshot 4.7.0 - LICENSE",
+         (APP_ROOT / "stage" / "protyle" / "js" / "modern-screenshot-LICENSE.txt").read_text(encoding="utf-8")),
         ("PDFium 7323 - LICENSE", PDFIUM_BSD_NOTICE + "\n\n" + apache_license),
         ("theSVG snapshot aa0605996b4ad4fdda98502f84021b3c3a64847d - LICENSE", THESVG_LICENSE),
         ("Microsoft Edge Demos - LICENSE", MICROSOFT_EDGE_DEMOS_LICENSE),
@@ -852,12 +907,21 @@ def collect_additional_notices(go_modules):
 
 
 def find_package_root(package_name):
+    if package_name == "diff-match-patch":
+        # Resolve the transitive runtime dependency from Vditor for both pnpm's
+        # isolated layout and nested node_modules layouts.
+        result = subprocess.run(
+            ["node", "-p", "require('node:module').createRequire(process.argv[1]).resolve('diff-match-patch/package.json')",
+             str((APP_ROOT / "node_modules" / "vditor" / "package.json").resolve())],
+            capture_output=True, text=True, encoding="utf-8", check=True,
+        )
+        return Path(result.stdout.strip()).parent
     return APP_ROOT / "node_modules" / Path(*package_name.split("/"))
 
 
-def collect_runtime_packages():
+def collect_runtime_packages(package_names=RUNTIME_PACKAGES):
     packages = []
-    for package_name in RUNTIME_PACKAGES:
+    for package_name in package_names:
         root = find_package_root(package_name)
         package_json = json.loads((root / "package.json").read_text(encoding="utf-8"))
         repository = package_json.get("homepage") or package_json.get("repository") or ""
@@ -977,11 +1041,11 @@ def render_notices(runtime_packages, go_modules):
     lines.extend(
         [
             "",
-            "### Apache ECharts 5.3.2 - NOTICE",
+            "### Apache ECharts 6.1.0 - NOTICE",
             "",
             "```text",
             "Apache ECharts",
-            "Copyright 2017-2022 The Apache Software Foundation",
+            "Copyright 2017-2026 The Apache Software Foundation",
             "",
             "This product includes software developed at",
             "The Apache Software Foundation (https://www.apache.org/).",
@@ -1037,11 +1101,61 @@ def render_notices(runtime_packages, go_modules):
     return "\n".join(lines).rstrip() + "\n"
 
 
+MARKDOWN_START = "<!-- standalone-markdown-notices:start -->"
+MARKDOWN_END = "<!-- standalone-markdown-notices:end -->"
+
+
+def render_markdown_notices():
+    lines = [MARKDOWN_START, "## Standalone Markdown editor", "",
+             "Generated by `python scripts/generate-third-party-notices.py --markdown-only` from the pinned Vditor package and retained upstream license files.", "",
+             "The editor bundles Vditor 4.0.2-alpha.1 and diff-match-patch 1.0.5. It uses SiYuan's shared Lute build; the Lute license reproduced above also applies here. Disabled diagram renderers are not distributed with this editor.", ""]
+    lines.extend(component_table([item for item in BUNDLED_COMPONENTS if "standalone Markdown editor" in item[0]]))
+    lines.append("")
+    for package in collect_runtime_packages(["vditor", "diff-match-patch"]):
+        if not package["licenses"]:
+            raise ValueError(f"No license found for {package['name']}")
+        for name, content in package["licenses"]:
+            lines.extend([f"### {package['name']} {package['version']} - {name}", "", *code_block(content), ""])
+    for name in ("KaTeX-LICENSE", "KaTeX-fonts-LICENSE", "KaTeX-mhchem-NOTICE"):
+        content = (APP_ROOT / "scripts" / "markdown-licenses" / name).read_text(encoding="utf-8")
+        lines.extend([f"### {name}", "", *code_block(content), ""])
+    highlight = find_package_root("vditor") / "dist/js/highlight.js"
+    for name, content in read_license_files(highlight):
+        lines.extend([f"### Highlight.js 11.7.0 - {name}", "", *code_block(content), ""])
+    lines.extend(["Highlight.js theme attribution comments remain in the distributed CSS files.", "", MARKDOWN_END])
+    return "\n".join(lines) + "\n"
+
+
+def update_markdown_notices(existing, section):
+    # A focused dependency change must not rebuild unrelated runtime inventories
+    # using a developer's installed modules or local Go workspace replacements.
+    if MARKDOWN_START not in existing and MARKDOWN_END not in existing:
+        return existing + ("\n" if existing.endswith("\n") else "\n\n") + section
+    if existing.count(MARKDOWN_START) != 1 or existing.count(MARKDOWN_END) != 1:
+        raise ValueError("Ambiguous standalone Markdown notice markers")
+    start = existing.index(MARKDOWN_START)
+    end = existing.index(MARKDOWN_END) + len(MARKDOWN_END)
+    if end <= start:
+        raise ValueError("Reversed standalone Markdown notice markers")
+    if existing[end:end + 1] == "\n":
+        end += 1
+    return existing[:start] + section + existing[end:]
+
+
 def main():
+    parser = argparse.ArgumentParser(description="Generate dependency notices from their source licenses")
+    parser.add_argument("--markdown-only", action="store_true", help="Update only the standalone Markdown section, preserving unrelated notices")
+    parser.add_argument("--output", type=Path, default=OUTPUT)
+    args = parser.parse_args()
+    if args.markdown_only:
+        existing = args.output.read_text(encoding="utf-8")
+        args.output.write_text(update_markdown_notices(existing, render_markdown_notices()), encoding="utf-8", newline="\n")
+        print(f"Updated standalone Markdown notices in {args.output}")
+        return
     runtime_packages = collect_runtime_packages()
     go_modules = collect_go_modules()
-    OUTPUT.write_text(render_notices(runtime_packages, go_modules), encoding="utf-8", newline="\n")
-    print(f"Generated {OUTPUT} with {len(runtime_packages)} JavaScript packages and {len(go_modules)} Go modules")
+    args.output.write_text(render_notices(runtime_packages, go_modules), encoding="utf-8", newline="\n")
+    print(f"Generated {args.output} with {len(runtime_packages)} JavaScript packages and {len(go_modules)} Go modules")
 
 
 if __name__ == "__main__":

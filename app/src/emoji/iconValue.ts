@@ -12,7 +12,7 @@ const BASE64_IMAGE_MIME_EXTENSIONS: Record<string, string> = {
 
 export type TIconValueKind = "unicode" | "custom" | "dynamic" | "network" | "invalid";
 export interface IBase64Image {
-    bytes: Uint8Array,
+    bytes: Uint8Array<ArrayBuffer>,
     extension: string,
     mimeType: string,
 }
@@ -184,4 +184,33 @@ export const genEmojiImageHTML = (value: string, className = "", lazy = false): 
     const safeClassName = escapeAttr(escapeHtml(className));
     const safeSrc = escapeAttr(escapeHtml(src));
     return `<img class="${safeClassName}" ${lazy ? "data-" : ""}src="${safeSrc}"${network ? ' referrerpolicy="no-referrer"' : ""}/>`;
+};
+
+export const unicode2Emoji = (unicode: string, className = "", needSpan = false, lazy = false) => {
+    if (!unicode) {
+        return "";
+    }
+    let emoji = "";
+    const imageHTML = genEmojiImageHTML(unicode, className, lazy);
+    if (imageHTML) {
+        emoji = Lute.Sanitize(imageHTML);
+    } else {
+        try {
+            unicode.split("-").forEach(item => {
+                if (item.length < 5) {
+                    emoji += String.fromCodePoint(parseInt("0" + item, 16));
+                } else {
+                    emoji += String.fromCodePoint(parseInt(item, 16));
+                }
+            });
+        } catch (e) {
+            // 自定义表情搜索报错 https://github.com/siyuan-note/siyuan/issues/5883
+            // 这里忽略错误不做处理
+        }
+        emoji = Lute.Sanitize(emoji);
+        if (needSpan) {
+            emoji = `<span class="${className}">${emoji}</span>`;
+        }
+    }
+    return emoji;
 };

@@ -12,6 +12,50 @@ import {ipcRenderer} from "electron";
 /// #endif
 import {layoutToJSON, saveLayout} from "./util";
 import {setTitle} from "../util/processTitle";
+import {clearTabDragPreview} from "./tabDrag";
+import type {Editor} from "../editor";
+import {scheduleDocumentTitlePreview} from "../protyle/header/documentTitlePreview";
+
+type TTabHeaderOptions = Pick<ITab, "title" | "icon" | "docIcon"> & {
+    id?: string,
+    draggable?: boolean,
+    focus?: boolean,
+    pin?: boolean,
+    unupdate?: boolean,
+};
+
+export const createTabHeaderElement = (options: TTabHeaderOptions) => {
+    const element = document.createElement("li");
+    element.setAttribute("data-type", "tab-header");
+    if (options.draggable) {
+        element.setAttribute("draggable", "true");
+    }
+    if (options.id) {
+        element.setAttribute("data-id", options.id);
+    }
+    element.classList.add("item");
+    if (options.focus) {
+        element.classList.add("item--focus");
+    }
+    if (options.pin) {
+        element.classList.add("item--pin");
+    }
+    if (options.unupdate) {
+        element.classList.add("item--unupdate");
+    }
+    let iconHTML = "";
+    if (options.icon) {
+        iconHTML = `<svg class="item__graphic"><use xlink:href="#${escapeAttr(escapeHtml(options.icon))}"></use></svg>`;
+    } else if (options.docIcon) {
+        iconHTML = `<span class="item__icon">${unicode2Emoji(options.docIcon)}</span>`;
+    }
+    element.innerHTML = `${iconHTML}<span class="item__text">${escapeHtml(options.title || "")}</span>
+<span class="item__close"><svg><use xlink:href="#iconClose"></use></svg></span>`;
+    if (options.pin && (options.icon || options.docIcon)) {
+        element.querySelector(".item__text").classList.add("fn__none");
+    }
+    return element;
+};
 
 export class Tab {
     public parent: Wnd;
@@ -27,26 +71,22 @@ export class Tab {
     constructor(options: ITab) {
         this.id = genUUID();
         this.callback = options.callback;
-        if (options.title || options.icon) {
+        if (typeof options.title === "string" || options.icon) {
             this.title = options.title;
             this.icon = options.icon;
             this.docIcon = options.docIcon;
-            this.headElement = document.createElement("li");
-            this.headElement.setAttribute("data-type", "tab-header");
-            this.headElement.setAttribute("draggable", "true");
-            this.headElement.setAttribute("data-id", this.id);
-            this.headElement.classList.add("item", "item--focus");
-            let iconHTML = "";
-            if (options.icon) {
-                iconHTML = `<svg class="item__graphic"><use xlink:href="#${escapeAttr(escapeHtml(options.icon))}"></use></svg>`;
-            } else if (options.docIcon) {
-                iconHTML = `<span class="item__icon">${unicode2Emoji(options.docIcon)}</span>`;
-            }
-            this.headElement.innerHTML = `${iconHTML}<span class="item__text">${escapeHtml(options.title)}</span>
-<span class="item__close"><svg><use xlink:href="#iconClose"></use></svg></span>`;
+            this.headElement = createTabHeaderElement({
+                id: this.id,
+                title: options.title,
+                icon: options.icon,
+                docIcon: options.docIcon,
+                draggable: true,
+                focus: true,
+            });
             this.headElement.addEventListener("dragstart", (event: DragEvent & { target: HTMLElement }) => {
                 window.getSelection().removeAllRanges();
                 hideTooltip();
+                window.siyuan.menus.menu.remove();
                 const tabElement = hasClosestByTag(event.target, "LI");
                 if (tabElement) {
                     event.dataTransfer.setData("text/html", tabElement.outerHTML);
@@ -67,6 +107,18 @@ export class Tab {
                     event.dataTransfer.dropEffect = "move";
                     tabElement.style.opacity = "0.38";
                     window.siyuan.dragElement = this.headElement;
+                    const dragTabData: ITabDragData = {
+                        title: this.title,
+                        icon: this.icon,
+                        docIcon: this.docIcon,
+                        pin: tabElement.classList.contains("item--pin"),
+                        focus: tabElement.classList.contains("item--focus"),
+                        unupdate: tabElement.classList.contains("item--unupdate"),
+                    };
+                    window.siyuan.dragTab = dragTabData;
+                    /// #if !BROWSER
+                    ipcRenderer.send(Constants.SIYUAN_SEND_WINDOWS, {cmd: "setTabDragData", data: dragTabData});
+                    /// #endif
                 }
                 /// #if !BROWSER
                 ipcRenderer.send(Constants.SIYUAN_SEND_WINDOWS, {cmd: "resetTabsStyle", data: "removeRegionStyle"});
@@ -87,14 +139,9 @@ export class Tab {
                     }
                 }, Constants.TIMEOUT_LOAD); // 等待主进程发送关闭消息
                 ipcRenderer.send(Constants.SIYUAN_SEND_WINDOWS, {cmd: "resetTabsStyle", data: "rmDragStyle"});
-                /// #else
-                document.querySelectorAll(".layout-tab-bars--drag").forEach(item => {
-                    item.classList.remove("layout-tab-bars--drag");
-                });
-                document.querySelectorAll(".layout-tab-bar li[data-clone='true']").forEach(tabItem => {
-                    tabItem.remove();
-                });
                 /// #endif
+                clearTabDragPreview();
+                window.siyuan.dragTab = undefined;
                 window.siyuan.dragElement = undefined;
                 if (event.dataTransfer.dropEffect === "none") {
                     // 按 esc 取消的时候应该还原在 dragover 时交换的 tab
@@ -131,14 +178,28 @@ export class Tab {
 
     public updateTitle(title: string) {
         this.title = title;
-        this.headElement.querySelector(".item__text").innerHTML = escapeHtml(title);
+        const label = this.headElement.querySelector<HTMLElement>(".item__text");
+        const protyle = (this.model as Editor)?.editor?.protyle;
+        if (protyle && label.classList.contains("document-title-preview") &&
+            label.dataset.documentTitleId === protyle.block.rootID && label.dataset.notebookId === protyle.notebookId) {
+            const id = protyle.block.rootID;
+            const notebook = protyle.notebookId;
+            scheduleDocumentTitlePreview(label, id, notebook,
+                () => (this.model as Editor)?.editor?.protyle === protyle &&
+                    protyle.block.rootID === id && protyle.notebookId === notebook);
+        } else {
+            label.textContent = title;
+            label.classList.remove("b3-typography", "document-title-preview");
+            delete label.dataset.protyleLiteRender;
+        }
+        this.updateWindowTitle();
+    }
 
-        if (document.querySelector(".layout__wnd--active .layout-tab-bar .item--focus")) {
-            if (this.headElement.closest(".layout__wnd--active")) {
-                setTitle(title);
-            }
-        } else if (this.headElement.classList.contains("item--focus")) {
-            setTitle(title);
+    private updateWindowTitle() {
+        const activeHeader = document.querySelector(".layout__wnd--active .layout-tab-bar .item--focus") ||
+            document.querySelector(".layout-tab-bar .item--focus");
+        if (activeHeader === this.headElement) {
+            setTitle(this.title, false, this.headElement.querySelector(".item__icon"));
         }
     }
 
@@ -195,6 +256,7 @@ export class Tab {
             this.headElement.querySelector(".item__icon")?.remove();
             this.headElement.querySelector(".item__text").classList.remove("fn__none");
         }
+        this.updateWindowTitle();
     }
 
     public unpin() {

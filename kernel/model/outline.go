@@ -1,22 +1,12 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
 import (
+	"slices"
+
 	"github.com/88250/gulu"
 	"github.com/88250/lute/ast"
 	"github.com/88250/lute/html"
@@ -102,8 +92,8 @@ func (tx *Transaction) doMoveOutlineHeading(operation *Operation) (ret *TxErr) {
 		diffLevel := heading.HeadingLevel - previousHeading.HeadingLevel
 		heading.HeadingLevel = previousHeading.HeadingLevel
 
-		for i := len(headingChildren) - 1; i >= 0; i-- {
-			child := headingChildren[i]
+		for _, child := range slices.Backward(headingChildren) {
+
 			if ast.NodeHeading == child.Type {
 				child.HeadingLevel -= diffLevel
 				if 6 < child.HeadingLevel {
@@ -158,8 +148,8 @@ func (tx *Transaction) doMoveOutlineHeading(operation *Operation) (ret *TxErr) {
 		diffLevel := heading.HeadingLevel - parentHeading.HeadingLevel - 1
 		heading.HeadingLevel = min(6, parentHeading.HeadingLevel+1)
 
-		for i := len(headingChildren) - 1; i >= 0; i-- {
-			child := headingChildren[i]
+		for _, child := range slices.Backward(headingChildren) {
+
 			if ast.NodeHeading == child.Type {
 				child.HeadingLevel -= diffLevel
 				if 6 < child.HeadingLevel {
@@ -200,6 +190,10 @@ func (tx *Transaction) doMoveOutlineHeading(operation *Operation) (ret *TxErr) {
 		}
 	}
 
+	tx.markStructureCheck(heading)
+	for _, child := range headingChildren {
+		tx.markStructureCheck(child)
+	}
 	tx.writeTree(tree)
 	return
 }
@@ -210,19 +204,21 @@ func Outline(rootID string, preview bool) (ret []*Path, err error) {
 
 // OutlineInBox 与 Outline 一致，但按 boxID 路由 blocktree 查询到加密 db 或全局 db。
 func OutlineInBox(rootID string, preview bool, boxID string) (ret []*Path, err error) {
+	confEditorSnapshot := Conf.LoadEditor()
+
 	FlushTxQueue()
 
 	ret = []*Path{}
-	tree, _ := loadTreeByBlockIDInBox(rootID, boxID)
-	if nil == tree {
+	tree, err := loadTreeByBlockIDInBox(rootID, boxID)
+	if err != nil {
 		return
 	}
 	headingNumbers := map[string]string{}
-	if headingNumberEnabled(tree, Conf.Editor.HeadingNumber) {
-		headingNumbers = headingNumberLabels(tree, Conf.Editor.HeadingNumberFormat)
+	if headingNumberEnabled(tree, confEditorSnapshot.HeadingNumber) {
+		headingNumbers = headingNumberLabels(tree, confEditorSnapshot.HeadingNumberFormat)
 	}
 
-	if preview && Conf.Export.AddTitle {
+	if preview && Conf.Export.Load().AddTitle {
 		if root, _ := getBlock(tree.ID, tree); nil != root {
 			root.IAL["type"] = "doc"
 			title := &ast.Node{ID: root.ID, Type: ast.NodeHeading, HeadingLevel: 1}
@@ -358,16 +354,17 @@ func outline(tree *parse.Tree) (ret []*Path) {
 		for _, b := range children {
 			resetDepth(b, 0)
 			ret = append(ret, &Path{
-				ID:       b.ID,
-				Box:      b.Box,
-				Name:     b.Content,
-				NodeType: b.Type,
-				Type:     "outline",
-				SubType:  b.SubType,
-				Blocks:   b.Children,
-				Depth:    0,
-				Count:    b.Count,
-				Folded:   true,
+				ID:         b.ID,
+				Box:        b.Box,
+				Name:       b.Content,
+				NameIsHTML: true,
+				NodeType:   b.Type,
+				Type:       "outline",
+				SubType:    b.SubType,
+				Blocks:     b.Children,
+				Depth:      0,
+				Count:      b.Count,
+				Folded:     true,
 			})
 		}
 	}

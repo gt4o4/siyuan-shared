@@ -1,6 +1,8 @@
 
 export const getDefaultType = () => {
     return {
+        mindmap: window.siyuan.config.search.mindmap ?? true,
+        mindmapItem: window.siyuan.config.search.mindmapItem ?? false,
         audioBlock: window.siyuan.config.search.audioBlock,
         videoBlock: window.siyuan.config.search.videoBlock,
         iframeBlock: window.siyuan.config.search.iframeBlock,
@@ -15,6 +17,9 @@ export const getDefaultType = () => {
         table: window.siyuan.config.search.table,
         blockquote: window.siyuan.config.search.blockquote,
         callout: window.siyuan.config.search.callout,
+        tabs: window.siyuan.config.search.tabs,
+        tabItem: window.siyuan.config.search.tabItem,
+        customBlock: window.siyuan.config.search.customBlock ?? true,
         superBlock: window.siyuan.config.search.superBlock,
         paragraph: window.siyuan.config.search.paragraph,
         embedBlock: window.siyuan.config.search.embedBlock,
@@ -22,9 +27,17 @@ export const getDefaultType = () => {
     };
 };
 
+export const normalizeSearchTypes = (types: Config.IUILayoutTabSearchConfig["types"]) => ({
+    ...types,
+    mindmap: types?.mindmap ?? window.siyuan.config.search.mindmap ?? true,
+    mindmapItem: types?.mindmapItem ?? window.siyuan.config.search.mindmapItem ?? false,
+    customBlock: types?.customBlock ?? window.siyuan.config.search.customBlock ?? true,
+});
+
 export const getDefaultSubType = (): Config.IUILayoutTabSearchConfigSubTypes => {
     return {
-        h1: false, h2: false, h3: false, h4: false, h5: false, h6: false,
-        o: false, u: false, t: false,
+        heading: {h1: false, h2: false, h3: false, h4: false, h5: false, h6: false},
+        list: {o: false, u: false, t: false},
+        listItem: {o: false, u: false, t: false},
     };
 };

@@ -1,21 +1,73 @@
 /// #if !MOBILE
-import {exportLayout} from "../layout/util";
+import {reloadUI} from "../layout/util";
+import {closeSettingsWindow} from "../config/setting/windowContext";
+/// #else
+import {reloadMobileUI} from "../mobile/util/reloadUI";
 /// #endif
 import {hideMessage, showMessage} from "../dialog/message";
-import {setStorageVal} from "../protyle/util/compatibility";
-import {Constants} from "../constants";
 import {fetchPost} from "./fetch";
 import {isBrowser} from "./functions";
+import {applySettingTask} from "../config/setting/taskBlocker";
+import {notifyOCRChanged} from "../config/ocrRuntime";
 
 export const processMessage = (response: IWebSocketData) => {
+    if (response.cmd === "notebookIconChanged") {
+        const {updateNotebookBreadcrumbIcon}: typeof import("../protyle/breadcrumb/iconRefresh") = require("../protyle/breadcrumb/iconRefresh");
+        updateNotebookBreadcrumbIcon(response.data.boxID, response.data.icon);
+    }
+    if (response.cmd === "closeBox" || response.cmd === "removeBox") {
+        const {clearTemplateHTTPConfirmations}: typeof import("../template/httpConfirmHandoff") = require("../template/httpConfirmHandoff");
+        clearTemplateHTTPConfirmations();
+        const {invalidateRelatedAVSecurity}: typeof import("../protyle/render/av/relatedView") = require("../protyle/render/av/relatedView");
+        invalidateRelatedAVSecurity();
+    }
+    if (response.cmd === "templateHTTPConfirm" || response.cmd === "templateHTTPStatus") {
+        const {processTemplateHTTPEvent}: typeof import("../template/http") = require("../template/http");
+        processTemplateHTTPEvent(response.cmd, response.data);
+        return false;
+    }
+    if (response.cmd === "assetContentIndexCompleted" && response.code === 0) {
+        const {refreshAssetContentSearch}: typeof import("../search/assets") = require("../search/assets");
+        refreshAssetContentSearch();
+        return false;
+    }
+    if (response.cmd === "ocrChanged") {
+        notifyOCRChanged();
+        return false;
+    }
+    if (response.cmd === "prepareSettingsReset") {
+        void import("../config/setting/reset").then(reset => reset.prepareSettingsReset(response.data));
+        return false;
+    }
+    if (response.cmd === "cancelSettingsReset") {
+        void import("../config/setting/reset").then(reset => reset.cancelSettingsReset(response.data));
+        return false;
+    }
+    if (response.cmd === "settingsReset") {
+        void import("../config/setting/reset").then(reset => reset.completeSettingsReset(response.data));
+        return false;
+    }
+    if (response.cmd === "settingTask") {
+        applySettingTask(response.data);
+        return false;
+    }
     if ("msg" === response.cmd) {
         const id = showMessage(response.msg, response.data.closeTimeout, response.code === 0 ? "info" : "error", response.data.id);
         document.querySelector("#message #addMicrosoftDefenderExclusion")?.addEventListener("click", (event) => {
-            (event.target as HTMLElement).innerHTML = '<svg class="fn__rotate" style="margin-right: 0;"><use xlink:href="#iconRefresh"></use></svg>';
+            const button = event.currentTarget as HTMLButtonElement;
+            if (button.disabled) {
+                return;
+            }
+            const content = button.innerHTML;
+            button.disabled = true;
+            button.innerHTML = '<svg class="fn__rotate" style="margin-right: 0;"><use xlink:href="#iconRefresh"></use></svg>';
             fetchPost("/api/system/addMicrosoftDefenderExclusion", {}, () => {
                 hideMessage(id);
+            }).finally(() => {
+                button.disabled = false;
+                button.innerHTML = content;
             });
-        }, {once: true});
+        });
         document.querySelector("#message #ignoreAddMicrosoftDefenderExclusion")?.addEventListener("click", () => {
             hideMessage(id);
             fetchPost("/api/system/ignoreAddMicrosoftDefenderExclusion");
@@ -34,31 +86,19 @@ export const processMessage = (response: IWebSocketData) => {
         return false;
     }
     if ("reloadui" === response.cmd) {
-        if (response.data?.resetScroll) {
-            window.siyuan.storage[Constants.LOCAL_FILEPOSITION] = {};
-            setStorageVal(Constants.LOCAL_FILEPOSITION, window.siyuan.storage[Constants.LOCAL_FILEPOSITION], () => {
-                /// #if MOBILE
-                window.location.reload();
-                /// #else
-                exportLayout({
-                    cb() {
-                        window.location.reload();
-                    },
-                    errorExit: false,
-                });
-                /// #endif
-            });
-        } else {
-            /// #if MOBILE
+        /// #if !MOBILE
+        if (closeSettingsWindow()) return false;
+        /// #endif
+        /// #if MOBILE
+        void reloadMobileUI(!!response.data?.resetScroll);
+        /// #else
+        void reloadUI(!!response.data?.resetScroll);
+        /// #endif
+        return false;
+    }
+    if ("reloadpublishpage" === response.cmd) {
+        if (window.siyuan.isPublish) {
             window.location.reload();
-            /// #else
-            exportLayout({
-                cb() {
-                    window.location.reload();
-                },
-                errorExit: false,
-            });
-            /// #endif
         }
         return false;
     }

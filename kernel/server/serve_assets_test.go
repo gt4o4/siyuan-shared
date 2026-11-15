@@ -1,10 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package server
 
@@ -13,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -150,14 +147,82 @@ func TestIsValidResolvedAssetPath(t *testing.T) {
 	}
 }
 
+func TestResolveAssetRequestPathByDataPath(t *testing.T) {
+	originalDataDir := util.DataDir
+	util.DataDir = t.TempDir()
+	t.Cleanup(func() {
+		util.DataDir = originalDataDir
+	})
+
+	const (
+		boxID          = "20260821000000-abcdefg"
+		docID          = "20260821000001-hijklmn"
+		encryptedBoxID = "20260821000002-opqrstu"
+	)
+	writeFile := func(filePath string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filePath, []byte("asset"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(filepath.Join(util.DataDir, boxID, ".siyuan", "conf.json"))
+	writeFile(filepath.Join(util.DataDir, encryptedBoxID, ".siyuan", "conf.json"))
+	if err := os.WriteFile(filepath.Join(util.DataDir, encryptedBoxID, ".siyuan", "conf.json"),
+		[]byte(`{"encrypted":true}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	documentAssetPath := filepath.Join(util.DataDir, boxID, docID, "assets", "video.mp4")
+	writeFile(documentAssetPath)
+	encryptedAssetPath := filepath.Join(util.DataDir, encryptedBoxID, "assets", "encrypted.mp4")
+	writeFile(encryptedAssetPath)
+
+	dataPath := path.Join(boxID, docID, "assets", "video.mp4")
+	resolvedPath, err := resolveAssetRequestPath("assets/video.mp4", "", dataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolvedPath != documentAssetPath {
+		t.Fatalf("resolve asset by data path: got %q, want %q", resolvedPath, documentAssetPath)
+	}
+
+	invalidRequests := []struct {
+		name      string
+		assetPath string
+		boxID     string
+		dataPath  string
+	}{
+		{name: "mismatched asset path", assetPath: "assets/other.mp4", dataPath: dataPath},
+		{name: "box and data path", assetPath: "assets/video.mp4", boxID: boxID, dataPath: dataPath},
+		{name: "non asset data path", assetPath: "assets/document.sy", dataPath: path.Join(boxID, docID+".sy")},
+		{name: "encrypted asset data path", assetPath: "assets/encrypted.mp4",
+			dataPath: path.Join(encryptedBoxID, "assets", "encrypted.mp4")},
+	}
+	for _, test := range invalidRequests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, resolveErr := resolveAssetRequestPath(test.assetPath, test.boxID, test.dataPath); resolveErr == nil {
+				t.Fatalf("resolveAssetRequestPath(%q, %q, %q) should fail", test.assetPath, test.boxID, test.dataPath)
+			}
+		})
+	}
+}
+
 func TestSecureAssetContentHeadersForcesAttachmentOnScriptCapableAssets(t *testing.T) {
 	// 可执行脚本的资产必须强制附件下载，禁止浏览器同源内联渲染
 	// https://github.com/siyuan-note/siyuan/security/advisories/GHSA-mjf3-jwmf-r6wf
+	// https://github.com/siyuan-note/siyuan/security/advisories/GHSA-7h8j-qw37-w46g
 	cases := map[string]string{
 		"test.html":  "<script>fetch('/api/system/getConf')</script>",
 		"test.xhtml": "<script>fetch('/api/system/getConf')</script>",
 		"test.js":    "fetch('/api/system/getConf')",
 		"test.svg":   "<svg xmlns='http://www.w3.org/2000/svg'><script>fetch('/api/system/getConf')</script></svg>",
+		"test.xht":   "<script>fetch('/api/system/getConf')</script>",
+		"test.ehtml": "<script>fetch('/api/system/getConf')</script>",
+		"test.xsl":   "<script>fetch('/api/system/getConf')</script>",
+		"test.xbl":   "<script>fetch('/api/system/getConf')</script>",
+		"test.rdf":   "<script>fetch('/api/system/getConf')</script>",
 	}
 	for name, content := range cases {
 		recorder := httptest.NewRecorder()
@@ -174,6 +239,116 @@ func TestSecureAssetContentHeadersForcesAttachmentOnScriptCapableAssets(t *testi
 		if recorder.Header().Get("X-Content-Type-Options") != "nosniff" {
 			t.Fatalf("asset [%s] missing X-Content-Type-Options header", name)
 		}
+	}
+}
+
+func TestSecureAssetContentHeadersForcesAttachmentOnNonAllowListedTypes(t *testing.T) {
+	// 白名单之外的类型即使 Content-Type 可识别也必须强制附件下载，未知类型默认禁止内联
+	cases := []string{"test.json", "test.css", "test.md", "test.zip", "test.wasm"}
+	for _, name := range cases {
+		recorder := httptest.NewRecorder()
+		context, _ := gin.CreateTestContext(recorder)
+		context.Request = httptest.NewRequest(http.MethodGet, "/assets/"+name, nil)
+		assetPath := filepath.Join(t.TempDir(), name)
+		if err := os.WriteFile(assetPath, []byte("test"), 0644); err != nil {
+			t.Fatalf("write test asset failed: %v", err)
+		}
+		secureAssetContentHeaders(context, assetPath, assetPath)
+		if !strings.HasPrefix(recorder.Header().Get("Content-Disposition"), "attachment") {
+			t.Fatalf("non allow-listed asset [%s] must be forced to download, got Content-Disposition %q",
+				name, recorder.Header().Get("Content-Disposition"))
+		}
+	}
+}
+
+func TestSecureAssetContentHeadersSandboxesHTMLIFrameAssets(t *testing.T) {
+	assetPath := filepath.Join(t.TempDir(), "component.html")
+	if err := os.WriteFile(assetPath, []byte("<script>fetch('https://example.com')</script>"), 0644); err != nil {
+		t.Fatalf("write test asset failed: %v", err)
+	}
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodGet, "/assets/component.html?iframe=true", nil)
+	secureAssetContentHeaders(context, assetPath, assetPath)
+
+	if disposition := recorder.Header().Get("Content-Disposition"); disposition != "" {
+		t.Fatalf("HTML IFrame asset must render inline, got Content-Disposition %q", disposition)
+	}
+	if got := recorder.Header().Get("Content-Type"); got != "text/html; charset=utf-8" {
+		t.Fatalf("HTML IFrame asset Content-Type = %q", got)
+	}
+	if got := recorder.Header().Get("Content-Security-Policy"); got != htmlAssetIFrameCSP {
+		t.Fatalf("HTML IFrame asset CSP = %q", got)
+	}
+	if recorder.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatal("HTML IFrame asset missing X-Content-Type-Options header")
+	}
+}
+
+func TestSecureAssetContentHeadersRejectsInvalidHTMLIFrameRequests(t *testing.T) {
+	tests := []struct {
+		name       string
+		requestURL string
+		filename   string
+	}{
+		{name: "explicit download", requestURL: "/assets/component.html?iframe=true&download=true", filename: "component.html"},
+		{name: "non HTML asset", requestURL: "/assets/component.js?iframe=true", filename: "component.js"},
+		{name: "non asset route", requestURL: "/history/component.html?iframe=true", filename: "component.html"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assetPath := filepath.Join(t.TempDir(), test.filename)
+			if err := os.WriteFile(assetPath, []byte("test"), 0644); err != nil {
+				t.Fatalf("write test asset failed: %v", err)
+			}
+			recorder := httptest.NewRecorder()
+			context, _ := gin.CreateTestContext(recorder)
+			context.Request = httptest.NewRequest(http.MethodGet, test.requestURL, nil)
+			secureAssetContentHeaders(context, assetPath, assetPath)
+			if !strings.HasPrefix(recorder.Header().Get("Content-Disposition"), "attachment") {
+				t.Fatalf("invalid HTML IFrame request must download, got Content-Disposition %q",
+					recorder.Header().Get("Content-Disposition"))
+			}
+			if csp := recorder.Header().Get("Content-Security-Policy"); csp != "" {
+				t.Fatalf("invalid HTML IFrame request must not receive sandbox CSP, got %q", csp)
+			}
+		})
+	}
+}
+
+func TestSecureAssetContentHeadersIgnoresHostMIME(t *testing.T) {
+	for _, tc := range []struct {
+		ext, hostType, wantType string
+		unsafe                  bool
+	}{
+		{".jpg", "application/jpg", "image/jpeg", false},
+		{".png", "text/html", "image/png", false},
+		{".html", "text/plain", "", true},
+		{".svg", "image/png", "", true},
+		{".js", "image/jpeg", "", true},
+	} {
+		t.Run(tc.ext, func(t *testing.T) {
+			original := mime.TypeByExtension(tc.ext)
+			if err := mime.AddExtensionType(tc.ext, tc.hostType); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := mime.AddExtensionType(tc.ext, original); err != nil {
+					t.Fatal(err)
+				}
+			})
+			recorder := httptest.NewRecorder()
+			context, _ := gin.CreateTestContext(recorder)
+			name := "test" + strings.ToUpper(tc.ext)
+			context.Request = httptest.NewRequest(http.MethodGet, "/assets/"+name, nil)
+			secureAssetContentHeaders(context, name, name)
+			if got := strings.HasPrefix(recorder.Header().Get("Content-Disposition"), "attachment"); got != tc.unsafe {
+				t.Fatalf("attachment = %v, want %v", got, tc.unsafe)
+			}
+			if got := recorder.Header().Get("Content-Type"); got != tc.wantType {
+				t.Fatalf("Content-Type = %q, want %q", got, tc.wantType)
+			}
+		})
 	}
 }
 
@@ -207,9 +382,6 @@ func TestSecureAssetContentHeadersForcesAttachmentOnUnknownExtension(t *testing.
 	if err := os.WriteFile(assetPath, []byte("<script>alert(1)</script>"), 0644); err != nil {
 		t.Fatalf("write test asset failed: %v", err)
 	}
-	if mime.TypeByExtension(".xyz") != "" {
-		t.Fatalf("test precondition failed: .xyz unexpectedly has a MIME type")
-	}
 	secureAssetContentHeaders(context, assetPath, assetPath)
 	if !strings.HasPrefix(recorder.Header().Get("Content-Disposition"), "attachment") {
 		t.Fatalf("unknown-extension asset must be forced to download, got Content-Disposition %q", recorder.Header().Get("Content-Disposition"))
@@ -231,5 +403,14 @@ func TestSecureAssetContentHeadersKeepsExplicitDownload(t *testing.T) {
 	secureAssetContentHeaders(context, assetPath, assetPath)
 	if !strings.HasPrefix(recorder.Header().Get("Content-Disposition"), "attachment") {
 		t.Fatalf("explicit download=true must return attachment, got Content-Disposition %q", recorder.Header().Get("Content-Disposition"))
+	}
+}
+
+func TestEncryptedAssetCacheHeaders(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	setEncryptedAssetCacheHeaders(context)
+	if got := recorder.Header().Get("Cache-Control"); got != "private, no-store" {
+		t.Fatalf("unexpected encrypted asset cache policy: %q", got)
 	}
 }

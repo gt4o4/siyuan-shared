@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package search
 
@@ -67,10 +55,10 @@ func TestNormalizeSearchText(t *testing.T) {
 }
 
 func TestEncloseHighlightingHanInsensitive(t *testing.T) {
-	old := util.SearchHanSensitive
-	defer func() { util.SearchHanSensitive = old }()
+	old := util.SearchHanSensitive.Load()
+	defer func() { util.SearchHanSensitive.Store(old) }()
 
-	util.SearchHanSensitive = false
+	util.SearchHanSensitive.Store(false)
 	got := EncloseHighlighting("詩經研究", []string{"诗经"}, "<mark>", "</mark>", false, false)
 	if want := "<mark>詩經</mark>研究"; want != got {
 		t.Errorf("繁简不敏感高亮 = %q, want %q", got, want)
@@ -82,7 +70,7 @@ func TestEncloseHighlightingHanInsensitive(t *testing.T) {
 		t.Errorf("大小写+繁简 = %q, want %q", got, want)
 	}
 
-	util.SearchHanSensitive = true
+	util.SearchHanSensitive.Store(true)
 	got = EncloseHighlighting("詩經研究", []string{"诗经"}, "<mark>", "</mark>", false, false)
 	if want := "詩經研究"; want != got {
 		t.Errorf("默认（区分繁简）不应高亮，got %q", got)

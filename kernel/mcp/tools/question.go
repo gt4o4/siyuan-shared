@@ -1,27 +1,34 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package tools
 
 var QuestionTool = &Tool{
 	Name:        "question",
-	Description: "Ask the user questions to clarify needs/preferences (do NOT use for plain-text option lists). questions[]: each {header (short label), question, options[] {label, description}, multiple?, custom?}.",
+	Description: "Ask the user questions to clarify needs/preferences (do NOT use for plain-text option lists). questions[]: each {header, question, options[] {label, description}, multiple?, custom?}. For official plugin development use workflow.action=choose with questions=[]; the server supplies the exact Yes/No question. After successful official skill load, workflow.action=plan freezes and displays the proposed scope for confirmation. Workflow answers never authorize installation or enabling.",
+	AgentOnly:   true,
+	EffectScope: EffectScopeLocal,
+	ActionEffects: map[string]ToolEffects{
+		"": {},
+	},
 	InputSchema: ToolSchema{
 		Type: "object",
 		Properties: map[string]Property{
+			"workflow": {Type: "object", Description: "Official plugin workflow; use questions=[] for server-supplied confirmations. Actual consent is recorded only from the user's answer", Properties: map[string]Property{
+				"action":         {Type: "string", Description: "choose asks whether to use the official plugin workflow; plan asks approval for a frozen proposal after loading the official skill; recover asks recovery-only approval for the most recently approved plan, allowing restore_project or the same interrupted prepare_project without authorizing new source edits; cancel pauses the task and revokes approvals without rolling back changes. Recovery requires the same loaded skill and a previously approved plan. None authorize installation or enabling", Enum: []string{"choose", "plan", "recover", "cancel"}},
+				"taskId":         {Type: "string", Description: "Server taskId returned by choose; required for plan/recover/cancel"},
+				"newTask":        {Type: "boolean", Description: "choose only: a separate plugin requested by the user"},
+				"reconsider":     {Type: "boolean", Description: "choose only: the user explicitly changed the earlier workflow choice"},
+				"proposal":       {Type: "string", Description: "Short complete proposal, at most 2000 characters"},
+				"packageName":    {Type: "string", Description: "Exact plugin package name"},
+				"frontend":       {Type: "string", Enum: []string{"desktop", "desktop-window", "browser-desktop", "mobile", "browser-mobile"}},
+				"dataEffects":    {Type: "string", Description: "Data reads/writes and repeated-action semantics, at most 1000 characters"},
+				"deliverables":   {Type: "string", Description: "Source/build/package deliverables and unverified steps; installation is separate"},
+				"sourcePath":     {Type: "string", Description: "Optional exact existing workspace-relative source directory to import read-only"},
+				"sourceRevision": {Type: "string", Description: "Exact source tree revision from project_status; required with sourcePath"},
+				"files":          {Type: "array", Items: &Property{Type: "string"}, Description: "1-200 exact relative source/output file paths, including plugin.json and index.js"},
+			}, Required: []string{"action"}},
 			"questions": {
 				Type: "array", Description: "Array of questions to ask the user",
 				Items: &Property{

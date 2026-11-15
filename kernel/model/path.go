@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
@@ -27,38 +15,42 @@ import (
 	"github.com/88250/lute/ast"
 	"github.com/88250/lute/parse"
 	"github.com/siyuan-note/logging"
-	"github.com/siyuan-note/siyuan/kernel/search"
-	"github.com/siyuan-note/siyuan/kernel/sql"
 	"github.com/siyuan-note/siyuan/kernel/treenode"
 	"github.com/siyuan-note/siyuan/kernel/util"
 )
 
 func createDocsByHPath(boxID, hPath, content, parentID, id string, titleEmpty bool) (retID string, err error) {
+	return createDocsByHPath0(boxID, hPath, content, parentID, id, titleEmpty, createDoc)
+}
+
+func createDocsByHPathSync(boxID, hPath, content, parentID, id string, titleEmpty bool) (retID string, err error) {
+	return createDocsByHPath0(boxID, hPath, content, parentID, id, titleEmpty, createDocSync)
+}
+
+func createDocsByHPath0(boxID, hPath, content, parentID, id string, titleEmpty bool,
+	createDocFn func(boxID, p, title, dom string, titleEmpty bool) (*parse.Tree, error), checkedParents ...map[string]*treenode.BlockTree) (retID string, err error) {
 	if "" == id {
 		id = ast.NewNodeID()
 	}
 	retID = id
 
-	hPath = strings.TrimSuffix(hPath, ".sy")
-	hPath = util.TrimSpaceInPath(hPath)
-	if "" != parentID {
-		if IsBoxDoc(boxID, parentID) {
-			name := path.Base(hPath)
-			p := "/" + id + ".sy"
-			if _, err = createDoc(boxID, p, name, content, titleEmpty); err != nil {
-				logging.LogErrorf("create doc [%s] failed: %s", p, err)
-			}
-			return
-		}
-		// The save path is incorrect when creating a sub-doc by ref in a doc with the same name https://github.com/siyuan-note/siyuan/issues/8138
-		// 在指定了父文档 ID 的情况下优先查找父文档
+	if len(checkedParents) == 0 {
+		hPath = strings.TrimSuffix(hPath, ".sy")
+		hPath = util.TrimSpaceInPath(hPath)
+	}
+	if IsBoxDoc(boxID, parentID) {
+		// 笔记本顶层文档是用户可见的逻辑根，完整路径应从笔记本根目录解析。
+		parentID = ""
+	}
+	if "" != parentID && len(checkedParents) == 0 {
+		// 存在同名文档时通过父文档 ID 精确定位 https://github.com/siyuan-note/siyuan/issues/8138
 		parentHPath, name := path.Split(hPath)
 		parentHPath = strings.TrimSuffix(parentHPath, "/")
-		preferredParent := treenode.GetBlockTreeByHPathPreferredParentID(boxID, parentHPath, parentID)
+		preferredParent := treenode.GetBlockTreeRootByIDAndHPath(boxID, parentID, parentHPath)
 		if nil != preferredParent && preferredParent.RootID == parentID {
 			// 如果父文档存在且 ID 一致，则直接在父文档下创建
 			p := strings.TrimSuffix(preferredParent.Path, ".sy") + "/" + id + ".sy"
-			if _, err = createDoc(boxID, p, name, content, titleEmpty); err != nil {
+			if _, err = createDocFn(boxID, p, name, content, titleEmpty); err != nil {
 				logging.LogErrorf("create doc [%s] failed: %s", p, err)
 			}
 			return
@@ -70,20 +62,24 @@ func createDocsByHPath(boxID, hPath, content, parentID, id string, titleEmpty bo
 	parts := strings.Split(hPath, "/")[1:]
 	// The subdoc creation path is unstable when a parent doc with the same name exists https://github.com/siyuan-note/siyuan/issues/9322
 	// 存在同名父文档时子文档创建路径不稳定，这里需要按照完整的 hpath 映射，不能在下面的循环中边构建 hpath 边构建 path，否则虽然 hpath 相同，但是会导致 path 组装错位
-	for i, part := range parts {
-		if i == len(parts)-1 {
-			break
-		}
+	if len(checkedParents) > 0 {
+		hpathBtMap = checkedParents[0]
+	} else {
+		for i, part := range parts {
+			if i == len(parts)-1 {
+				break
+			}
 
-		hPathBuilder.WriteString("/")
-		hPathBuilder.WriteString(part)
-		hp := hPathBuilder.String()
-		root := treenode.GetBlockTreeRootByHPath(boxID, hp)
-		if nil == root {
-			break
-		}
+			hPathBuilder.WriteString("/")
+			hPathBuilder.WriteString(part)
+			hp := hPathBuilder.String()
+			root := treenode.GetBlockTreeRootByHPath(boxID, hp)
+			if nil == root {
+				break
+			}
 
-		hpathBtMap[hp] = root
+			hpathBtMap[hp] = root
+		}
 	}
 
 	pathBuilder := bytes.Buffer{}
@@ -104,11 +100,11 @@ func createDocsByHPath(boxID, hPath, content, parentID, id string, titleEmpty bo
 			pathBuilder.WriteString(rootID)
 			docP := pathBuilder.String() + ".sy"
 			if isNotLast {
-				if _, err = createDoc(boxID, docP, part, "", false); err != nil {
+				if _, err = createDocFn(boxID, docP, part, "", false); err != nil {
 					return
 				}
 			} else {
-				if _, err = createDoc(boxID, docP, part, content, titleEmpty); err != nil {
+				if _, err = createDocFn(boxID, docP, part, content, titleEmpty); err != nil {
 					return
 				}
 			}
@@ -160,7 +156,7 @@ func toFlatTree(blocks []*Block, baseDepth int, typ string, tree *parse.Tree) (r
 		treeNode := &Path{
 			ID:       root.ID,
 			Box:      root.Box,
-			Name:     path.Base(root.HPath),
+			Name:     documentTitleText(root.Box, root.RootID),
 			NodeType: root.Type,
 			Type:     typ,
 			SubType:  root.SubType,
@@ -178,284 +174,6 @@ func toFlatTree(blocks []*Block, baseDepth int, typ string, tree *parse.Tree) (r
 
 		if "backlink" == typ {
 			treeNode.HPath = root.HPath
-		}
-	}
-
-	sort.Slice(ret, func(i, j int) bool {
-		return ret[i].ID > ret[j].ID
-	})
-	return
-}
-
-func toSubTree(blocks []*Block, keyword string) (ret []*Path) {
-	return toSubTreeInBox(blocks, keyword, "", nil)
-}
-
-// toSubTreeInBox 与 toSubTree 一致，但按 boxID 路由到加密 db 或全局 db。
-func toSubTreeInBox(blocks []*Block, keyword, boxID string, originalRefBlockIDs map[string]string) (ret []*Path) {
-	keyword = strings.TrimSpace(keyword)
-	var blockRoots []*Block
-	for _, block := range blocks {
-		root := getBlockIn(blockRoots, block.RootID)
-		if nil == root {
-			root, _ = getBlock(block.RootID, nil)
-			blockRoots = append(blockRoots, root)
-		}
-		block.Depth = 1
-		block.Count = len(block.Children)
-		root.Children = append(root.Children, block)
-	}
-
-	for _, root := range blockRoots {
-		treeNode := &Path{
-			ID:       root.ID,
-			Box:      root.Box,
-			Name:     path.Base(root.HPath),
-			Type:     "backlink",
-			NodeType: "NodeDocument",
-			SubType:  root.SubType,
-			Depth:    0,
-			Count:    len(root.Children),
-		}
-		for _, c := range root.Children {
-			if "NodeDocument" == c.Type && "" != originalRefBlockIDs[c.ID] {
-				tree, _ := loadTreeByBlockIDInBox(c.RootID, boxID)
-				if nil == tree {
-					continue
-				}
-				for child := tree.Root.FirstChild; nil != child; child = child.Next {
-					if "" == child.ID || !child.IsBlock() {
-						continue
-					}
-					subBlock, _ := getBlock(child.ID, tree)
-					if nil == subBlock {
-						continue
-					}
-					subBlock.Depth = 1
-					treeNode.Blocks = append(treeNode.Blocks, subBlock)
-				}
-			} else if "NodeListItem" == c.Type {
-				tree, _ := loadTreeByBlockIDInBox(c.RootID, boxID)
-				li := treenode.GetNodeInTree(tree, c.ID)
-				if nil == li || nil == li.FirstChild {
-					// 反链面板拖拽到文档以后可能会出现这种情况 https://github.com/siyuan-note/siyuan/issues/5363
-					continue
-				}
-
-				var first *sql.Block
-				if 3 != li.ListData.Typ {
-					first = sql.GetBlockInBox(li.FirstChild.ID, boxID)
-				} else {
-					first = sql.GetBlockInBox(li.FirstChild.Next.ID, boxID)
-				}
-				name := first.Content
-				parentPos := 0
-				if "" != keyword {
-					parentPos, name = search.MarkText(name, keyword, 12, Conf.Search.CaseSensitive)
-				}
-				subRoot := &Path{
-					ID:       li.ID,
-					Box:      li.Box,
-					Name:     name,
-					Type:     "backlink",
-					NodeType: li.Type.String(),
-					SubType:  c.SubType,
-					Depth:    1,
-					Count:    1,
-				}
-
-				refNode := li.FirstChild
-				if originalRefBlockID := originalRefBlockIDs[li.ID]; "" != originalRefBlockID {
-					if originalRefBlock := treenode.GetNodeInTree(tree, originalRefBlockID); nil != originalRefBlock {
-						refNode = originalRefBlock
-					}
-				}
-				unfold := true
-				for liFirstBlockSpan := refNode.FirstChild; nil != liFirstBlockSpan; liFirstBlockSpan = liFirstBlockSpan.Next {
-					if treenode.IsBlockRef(liFirstBlockSpan) {
-						continue
-					}
-					if "" != strings.TrimSpace(liFirstBlockSpan.Text()) {
-						unfold = false
-						break
-					}
-				}
-				for next := li.FirstChild.Next; nil != next; next = next.Next {
-					subBlock, _ := getBlock(next.ID, tree)
-					if unfold {
-						if ast.NodeList == next.Type {
-							for subLi := next.FirstChild; nil != subLi; subLi = subLi.Next {
-								subLiBlock, _ := getBlock(subLi.ID, tree)
-								if nil == subLiBlock || nil == subLi.FirstChild {
-									continue
-								}
-								var subFirst *sql.Block
-								if 3 != subLi.ListData.Typ {
-									subFirst = sql.GetBlockInBox(subLi.FirstChild.ID, boxID)
-								} else {
-									if nil == subLi.FirstChild.Next {
-										continue
-									}
-									subFirst = sql.GetBlockInBox(subLi.FirstChild.Next.ID, boxID)
-								}
-								if nil == subFirst {
-									continue
-								}
-								subPos := 0
-								content := subFirst.Content
-								if "" != keyword {
-									subPos, content = search.MarkText(subFirst.Content, keyword, 12, Conf.Search.CaseSensitive)
-								}
-								if -1 < subPos {
-									parentPos = 0 // 需要显示父级
-								}
-								subLiBlock.Content = content
-								subLiBlock.Depth = 2
-								subRoot.Blocks = append(subRoot.Blocks, subLiBlock)
-							}
-						} else if ast.NodeHeading == next.Type {
-							subBlock.Depth = 2
-							subRoot.Blocks = append(subRoot.Blocks, subBlock)
-							headingChildren := treenode.HeadingChildren(next)
-							var breakSub bool
-							for _, n := range headingChildren {
-								block, _ := getBlock(n.ID, tree)
-								subPos := 0
-								content := block.Content
-								if "" != keyword {
-									subPos, content = search.MarkText(block.Content, keyword, 12, Conf.Search.CaseSensitive)
-								}
-								if -1 < subPos {
-									parentPos = 0
-								}
-								block.Content = content
-								block.Depth = 3
-								subRoot.Blocks = append(subRoot.Blocks, block)
-								if ast.NodeHeading == n.Type {
-									// 跳过子标题下面的块
-									breakSub = true
-									break
-								}
-							}
-							if breakSub {
-								break
-							}
-						} else {
-							if nil == treenode.HeadingParent(next) {
-								subBlock.Depth = 2
-								subRoot.Blocks = append(subRoot.Blocks, subBlock)
-							}
-						}
-					}
-				}
-				if -1 < parentPos {
-					treeNode.Children = append(treeNode.Children, subRoot)
-				}
-			} else if "NodeHeading" == c.Type {
-				tree, _ := loadTreeByBlockIDInBox(c.RootID, boxID)
-				h := treenode.GetNodeInTree(tree, c.ID)
-				if nil == h {
-					continue
-				}
-
-				sqlHeading := sql.GetBlockInBox(h.ID, boxID)
-				if nil == sqlHeading {
-					continue
-				}
-				name := sqlHeading.Content
-				parentPos := 0
-				if "" != keyword {
-					parentPos, name = search.MarkText(name, keyword, 12, Conf.Search.CaseSensitive)
-				}
-				subRoot := &Path{
-					ID:       h.ID,
-					Box:      h.Box,
-					Name:     name,
-					Type:     "backlink",
-					NodeType: h.Type.String(),
-					SubType:  c.SubType,
-					Depth:    1,
-					Count:    1,
-				}
-
-				unfold := "" != originalRefBlockIDs[h.ID]
-				if !unfold {
-					unfold = true
-					for headingFirstSpan := h.FirstChild; nil != headingFirstSpan; headingFirstSpan = headingFirstSpan.Next {
-						if treenode.IsBlockRef(headingFirstSpan) {
-							continue
-						}
-						if "" != strings.TrimSpace(headingFirstSpan.Text()) {
-							unfold = false
-							break
-						}
-					}
-				}
-
-				if unfold {
-					headingChildren := treenode.HeadingChildren(h)
-					for _, headingChild := range headingChildren {
-						if ast.NodeList == headingChild.Type {
-							for subLi := headingChild.FirstChild; nil != subLi; subLi = subLi.Next {
-								subLiBlock, _ := getBlock(subLi.ID, tree)
-								if nil == subLiBlock || nil == subLi.FirstChild {
-									continue
-								}
-								var subFirst *sql.Block
-								if 3 != subLi.ListData.Typ {
-									subFirst = sql.GetBlockInBox(subLi.FirstChild.ID, boxID)
-								} else {
-									if nil == subLi.FirstChild.Next {
-										continue
-									}
-									subFirst = sql.GetBlockInBox(subLi.FirstChild.Next.ID, boxID)
-								}
-								if nil == subFirst {
-									continue
-								}
-								subPos := 0
-								content := subFirst.Content
-								if "" != keyword {
-									subPos, content = search.MarkText(content, keyword, 12, Conf.Search.CaseSensitive)
-								}
-								if -1 < subPos {
-									parentPos = 0
-								}
-								subLiBlock.Content = subFirst.Content
-								subLiBlock.Depth = 2
-								subRoot.Blocks = append(subRoot.Blocks, subLiBlock)
-							}
-						} else {
-							subBlock, _ := getBlock(headingChild.ID, tree)
-							subBlock.Depth = 2
-							subRoot.Blocks = append(subRoot.Blocks, subBlock)
-						}
-					}
-				}
-
-				if -1 < parentPos {
-					treeNode.Children = append(treeNode.Children, subRoot)
-				}
-			} else {
-				pos := 0
-				content := c.Content
-				if "" != keyword {
-					pos, content = search.MarkText(content, keyword, 12, Conf.Search.CaseSensitive)
-				}
-				if -1 < pos {
-					treeNode.Blocks = append(treeNode.Blocks, c)
-				}
-			}
-		}
-
-		rootPos := -1
-		var rootContent string
-		if "" != keyword {
-			rootPos, rootContent = search.MarkText(treeNode.Name, keyword, 12, Conf.Search.CaseSensitive)
-			treeNode.Name = rootContent
-		}
-		if 0 < len(treeNode.Children) || 0 < len(treeNode.Blocks) || (-1 < rootPos && "" != keyword) {
-			ret = append(ret, treeNode)
 		}
 	}
 

@@ -1,7 +1,9 @@
+import {isTableLikeView} from "./viewType";
 import {resetAVRowSelect} from "./virtualScroll";
 import {updateAVSelectionStatus} from "./row";
 import {hasClosestByClassName} from "../../util/hasClosest";
 import {clearAVItemSelectionState} from "./selectionState";
+import {clearAVCellRange} from "./rangeSelect";
 
 const isRectIntersecting = (rect: DOMRect, selectRect: DOMRect, clipRect?: DOMRect) => {
     const top = Math.max(rect.top, clipRect?.top ?? rect.top);
@@ -15,11 +17,11 @@ const isRectIntersecting = (rect: DOMRect, selectRect: DOMRect, clipRect?: DOMRe
 
 export const isAVDragSelectSupported = (blockElement: HTMLElement) => {
     return blockElement.classList.contains("av") &&
-        ["table", "kanban", "gallery"].includes(blockElement.dataset.avType);
+        ["table", "list", "kanban", "gallery"].includes(blockElement.dataset.avType);
 };
 
 export const applyAVDragSelection = (blockElement: HTMLElement, selectRect: DOMRect) => {
-    const isTable = blockElement.dataset.avType === "table";
+    const isTable = isTableLikeView(blockElement.dataset.avType);
     const itemSelector = isTable ? ".av__row[data-id]" :
         ".av__gallery-item[data-id]:not([data-type=\"ghost\"])";
     const clipRect = blockElement.dataset.avType === "kanban" ?
@@ -49,6 +51,10 @@ export const applyAVDragSelection = (blockElement: HTMLElement, selectRect: DOMR
         }
     });
 
+    if (Array.from(selectedIdsByBody.values()).some(ids => ids.size > 0)) {
+        clearAVCellRange(blockElement);
+    }
+
     selectedIdsByBody.forEach((ids, bodyElement) => {
         resetAVRowSelect(bodyElement, Array.from(ids));
     });
@@ -57,7 +63,7 @@ export const applyAVDragSelection = (blockElement: HTMLElement, selectRect: DOMR
 
 export const clearAVDragSelection = (blockElement: HTMLElement) => {
     clearAVItemSelectionState(blockElement);
-    const isTable = blockElement.dataset.avType === "table";
+    const isTable = isTableLikeView(blockElement.dataset.avType);
     blockElement.querySelectorAll(".av__body").forEach((bodyElement: HTMLElement) => {
         if (hasClosestByClassName(bodyElement, "av") !== blockElement) {
             return;

@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package util
 
@@ -57,6 +45,7 @@ func GetOrCreateTLSCert() (certPath, keyPath string, err error) {
 
 	if hasTLSCertManager(certPath, keyPath) {
 		logging.LogInfof("using active TLS certificate manager for [%s]", ConfDir)
+		MarkTLSEnforced()
 		return certPath, keyPath, nil
 	}
 
@@ -71,6 +60,7 @@ func GetOrCreateTLSCert() (certPath, keyPath string, err error) {
 	if gulu.File.IsExist(certPath) && gulu.File.IsExist(keyPath) {
 		if validateCert(certPath) {
 			logging.LogInfof("using existing TLS certificates from [%s]", ConfDir)
+			MarkTLSEnforced()
 			return certPath, keyPath, nil
 		}
 		logging.LogInfof("existing TLS certificates are invalid or expired, regenerating...")
@@ -89,6 +79,7 @@ func GetOrCreateTLSCert() (certPath, keyPath string, err error) {
 	}
 
 	logging.LogInfof("generated TLS certificates at [%s]", ConfDir)
+	MarkTLSEnforced()
 	return certPath, keyPath, nil
 }
 
@@ -293,7 +284,8 @@ func writeCertAndKey(certPath, keyPath string, certDER []byte, privateKey *ecdsa
 		return err
 	}
 
-	keyFile, err := os.Create(keyPath)
+	// 私钥仅当前用户可读写
+	keyFile, err := os.OpenFile(keyPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}

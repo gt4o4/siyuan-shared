@@ -1,5 +1,10 @@
-import {addScript, addScriptSync} from "../protyle/util/addScript";
+import {addScript} from "../protyle/util/addScript";
+import {ensureLute} from "../protyle/util/lute";
+import {completeStartup, guardStartup, reportStartupError, setStartupLanguage, setStartupStage} from "../boot/startupError";
 import {Constants} from "../constants";
+import {systemConfig} from "../config/systemConfig";
+import {refreshSettingConfig} from "../config/setting/sync";
+import {openStandaloneDatabaseItemByURI} from "../protyle/render/av/openStandaloneDatabaseItem";
 import {onMessage} from "./util/onMessage";
 import {genUUID} from "../util/genID";
 import {
@@ -13,20 +18,39 @@ import "../assets/scss/mobile.scss";
 import {Menus} from "../menus";
 import {addBaseURL, parseSiYuanUriInfo, setNoteBook} from "../util/pathName";
 import {activateQueuedAVLocate, queueAVLocateRequest} from "../protyle/render/av/locate";
-import {handleTouchEnd, handleTouchMove, handleTouchStart, handleTouchUp} from "./util/touch";
-import {fetchGet, fetchPost} from "../util/fetch";
+import {
+    handleTouchCancel,
+    handleTouchContextMenu,
+    handleTouchEnd,
+    handleTouchMove,
+    handleTouchSelectionChange,
+    handleTouchStart,
+    handleTouchUp,
+    handleTouchEditing,
+    handleTouchFocusOut,
+} from "./util/touch";
+import {fetchPost} from "../util/fetch";
 import {initFramework} from "./util/initFramework";
+import {finishMobileSystemUris, processMobileSystemUri} from "./util/systemUri";
+import {saveMobileLayout} from "./util/saveLayout";
 import {initAssets} from "../util/assets";
 import {bootSync, lockScreen} from "../dialog/processSystem";
 import {initMessage, showMessage} from "../dialog/message";
 import {goBack} from "./util/MobileBackFoward";
-import {activeBlur, hideKeyboardToolbar, showKeyboardToolbar} from "./util/keyboardToolbar";
 import {
+    activeBlur,
+    hideKeyboardToolbarByApp,
+    hideKeyboardToolbarUtilOnEditorClick,
+    showKeyboardToolbar,
+} from "./util/keyboardToolbar";
+import {
+    applyPlatformClasses,
     getLocalStorage,
     initWindowOpenOverride,
     isChromeBrowser,
     isInIOS,
     isInMobileApp,
+    isIOSDevice,
     writeText
 } from "../protyle/util/compatibility";
 import {getCurrentEditor, openMobileFileById} from "./editor";
@@ -36,6 +60,7 @@ import {initRightMenu} from "./menu";
 import {openChangelog} from "../boot/openChangelog";
 import {registerServiceWorker} from "../util/serviceWorker";
 import {loadPlugins} from "../plugin/loader";
+import {emitToPlugins} from "../plugin/EventBusCore";
 import {removeBlock} from "../protyle/wysiwyg/remove";
 import {isNotEditBlock} from "../protyle/wysiwyg/getBlock";
 import {updateCardHV} from "../card/util";
@@ -46,9 +71,21 @@ import {nbsp2space} from "../protyle/util/normalizeText";
 import {armKeyboardLock, callMobileAppShowKeyboard, canInput, setWebViewFocusable} from "./util/mobileAppUtil";
 import {hideAllElements} from "../protyle/ui/hideElements";
 import {initTouchDragBridge} from "../util/touchDragBridge";
+import {bindPanelTransitionGuard} from "../util/panelTransition";
 import {appearanceConfigApi} from "../config/tabs/appearanceRuntime";
 import {openByMobile} from "../editor/openLink";
 import {initHarmonyTextSelectionMenu} from "../util/harmonyTextSelectionMenu";
+import {initMobileSelect} from "./util/nativeSelect";
+import {updateMobileTopBarLayout} from "./util/mobileTopBar";
+import {bindMobileOrientationChange} from "./util/orientation";
+import {showMobileBars} from "./util/mobileBars";
+import {initializeEnglishCommandTranslations} from "../command/english";
+import {loadLanguages} from "../boot/loadLanguages";
+import {scrollInputIntoView} from "./util/visibleViewport";
+import {installPluginStorageFetchAppId} from "../util/fetchAppId";
+import {initMobileWithLoading} from "./util/startup";
+
+const startupRequestFailed = (response: IWebSocketData) => reportStartupError(new Error(response.msg || String(response.code)));
 
 class App {
     public plugins: import("../plugin").Plugin[] = [];
@@ -56,6 +93,7 @@ class App {
 
     constructor() {
         if (checkPublishServiceClosed()) {
+            completeStartup();
             return;
         }
         registerServiceWorker(`${Constants.SERVICE_WORKER_PATH}?v=${Constants.SIYUAN_VERSION}`);
@@ -67,10 +105,13 @@ class App {
         mainWs.connect({
             id: genUUID(),
             type: "main",
+            callback: () => {
+                if (window.siyuan.isReady) {
+                    void refreshSettingConfig().catch(error => console.error("Could not refresh settings", error));
+                }
+            },
             msgCallback: (data) => {
-                this.plugins.forEach((plugin) => {
-                    plugin.eventBus.emit("ws-main", data);
-                });
+                emitToPlugins("ws-main", data);
                 onMessage(this, data);
             }
         });
@@ -92,11 +133,19 @@ class App {
                     tag: null,
                     backlink: null,
                     inbox: null,
+                    agent: null,
                 }
             },
             ws: mainWs
         };
         // 不能使用 touchstart，否则会被 event.stopImmediatePropagation() 阻塞
+        document.addEventListener("touchstart", (event: TouchEvent) => {
+            if (window.JSAndroid?.setWebViewFocusable && canInput(event.target as Element)) {
+                // 在原生选区建立前启用焦点，保留首次双击的选择手柄。
+                armKeyboardLock();
+                window.JSAndroid.setWebViewFocusable(true);
+            }
+        }, true);
         window.addEventListener("click", (event: MouseEvent & { target: HTMLElement }) => {
             const menu = window.siyuan.menus?.menu;
             if (menu && !menu.element.contains(event.target) && !hasClosestByAttribute(event.target, "data-menu", "true")) {
@@ -113,12 +162,11 @@ class App {
             const editableElement = canInput(event.target);
             if (editableElement && ["INPUT", "TEXTAREA"].includes(editableElement.tagName)) {
                 setTimeout(() => {
-                    editableElement.scrollIntoView({
-                        block: "center",
-                    });
+                    scrollInputIntoView(editableElement);
                 }, Constants.TIMEOUT_TRANSITION);
             }
             if (editableElement) {
+                hideKeyboardToolbarUtilOnEditorClick();
                 // 原生 App 通过桥接主动唤起键盘；移动端浏览器没有桥接，但点击可编辑区域后也会立刻触发 resize，
                 // 进而调用 activeBlur 关闭键盘（比如三星键盘 https://github.com/siyuan-note/siyuan/issues/18078），所以此处也需要上锁
                 if (window.JSAndroid && window.JSAndroid.showKeyboard || window.JSHarmony && window.JSHarmony.showKeyboard) {
@@ -152,38 +200,56 @@ class App {
             };
         }
         window.addEventListener("beforeunload", () => {
-            window.siyuan.mobile.tabs?.save();
+            void saveMobileLayout();
         }, false);
         window.addEventListener("pagehide", () => {
-            window.siyuan.mobile.tabs?.save();
+            void saveMobileLayout();
         }, false);
+        document.addEventListener("visibilitychange", () => {
+            if (document.visibilityState === "hidden") {
+                void saveMobileLayout();
+            }
+        });
         // 判断手机横竖屏状态
-        window.matchMedia("(orientation:portrait)").addEventListener("change", () => {
+        bindMobileOrientationChange(() => {
             updateCardHV();
+            updateMobileTopBarLayout();
+            showMobileBars();
             activeBlur();
         });
-        fetchPost("/api/system/getConf", {}, async (confResponse) => {
-            addScriptSync(`${Constants.PROTYLE_CDN}/js/lute/lute.min.js?v=${Constants.SIYUAN_VERSION}`, "protyleLuteScript");
+        setStartupStage("configuration");
+        fetchPost("/api/system/getConf", {}, guardStartup<IWebSocketData>(async (confResponse) => {
+            setStartupLanguage(confResponse.data.conf.appearance.lang);
+            setStartupStage("engine");
+            await ensureLute({reloadOnFailure: false});
             addScript(`${Constants.PROTYLE_CDN}/js/protyle-html.js?v=${Constants.SIYUAN_VERSION}`, "protyleWcHtmlScript");
-            window.siyuan.config = confResponse.data.conf;
+            window.siyuan.config = systemConfig(confResponse.data.conf);
             window.siyuan.isPublish = confResponse.data.isPublish;
+            applyPlatformClasses();
             correctHotkey(siyuanApp);
+            setStartupStage("plugins");
             await loadPlugins(this);
-            getLocalStorage(() => {
-                fetchGet(`/appearance/langs/${window.siyuan.config.appearance.lang}.json?v=${Constants.SIYUAN_VERSION}`, (lauguages: IObject) => {
-                    window.siyuan.languages = lauguages;
+            setStartupStage("storage");
+            getLocalStorage(guardStartup<void>(() => {
+                setStartupStage("language");
+                void loadLanguages(window.siyuan.config.appearance.lang, Constants.SIYUAN_VERSION, guardStartup<IObject>(async (languages) => {
+                    setStartupStage("interface");
+                    window.siyuan.languages = languages;
+                    void initializeEnglishCommandTranslations(
+                        window.siyuan.config.appearance.lang,
+                        languages as Record<string, string>,
+                        Constants.SIYUAN_VERSION,
+                    );
                     window.siyuan.menus = new Menus(this);
+                    initMobileSelect();
                     document.title = window.siyuan.languages.siyuanNote;
-                    bootSync();
-                    appearanceConfigApi.apply(window.siyuan.config.appearance);
                     initMessage();
-                    initAssets();
                     if (!isInMobileApp()) {
                         if (isChromeBrowser()) {
                             document.querySelector('meta[name="viewport"]').setAttribute("content", "width=device-width, height=device-height, interactive-widget=resizes-content, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover");
                         } else {
                             document.querySelector('meta[name="viewport"]').setAttribute("content", "width=device-width, height=device-height, interactive-widget=resizes-visual, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover");
-                            if (!window.siyuan.config.readonly && !window.siyuan.isPublish
+                            if (!isIOSDevice() && !window.siyuan.config.readonly && !window.siyuan.isPublish
                                 && window.siyuan.config.appearance.notifications?.browserCompatibility !== false) {
                                 showMessage(window.siyuan.languages.useChrome, 0, "error");
                             }
@@ -191,30 +257,40 @@ class App {
                     } else if (!isInIOS()) {
                         document.querySelector('meta[name="viewport"]').setAttribute("content", "width=device-width, height=device-height, interactive-widget=resizes-visual, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover");
                     }
-                    fetchPost("/api/setting/getCloudUser", {}, async userResponse => {
-                        window.siyuan.user = userResponse.data;
+                    fetchPost("/api/setting/getCloudUser", {cached: true}, guardStartup<IWebSocketData>(async userResponse => {
+                        window.siyuan.user = userResponse.data && "userId" in userResponse.data ? userResponse.data : null;
                         await ensureOnboarding();
-                        fetchPost("/api/system/getEmojiConf", {}, async emojiResponse => {
+                        fetchPost("/api/system/getEmojiConf", {}, guardStartup<IWebSocketData>(async emojiResponse => {
                             window.siyuan.emojis = emojiResponse.data as IEmoji[];
                             await setNoteBook();
-                            try {
+                            await initMobileWithLoading(async () => {
+                                await appearanceConfigApi.apply(window.siyuan.config.appearance);
+                                initAssets(true);
                                 await initFramework(this, confResponse.data.start);
                                 initRightMenu(this);
                                 openChangelog();
-                                window.siyuan.isReady = true;
-                                mainWs.flushMainMessages();
-                            } catch (error) {
-                                console.error("Failed to initialize mobile framework:", error);
-                            }
-                        });
-                    });
-                });
-            });
+                            });
+                            window.siyuan.isReady = true;
+                            finishMobileSystemUris(this);
+                            mainWs.flushMainMessages();
+                            bootSync();
+                            completeStartup();
+                            fetchPost("/api/setting/getCloudUser", {});
+                        }), undefined, startupRequestFailed);
+                    }), undefined, startupRequestFailed);
+                }), reportStartupError);
+            }), reportStartupError);
             document.addEventListener("touchstart", handleTouchStart, false);
-            document.addEventListener("touchmove", handleTouchMove, false);
+            document.addEventListener("touchmove", handleTouchMove, {passive: false});
             document.addEventListener("touchend", handleTouchEnd, false);
-            document.addEventListener("touchcancel", handleTouchEnd, false);
+            document.addEventListener("touchcancel", handleTouchCancel, false);
+            document.addEventListener("contextmenu", handleTouchContextMenu, true);
+            document.addEventListener("focusout", handleTouchFocusOut, true);
+            document.addEventListener("selectionchange", handleTouchSelectionChange, true);
             window.addEventListener("nativePhysicalTouchUp", handleTouchUp, false);
+            window.addEventListener("nativeTextMenuWillPresent", handleTouchEditing, false);
+            document.addEventListener("beforeinput", handleTouchEditing, true);
+            document.addEventListener("paste", handleTouchEditing, true);
             window.addEventListener("keyup", () => {
                 window.siyuan.ctrlIsPressed = false;
                 window.siyuan.shiftIsPressed = false;
@@ -243,11 +319,15 @@ class App {
                     }
                 }
             });
+            ["sidebar", "sidebarRight"].forEach(id => {
+                bindPanelTransitionGuard(document.getElementById(id));
+            });
             initTouchDragBridge();
-        });
+        }), undefined, startupRequestFailed);
     }
 }
 
+installPluginStorageFetchAppId(window, Constants.SIYUAN_APPID, document.baseURI, location.origin);
 const siyuanApp = new App();
 
 initWindowOpenOverride(siyuanApp, openByMobile);
@@ -272,17 +352,20 @@ window.reconnectWebSocket = () => {
 };
 window.lockscreenByMode = () => {
     if (window.siyuan.config?.system.lockScreenMode === 1) {
-        lockScreen(siyuanApp);
+        lockScreen();
     }
 };
 window.goBack = goBack;
 window.showMessage = showMessage;
 window.processIOSPurchaseResponse = processIOSPurchaseResponse;
 window.showKeyboardToolbar = showKeyboardToolbar;
-window.hideKeyboardToolbar = hideKeyboardToolbar;
+window.hideKeyboardToolbar = hideKeyboardToolbarByApp;
 window.openFileByURL = (openURL) => {
     const blockInfo = parseSiYuanUriInfo(openURL);
     if (blockInfo != null) {
+        if (openStandaloneDatabaseItemByURI(siyuanApp, blockInfo)) {
+            return true;
+        }
         if (blockInfo.avItemID) {
             queueAVLocateRequest(blockInfo.id, {
                 itemID: blockInfo.avItemID,
@@ -292,8 +375,8 @@ window.openFileByURL = (openURL) => {
         }
         openMobileFileById(siyuanApp, blockInfo.id, blockInfo.avItemID ? [Constants.CB_GET_CONTEXT, Constants.CB_GET_ROOTSCROLL] :
             (blockInfo.focus ? [Constants.CB_GET_ALL] : [Constants.CB_GET_HL, Constants.CB_GET_CONTEXT, Constants.CB_GET_ROOTSCROLL]),
-        undefined, undefined, blockInfo.avItemID ? (protyle) => activateQueuedAVLocate(protyle, blockInfo.id) : undefined);
+        blockInfo.avItemID ? undefined : "start", undefined, blockInfo.avItemID ? (protyle) => activateQueuedAVLocate(protyle, blockInfo.id) : undefined);
         return true;
     }
-    return false;
+    return processMobileSystemUri(siyuanApp, openURL);
 };

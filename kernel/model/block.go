@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
@@ -74,6 +62,8 @@ type Block struct {
 
 	RiffCardID string    `json:"riffCardID"`
 	RiffCard   *RiffCard `json:"riffCard"`
+
+	backlinkDocumentContext bool // 首段引用归并为文档上下文，与文档标题引用来源区分。
 }
 
 type RiffCard struct {
@@ -86,7 +76,7 @@ type RiffCard struct {
 
 func (block *Block) IsContainerBlock() bool {
 	switch block.Type {
-	case "NodeDocument", "NodeBlockquote", "NodeList", "NodeListItem", "NodeSuperBlock", "NodeCallout":
+	case "NodeDocument", "NodeBlockquote", "NodeList", "NodeListItem", "NodeSuperBlock", "NodeCallout", "NodeTabs", "NodeTabItem", "NodeMindmap", "NodeMindmapItem":
 		return true
 	}
 	return false
@@ -97,19 +87,20 @@ func (block *Block) IsDoc() bool {
 }
 
 type Path struct {
-	ID       string   `json:"id"`                 // 块 ID
-	Box      string   `json:"box"`                // 块 Box
-	Name     string   `json:"name"`               // 当前路径
-	Number   string   `json:"number,omitempty"`   // 标题编号
-	HPath    string   `json:"hPath"`              // 人类可读路径
-	Type     string   `json:"type"`               // "path"
-	NodeType string   `json:"nodeType"`           // 节点类型
-	SubType  string   `json:"subType"`            // 节点子类型
-	Blocks   []*Block `json:"blocks,omitempty"`   // 子块节点
-	Children []*Path  `json:"children,omitempty"` // 子路径节点
-	Depth    int      `json:"depth"`              // 层级深度
-	Count    int      `json:"count"`              // 子块计数
-	Folded   bool     `json:"folded"`             // 是否折叠
+	ID         string   `json:"id"`                   // 块 ID
+	Box        string   `json:"box"`                  // 块 Box
+	Name       string   `json:"name"`                 // 当前路径
+	NameIsHTML bool     `json:"nameIsHTML,omitempty"` // Name 是否为渲染后的 HTML，前端据此决定是否转义
+	Number     string   `json:"number,omitempty"`     // 标题编号
+	HPath      string   `json:"hPath"`                // 人类可读路径
+	Type       string   `json:"type"`                 // "path"
+	NodeType   string   `json:"nodeType"`             // 节点类型
+	SubType    string   `json:"subType"`              // 节点子类型
+	Blocks     []*Block `json:"blocks,omitempty"`     // 子块节点
+	Children   []*Path  `json:"children,omitempty"`   // 子路径节点
+	Depth      int      `json:"depth"`                // 层级深度
+	Count      int      `json:"count"`                // 子块计数
+	Folded     bool     `json:"folded"`               // 是否折叠
 
 	Updated string `json:"updated"` // 更新时间
 	Created string `json:"created"` // 创建时间
@@ -131,18 +122,12 @@ func newBlockRefCheckGroup() *blockRefCheckGroup {
 	}
 }
 
-// CheckBlockRef 检查将被删除的块是否被引用或绑定到仍存在的数据库。
-func CheckBlockRef(ids []string) bool {
-	ret, _ := CheckBlockRefInBox(ids, nil, ids, "")
-	return ret
-}
-
 // CheckBlockRefInBox 检查受影响块的引用，并检查实际删除块的数据库绑定。
 func CheckBlockRefInBox(ids, exactIDs, deletedIDs []string, boxID string) (ret bool, err error) {
 	sql.FlushQueue()
-	ids = filterNonEmptyBlockRefCheckIDs(ids)
-	exactIDs = filterNonEmptyBlockRefCheckIDs(exactIDs)
-	deletedIDs = filterNonEmptyBlockRefCheckIDs(deletedIDs)
+	ids = sql.FilterNonEmptyRefCheckIDs(ids)
+	exactIDs = sql.FilterNonEmptyRefCheckIDs(exactIDs)
+	deletedIDs = sql.FilterNonEmptyRefCheckIDs(deletedIDs)
 	if 1 > len(ids) {
 		return
 	}
@@ -180,7 +165,8 @@ func CheckBlockRefInBox(ids, exactIDs, deletedIDs []string, boxID string) (ret b
 		if _, deleted := deletedIDSet[bt.ID]; deleted {
 			group.deletedBlockIDs[bt.ID] = struct{}{}
 		}
-		if _, exact := exactIDSet[bt.ID]; exact {
+		// 段落不能包含子块，只需检查自身，避免为普通删除读取整篇文档。
+		if _, exact := exactIDSet[bt.ID]; exact || "p" == bt.Type {
 			continue
 		}
 		if nil == selectedByRoot[bt.BoxID] {
@@ -247,22 +233,6 @@ func expandBlockRefCheckDescendants(group *blockRefCheckGroup, selected, deleted
 			group.deletedBlockIDs[bt.ID] = struct{}{}
 		}
 	}
-}
-
-func filterNonEmptyBlockRefCheckIDs(ids []string) (ret []string) {
-	seen := map[string]struct{}{}
-	for _, id := range ids {
-		id = strings.TrimSpace(id)
-		if "" == id {
-			continue
-		}
-		if _, exists := seen[id]; exists {
-			continue
-		}
-		seen[id] = struct{}{}
-		ret = append(ret, id)
-	}
-	return
 }
 
 // CheckDocsRef 检查文档删除时会递归移除的全部文档。
@@ -386,35 +356,52 @@ func hasSurvivingAttributeViewBlock(group *blockRefCheckGroup, boundAVIDs, avBlo
 }
 
 type BlockTreeInfo struct {
-	ID           string `json:"id"`
-	Type         string `json:"type"`
-	ParentID     string `json:"parentID"`
-	ParentType   string `json:"parentType"`
-	PreviousID   string `json:"previousID"`
-	PreviousType string `json:"previousType"`
-	NextID       string `json:"nextID"`
-	NextType     string `json:"nextType"`
-}
-
-func GetBlockTreeInfos(ids []string) (ret map[string]*BlockTreeInfo) {
-	return GetBlockTreeInfosInBox(ids, "")
+	HeadingChildren *bool  `json:"headingChildren,omitempty"`
+	ID              string `json:"id"`
+	Type            string `json:"type"`
+	ParentID        string `json:"parentID"`
+	ParentType      string `json:"parentType"`
+	PreviousID      string `json:"previousID"`
+	PreviousType    string `json:"previousType"`
+	NextID          string `json:"nextID"`
+	NextType        string `json:"nextType"`
 }
 
 // GetBlockTreeInfosInBox 获取指定笔记本内的块树信息。空 box 仅查询普通全局库。
 func GetBlockTreeInfosInBox(ids []string, boxID string) (ret map[string]*BlockTreeInfo) {
 	ret = map[string]*BlockTreeInfo{}
+	// 同一批查询中的文档只加载和遍历一次，避免多个折叠标题重复读取整棵树。
+	nodesByRoot := map[string]map[string]*ast.Node{}
 	for _, id := range ids {
-		tree := loadTreeForBlockDOM(id, boxID)
-		if nil == tree {
-			continue
+		var nodes map[string]*ast.Node
+		if bt := treenode.GetBlockTreeInBox(id, boxID); nil != bt {
+			nodes = nodesByRoot[bt.RootID]
 		}
-		node := treenode.GetNodeInTree(tree, id)
+		if nil == nodes {
+			tree := loadTreeForBlockDOM(id, boxID)
+			if nil == tree {
+				continue
+			}
+			nodes = map[string]*ast.Node{}
+			ast.Walk(tree.Root, func(node *ast.Node, entering bool) ast.WalkStatus {
+				if entering && "" != node.ID {
+					nodes[node.ID] = node
+				}
+				return ast.WalkContinue
+			})
+			nodesByRoot[tree.Root.ID] = nodes
+		}
+		node := nodes[id]
 		if nil == node {
 			ret[id] = &BlockTreeInfo{ID: id}
 			continue
 		}
 
 		bti := &BlockTreeInfo{ID: id, Type: node.Type.String()}
+		if ast.NodeHeading == node.Type {
+			hasChildren := treenode.HasHeadingChildren(node)
+			bti.HeadingChildren = &hasChildren
+		}
 		ret[id] = bti
 		parent := treenode.ParentBlock(node)
 		if nil != parent {
@@ -433,10 +420,6 @@ func GetBlockTreeInfosInBox(ids []string, boxID string) (ret map[string]*BlockTr
 		}
 	}
 	return
-}
-
-func GetBlockSiblingID(id string) (parent, previous, next string) {
-	return GetBlockSiblingIDInBox(id, "")
 }
 
 // GetBlockSiblingIDInBox 获取指定笔记本内块的相邻关系。空 box 不回退搜索加密笔记本。
@@ -548,10 +531,6 @@ func getPreNext(parent *ast.Node) (previous, next string) {
 		return
 	}
 	return
-}
-
-func GetBlockRelevantIDs(id string) (parentID, previousID, nextID string, err error) {
-	return GetBlockRelevantIDsInBox(id, "")
 }
 
 // GetBlockRelevantIDsInBox 获取指定笔记本内块的父级及相邻块 ID。空 box 不回退搜索加密笔记本。
@@ -716,7 +695,7 @@ func TransferBlockRef(fromID, toID string, refIDs []string) (err error) {
 	return
 }
 
-func SwapBlockRef(refID, defID string, includeChildren bool) (err error) {
+func SwapBlockRef(refID, defID string, includeChildren, originalToEmbed bool) (err error) {
 	refTree, err := LoadTreeByBlockID(refID)
 	if err != nil {
 		return
@@ -724,9 +703,6 @@ func SwapBlockRef(refID, defID string, includeChildren bool) (err error) {
 	refNode := treenode.GetNodeInTree(refTree, refID)
 	if nil == refNode {
 		return
-	}
-	if ast.NodeListItem == refNode.Parent.Type {
-		refNode = refNode.Parent
 	}
 	defTree, err := LoadTreeByBlockID(defID)
 	if err != nil {
@@ -741,6 +717,30 @@ func SwapBlockRef(refID, defID string, includeChildren bool) (err error) {
 	}
 	if nil == defNode {
 		return
+	}
+	if err = validateBlockSwap(refNode, defNode, includeChildren); err != nil {
+		return
+	}
+	swapBlockRefNodes(refNode, defNode, defID, includeChildren, originalToEmbed)
+
+	if err = indexWriteTreeUpsertQueue(refTree); err != nil {
+		return
+	}
+	if !sameTree {
+		if err = indexWriteTreeUpsertQueue(defTree); err != nil {
+			return
+		}
+	}
+	FlushTxQueue()
+	util.ReloadUI()
+	return
+}
+
+func swapBlockRefNodes(refNode, defNode *ast.Node, defID string, includeChildren, originalToEmbed bool) {
+	originalRefNode := refNode
+	isHeading := ast.NodeHeading == defNode.Type
+	if ast.NodeListItem == refNode.Parent.Type {
+		refNode = refNode.Parent
 	}
 	var defNodeChildren []*ast.Node
 	if ast.NodeListItem == defNode.Parent.Type {
@@ -818,18 +818,19 @@ func SwapBlockRef(refID, defID string, includeChildren bool) (err error) {
 		}
 	}
 	refPivot.Unlink()
-
-	if err = indexWriteTreeUpsertQueue(refTree); err != nil {
-		return
-	}
-	if !sameTree {
-		if err = indexWriteTreeUpsertQueue(defTree); err != nil {
-			return
+	if originalToEmbed {
+		embed := &ast.Node{ID: originalRefNode.ID, Type: ast.NodeBlockQueryEmbed, KramdownIAL: originalRefNode.KramdownIAL}
+		if isHeading {
+			headingMode := "1"
+			if includeChildren {
+				headingMode = "0"
+			}
+			embed.SetIALAttr(embedHeadingModeAttr, headingMode)
 		}
+		embed.AppendChild(&ast.Node{Type: ast.NodeBlockQueryEmbedScript, Tokens: []byte("select * from blocks where id='" + defID + "'")})
+		originalRefNode.InsertBefore(embed)
+		originalRefNode.Unlink()
 	}
-	FlushTxQueue()
-	util.ReloadUI()
-	return
 }
 
 func GetHeadingDeleteTransaction(id string) (transaction *Transaction, err error) {
@@ -982,9 +983,20 @@ func GetHeadingChildrenDOM(id string, removeFoldAttr bool) (ret string) {
 		return
 	}
 
-	nodes := append([]*ast.Node{}, heading)
 	children := treenode.HeadingChildren(heading)
-	nodes = append(nodes, children...)
+	nodes := prepareHeadingChildrenDOMNodes(heading, children, removeFoldAttr)
+
+	luteEngine := util.NewLute()
+	ret = renderBlockDOMByNodes(nodes, luteEngine)
+	return
+}
+
+func prepareHeadingChildrenDOMNodes(heading *ast.Node, children []*ast.Node, removeFoldAttr bool) (ret []*ast.Node) {
+	ret = append(ret, heading)
+	ret = append(ret, children...)
+	ret = cleanRenderNodes(ret, false)
+	heading = ret[0]
+	children = ret[1:]
 
 	for _, child := range children {
 		ast.Walk(child, func(n *ast.Node, entering bool) ast.WalkStatus {
@@ -1002,7 +1014,7 @@ func GetHeadingChildrenDOM(id string, removeFoldAttr bool) (ret string) {
 		if removeFoldAttr {
 			child.RemoveIALAttr("parent-heading")
 		} else {
-			child.SetIALAttr("parent-heading", id)
+			child.SetIALAttr("parent-heading", heading.ID)
 		}
 	}
 
@@ -1010,50 +1022,113 @@ func GetHeadingChildrenDOM(id string, removeFoldAttr bool) (ret string) {
 		heading.RemoveIALAttr("fold")
 		heading.RemoveIALAttr("heading-fold")
 	}
-
-	luteEngine := util.NewLute()
-	ret = renderCleanBlockDOMByNodes(nodes, luteEngine)
 	return
 }
 
-func GetHeadingLevelTransaction(id string, level int) (transaction *Transaction, err error) {
-	tree, err := LoadTreeByBlockID(id)
+func GetHeadingLevelBatchTransaction(ids []string, level int) (transaction *Transaction, err error) {
+	if len(ids) == 0 || level < 1 || 6 < level {
+		return
+	}
+
+	tree, err := LoadTreeByBlockID(ids[0])
 	if err != nil {
 		return
 	}
 
-	node := treenode.GetNodeInTree(tree, id)
-	if nil == node {
-		err = fmt.Errorf(Conf.Language(15), id)
+	selectedHeadings, valid, missingID := headingLevelSelection(tree, ids)
+	if "" != missingID {
+		err = fmt.Errorf(Conf.Language(15), missingID)
+		return
+	}
+	if !valid || len(selectedHeadings) == 0 {
 		return
 	}
 
-	if ast.NodeHeading != node.Type {
-		return
-	}
-
-	hLevel := node.HeadingLevel
+	hLevel := selectedHeadings[0].HeadingLevel
 	if hLevel == level {
 		return
 	}
 
 	diff := level - hLevel
-	var children, childrenHeadings []*ast.Node
-	children = append(children, node)
-	children = append(children, treenode.HeadingChildren(node)...)
-	for _, c := range children {
-		ccH := c.ChildrenByType(ast.NodeHeading)
-		childrenHeadings = append(childrenHeadings, ccH...)
-	}
+	childrenHeadings := collectHeadingLevelNodes(tree.Root, selectedHeadings)
 	fillBlockRefCount(childrenHeadings, tree.Box)
 
+	var foldedHeadings []*ast.Node
+	for _, heading := range selectedHeadings {
+		if treenode.IsSelfFolded(heading) {
+			foldedHeadings = append(foldedHeadings, heading)
+		}
+	}
+
+	transaction = buildHeadingLevelTransaction(childrenHeadings, foldedHeadings, diff)
+	return
+}
+
+func headingLevelSelection(tree *parse.Tree, ids []string) (ret []*ast.Node, valid bool, missingID string) {
+	if nil == tree || nil == tree.Root || len(ids) == 0 {
+		return
+	}
+
+	selectedIDs := map[string]struct{}{}
+	var parent *ast.Node
+	headingLevel := 0
+	for _, id := range ids {
+		if _, ok := selectedIDs[id]; ok {
+			continue
+		}
+		selectedIDs[id] = struct{}{}
+
+		heading := treenode.GetNodeInTree(tree, id)
+		if nil == heading {
+			return nil, false, id
+		}
+		if ast.NodeHeading != heading.Type {
+			return nil, false, ""
+		}
+		if len(ret) == 0 {
+			parent = heading.Parent
+			headingLevel = heading.HeadingLevel
+		} else if heading.Parent != parent || heading.HeadingLevel != headingLevel {
+			return nil, false, ""
+		}
+		ret = append(ret, heading)
+	}
+	valid = 0 < len(ret)
+	return
+}
+
+func collectHeadingLevelNodes(root *ast.Node, selectedHeadings []*ast.Node) (ret []*ast.Node) {
+	selectedNodes := map[*ast.Node]struct{}{}
+	for _, heading := range selectedHeadings {
+		selectedNodes[heading] = struct{}{}
+		for _, child := range treenode.HeadingChildren(heading) {
+			for _, childHeading := range child.ChildrenByType(ast.NodeHeading) {
+				selectedNodes[childHeading] = struct{}{}
+			}
+		}
+	}
+
+	ast.Walk(root, func(node *ast.Node, entering bool) ast.WalkStatus {
+		if !entering {
+			return ast.WalkContinue
+		}
+		if _, ok := selectedNodes[node]; ok {
+			ret = append(ret, node)
+		}
+		return ast.WalkContinue
+	})
+	return
+}
+
+func buildHeadingLevelTransaction(headings, foldedHeadings []*ast.Node, diff int) (transaction *Transaction) {
 	transaction = &Transaction{}
-	if treenode.IsSelfFolded(node) {
-		unfoldHeading(node, node)
+	for _, heading := range foldedHeadings {
+		treenode.SetSelfFolded(heading, false)
+		transaction.DoOperations = append(transaction.DoOperations, &Operation{Action: "unfoldHeading", ID: heading.ID})
 	}
 
 	luteEngine := util.NewLute()
-	for _, c := range childrenHeadings {
+	for _, c := range headings {
 		op := &Operation{}
 		op.ID = c.ID
 		op.Action = "update"
@@ -1073,6 +1148,9 @@ func GetHeadingLevelTransaction(id string, level int) (transaction *Transaction,
 		op.Data = luteEngine.RenderNodeBlockDOM(cleanRenderNode(c, false))
 		transaction.DoOperations = append(transaction.DoOperations, op)
 	}
+	for _, heading := range foldedHeadings {
+		transaction.UndoOperations = append(transaction.UndoOperations, &Operation{Action: "foldHeading", ID: heading.ID})
+	}
 	return
 }
 
@@ -1089,10 +1167,6 @@ func GetBlockDOMInBox(id, boxID string) (ret string) {
 	doms := GetBlockDOMsInBox([]string{id}, boxID)
 	ret = doms[id]
 	return
-}
-
-func GetBlockDOMs(ids []string) (ret map[string]string) {
-	return GetBlockDOMsInBox(ids, "")
 }
 
 // GetBlockDOMsInBox 渲染指定笔记本内的块 DOM。禁止在 boxID 未指定时遍历加密笔记本。
@@ -1129,15 +1203,6 @@ func GetBlockDOMsInBox(ids []string, boxID string) (ret map[string]string) {
 	return
 }
 
-func GetBlockDOMWithEmbed(id string) (ret string) {
-	return GetBlockDOMWithEmbedInBox(id, "")
-}
-
-// GetBlockDOMWithEmbedInBox 渲染指定笔记本内包含嵌入块的 DOM。
-func GetBlockDOMWithEmbedInBox(id, boxID string) (ret string) {
-	return GetBlockDOMWithEmbedInBoxWithAccessChecker(id, boxID, nil)
-}
-
 // EmbedBlockAccessChecker 判断嵌入查询结果块是否允许返回。
 type EmbedBlockAccessChecker func(blockID string) bool
 
@@ -1150,15 +1215,6 @@ func GetBlockDOMWithEmbedInBoxWithAccessChecker(id, boxID string, accessChecker 
 	doms := GetBlockDOMsWithEmbedInBoxWithAccessChecker([]string{id}, boxID, accessChecker)
 	ret = doms[id]
 	return
-}
-
-func GetBlockDOMsWithEmbed(ids []string) (ret map[string]string) {
-	return GetBlockDOMsWithEmbedInBox(ids, "")
-}
-
-// GetBlockDOMsWithEmbedInBox 渲染指定笔记本内包含嵌入块的 DOM。boxID 为空时仅查询普通全局库。
-func GetBlockDOMsWithEmbedInBox(ids []string, boxID string) (ret map[string]string) {
-	return GetBlockDOMsWithEmbedInBoxWithAccessChecker(ids, boxID, nil)
 }
 
 // GetBlockDOMsWithEmbedInBoxWithAccessChecker 按访问权限渲染指定笔记本内包含嵌入块的 DOM。
@@ -1202,13 +1258,16 @@ func GetBlockDOMsWithEmbedInBoxWithAccessChecker(ids []string, boxID string, acc
 	return
 }
 
-func resolveEmbedContent(n *ast.Node, luteEngine *lute.Lute) {
-	resolveEmbedContentInBox(n, luteEngine, "", nil)
-}
-
 // loadTreeForBlockDOM 按指定 box 加载树，空 box 不回退搜索已打开的加密笔记本。
 func loadTreeForBlockDOM(id, boxID string) *parse.Tree {
 	bt := treenode.GetBlockTreeInBox(id, boxID)
+	if nil == bt {
+		block := sql.GetBlockInBox(id, boxID)
+		if nil == block {
+			return nil
+		}
+		bt = treenode.GetBlockTreeInBox(block.RootID, boxID)
+	}
 	if nil == bt {
 		return nil
 	}
@@ -1235,7 +1294,7 @@ func resolveEmbedContentInBox(n *ast.Node, luteEngine *lute.Lute, boxID string, 
 		stmt = strings.ReplaceAll(stmt, editor.IALValEscNewLine, "\n")
 
 		// 执行查询获取嵌入的块
-		sqlBlocks := sql.SelectBlocksRawStmtInBox(stmt, 1, Conf.Search.Limit, boxID)
+		sqlBlocks := sql.SelectBlocksRawStmtInBox(stmt, 1, Conf.Search.Load().Limit, boxID)
 		sqlBlocks = filterEmbedBlocksByAccess(sqlBlocks, accessChecker)
 
 		// 收集所有嵌入块的内容 HTML
@@ -1302,16 +1361,16 @@ func filterEmbedBlocksByAccess(blocks []*sql.Block, accessChecker EmbedBlockAcce
 	return
 }
 
+var (
+	embedHTMLPattern    = regexp.MustCompile(`<div[^>]*data-type="NodeBlockQueryEmbed"[^>]*embed-content="[^"]*"[^>]*>`)
+	embedContentPattern = regexp.MustCompile(`embed-content="([^"]*)"`)
+)
+
 func processEmbedHTML(htmlStr string) string {
 	// 使用正则表达式查找所有带有 embed-content 属性的嵌入块
-	embedPattern := `<div[^>]*data-type="NodeBlockQueryEmbed"[^>]*embed-content="[^"]*"[^>]*>`
-	re := regexp.MustCompile(embedPattern)
-
-	return re.ReplaceAllStringFunc(htmlStr, func(match string) string {
+	return embedHTMLPattern.ReplaceAllStringFunc(htmlStr, func(match string) string {
 		// 提取 embed-content 属性值
-		contentPattern := `embed-content="([^"]*)"`
-		contentRe := regexp.MustCompile(contentPattern)
-		contentMatches := contentRe.FindStringSubmatch(match)
+		contentMatches := embedContentPattern.FindStringSubmatch(match)
 
 		if len(contentMatches) > 1 {
 			embedContent := contentMatches[1]
@@ -1319,7 +1378,7 @@ func processEmbedHTML(htmlStr string) string {
 			embedContent = html.UnescapeString(embedContent)
 
 			// 移除 embed-content 属性，避免在最终 HTML 中显示
-			cleanMatch := contentRe.ReplaceAllString(match, "")
+			cleanMatch := embedContentPattern.ReplaceAllString(match, "")
 
 			// 将内容插入到嵌入块内部
 			return cleanMatch + embedContent + "</div>"
@@ -1446,7 +1505,7 @@ func compareBlockKramdownIALAttrNames(a, b string) int {
 }
 
 func isSystemManagedBlockKramdownIALAttr(name string) bool {
-	return "custom-avs" == name || "custom-heading-mode" == name || "custom-reminder-wechat" == name ||
+	return av.NodeAttrNameAvs == name || embedHeadingModeAttr == name || embedHeadingLevelAttr == name || reminderWechatAttr == name ||
 		strings.HasPrefix(name, "custom-riff-") || strings.HasPrefix(name, "custom-sy-")
 }
 
@@ -1456,6 +1515,51 @@ type ChildBlock struct {
 	SubType  string `json:"subType,omitempty"`
 	Content  string `json:"content,omitempty"`
 	Markdown string `json:"markdown,omitempty"`
+}
+
+const maxOrderedListNumber = 999999999
+
+// GetOrderedListContinueStartInBox 返回同一父级中最近前置有序列表的续编起始编号。
+func GetOrderedListContinueStartInBox(id, boxID string) (start int, found bool) {
+	tree := loadTreeForBlockDOM(id, boxID)
+	if nil == tree {
+		return
+	}
+	return getOrderedListContinueStartFromTree(id, tree)
+}
+
+func getOrderedListContinueStartFromTree(id string, tree *parse.Tree) (start int, found bool) {
+	node := treenode.GetNodeInTree(tree, id)
+	if nil == node || ast.NodeList != node.Type || nil == node.ListData || 1 != node.ListData.Typ {
+		return
+	}
+
+	itemCount := 0
+	for item := node.FirstChild; nil != item; item = item.Next {
+		if ast.NodeListItem == item.Type {
+			itemCount++
+		}
+	}
+	if 1 > itemCount {
+		return
+	}
+
+	for previous := node.Previous; nil != previous; previous = previous.Previous {
+		if ast.NodeList != previous.Type || nil == previous.ListData || 1 != previous.ListData.Typ {
+			continue
+		}
+		for item := previous.LastChild; nil != item; item = item.Previous {
+			if ast.NodeListItem != item.Type || nil == item.ListData {
+				continue
+			}
+			if 0 > item.ListData.Num || item.ListData.Num > maxOrderedListNumber-itemCount {
+				return
+			}
+			return item.ListData.Num + 1, true
+		}
+		return
+	}
+	return
 }
 
 func GetChildBlocks(id string) (ret []*ChildBlock) {
@@ -1524,10 +1628,6 @@ func childBlockFromNode(node *ast.Node, tree *parse.Tree) *ChildBlock {
 		Content:  block.Content,
 		Markdown: block.Markdown,
 	}
-}
-
-func GetTailChildBlocks(id string, n int) (ret []*ChildBlock) {
-	return GetTailChildBlocksInBox(id, n, "")
 }
 
 // GetTailChildBlocksInBox 返回指定笔记本边界内末尾的子块。
@@ -1652,26 +1752,7 @@ func getEmbeddedBlock(trees map[string]*parse.Tree, sqlBlock *sql.Block, heading
 		return
 	}
 
-	var nodes []*ast.Node
-	// headingMode: 0=显示标题与下方的块，1=仅显示标题，2=仅显示标题下方的块
-	if ast.NodeHeading == def.Type {
-		if 1 == headingMode {
-			// 仅显示标题
-			nodes = append(nodes, def)
-		} else if 2 == headingMode {
-			// 仅显示标题下方的块（去除标题）
-			if !treenode.IsSelfFolded(def) {
-				nodes = append(nodes, treenode.HeadingChildren(def)...)
-			}
-		} else {
-			// 0: 显示标题与下方的块
-			nodes = append(nodes, def)
-			nodes = append(nodes, treenode.HeadingChildren(def)...)
-		}
-	} else {
-		// 非标题块，直接添加
-		nodes = append(nodes, def)
-	}
+	nodes := embeddedBlockNodes(def, headingMode)
 
 	var b *treenode.BlockTree
 	if IsEncryptedBox(sqlBlock.Box) {
@@ -1717,6 +1798,30 @@ func getEmbeddedBlock(trees map[string]*parse.Tree, sqlBlock *sql.Block, heading
 	if 1 > len(blockPaths) {
 		blockPaths = []*BlockPath{}
 	}
+	return
+}
+
+func embeddedBlockNodes(def *ast.Node, headingMode int) (ret []*ast.Node) {
+	if nil == def {
+		return
+	}
+	if ast.NodeHeading != def.Type {
+		return []*ast.Node{def}
+	}
+
+	// headingMode：0 表示显示标题与下方的块，1 表示仅显示标题，2 表示仅显示标题下方的块。
+	if 1 == headingMode {
+		return []*ast.Node{def}
+	}
+	if 2 == headingMode {
+		if !treenode.IsSelfFolded(def) {
+			ret = append(ret, treenode.HeadingChildren(def)...)
+		}
+		return
+	}
+
+	ret = append(ret, def)
+	ret = append(ret, treenode.HeadingChildren(def)...)
 	return
 }
 

@@ -2,6 +2,7 @@ import {setPosition} from "../../util/setPosition";
 import {appearanceMenu, fontEvent, limitRecentFontStyleRows} from "./Font";
 import {toolbarKeyToMenu} from "./util";
 import {matchHotKey} from "../util/hotKey";
+import {closeSubElement} from "./subElementLifecycle";
 
 const TABLE_CELL_INLINE_TYPES = ["strong", "em", "u", "s", "mark", "sup", "sub", "kbd", "code"];
 
@@ -22,6 +23,7 @@ export const openTableCellAppearance = (protyle: IProtyle, cellElements: HTMLTab
     }
     window.siyuan.menus.menu.remove();
     protyle.toolbar.element.classList.add("fn__none");
+    closeSubElement(protyle.toolbar);
     protyle.toolbar.subElement.innerHTML = "";
     protyle.toolbar.subElement.style.width = "";
     protyle.toolbar.subElement.style.padding = "";
@@ -29,12 +31,11 @@ export const openTableCellAppearance = (protyle: IProtyle, cellElements: HTMLTab
     const appearanceElement = appearanceMenu(protyle, [fontElement], (type, color) => {
         applyTableCellFontStyle(protyle, cells, type, color);
         onApply?.();
-    });
+    }, cells);
     protyle.toolbar.subElement.append(appearanceElement);
     protyle.toolbar.subElement.style.zIndex = (++window.siyuan.zIndex).toString();
     protyle.toolbar.subElement.classList.remove("fn__none");
     limitRecentFontStyleRows(appearanceElement);
-    protyle.toolbar.subElementCloseCB = undefined;
     const rect = cells[0].getBoundingClientRect();
     const gap = 4;
     const top = rect.bottom + gap;
@@ -68,7 +69,7 @@ export const getTableCellTextStyleMenus = (protyle: IProtyle, cellElements: HTML
         click: () => openTableCellAppearance(protyle, cellElements, onApply),
     });
     menus.push({
-        icon: "iconClear",
+        icon: "iconEraser",
         label: window.siyuan.languages.clearInline,
         accelerator: window.siyuan.config.keymap.editor.insert.clearInline.custom,
         click: () => {
@@ -84,7 +85,7 @@ export const applyTableCellStyleHotkey = (protyle: IProtyle, cellElements: HTMLT
     if (event.repeat || cellElements.length === 0) {
         return false;
     }
-    if (matchHotKey(window.siyuan.config.keymap.editor.insert.lastUsed.custom, event)) {
+    if (matchHotKey(window.siyuan.config.keymap.editor.insert.lastUsed, event)) {
         fontEvent(protyle, [], undefined, undefined, false, (type, color) => {
             applyTableCellFontStyle(protyle, cellElements, type, color);
             onApply?.();

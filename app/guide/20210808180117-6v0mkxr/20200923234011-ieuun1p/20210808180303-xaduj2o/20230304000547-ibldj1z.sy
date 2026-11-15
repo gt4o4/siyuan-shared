@@ -6,7 +6,7 @@
 		"id": "20230304000547-ibldj1z",
 		"title": "Artificial Intelligence",
 		"type": "doc",
-		"updated": "20260804233000"
+		"updated": "20261029135500"
 	},
 	"Children": [
 		{
@@ -15,7 +15,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20260804170000-qss2syl",
-				"updated": "20260804180000"
+				"updated": "20261024164212"
 			},
 			"Children": [
 				{
@@ -39,12 +39,58 @@
 			]
 		},
 		{
+			"ID": "20261015225720-okoj5kh",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261015225720-okoj5kh",
+				"updated": "20261024164212"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "To use a ChatGPT account, open its provider configuration in "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "Settings"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " - "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "Artificial Intelligence"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " and select and save an account for this workspace on the current device. Credentials and account bindings stay on this device and are excluded from conf.json and settings exports."
+				}
+			]
+		},
+		{
+			"ID": "20261024164212-mi8ljln",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261024164212-mi8ljln",
+				"updated": "20261024164212"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "Sign in and select an account separately on each device. Copying configuration then preserves the destination device’s bindings for existing providers. Select an account again after adding a provider or moving the workspace directory. After upgrading, select an account once more; existing sign-in credentials are retained."
+				}
+			]
+		},
+		{
 			"ID": "20260804170002-24z0hpx",
 			"Type": "NodeHeading",
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20260804170002-24z0hpx",
-				"updated": "20260804180000"
+				"updated": "20261016202856"
 			},
 			"Children": [
 				{
@@ -75,7 +121,7 @@
 			},
 			"Properties": {
 				"id": "20260804170004-9yg5i8j",
-				"updated": "20260804180000"
+				"updated": "20261016202856"
 			},
 			"Children": [
 				{
@@ -204,7 +250,7 @@
 					},
 					"Properties": {
 						"id": "20260804170009-l87zz79",
-						"updated": "20260804180000"
+						"updated": "20261016202856"
 					},
 					"Children": [
 						{
@@ -212,7 +258,7 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20260804170010-wxcjvxu",
-								"updated": "20260804180000"
+								"updated": "20261016202856"
 							},
 							"Children": [
 								{
@@ -226,16 +272,16 @@
 								},
 								{
 									"Type": "NodeText",
-									"Data": " to open the dialog, or use "
+									"Data": " to open the writing dialog. For AI editing, select text and choose "
 								},
 								{
 									"Type": "NodeTextMark",
 									"TextMarkType": "kbd",
-									"TextMarkTextContent": "Artificial Intelligence"
+									"TextMarkTextContent": "AI Edit"
 								},
 								{
 									"Type": "NodeText",
-									"Data": " in the block menu for more actions"
+									"Data": " in the selection toolbar, or choose it from the block menu. The result streams into a panel where you can replace or insert it, copy it, retry, stop, or discard it. Replacement is available only for a supported selection within one block. Cross-block selections, complex sources, and sources changed while generating can still use insertion"
 								}
 							]
 						}
@@ -324,6 +370,46 @@
 			]
 		},
 		{
+			"ID": "20260920123707-bayhe2r",
+			"Type": "NodeHeading",
+			"Properties": {
+				"id": "20260920123707-bayhe2r",
+				"updated": "20261023110951"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "Decision model"
+				}
+			],
+			"HeadingLevel": 2
+		},
+		{
+			"ID": "20260920123707-dn6uk2y",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20260920123707-dn6uk2y",
+				"updated": "20261023110951"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "The agent can use TypeSafe System One (Jev) or OpenAI Decisions API for classification, filtering and scoring. See "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "block-ref",
+					"TextMarkTextContent": "Decision model",
+					"TextMarkBlockRefID": "20260920123707-taf3ttd",
+					"TextMarkBlockRefSubtype": "s"
+				},
+				{
+					"Type": "NodeText",
+					"Data": "."
+				}
+			]
+		},
+		{
 			"ID": "20260804233220-mcpenh1",
 			"Type": "NodeHeading",
 			"HeadingLevel": 2,
@@ -355,6 +441,46 @@
 					"TextMarkType": "block-ref",
 					"TextMarkTextContent": "MCP Service",
 					"TextMarkBlockRefID": "20260804223002-mcpsv03",
+					"TextMarkBlockRefSubtype": "s"
+				},
+				{
+					"Type": "NodeText",
+					"Data": "."
+				}
+			]
+		},
+		{
+			"ID": "20261029051700-k3s9gxa",
+			"Type": "NodeHeading",
+			"HeadingLevel": 2,
+			"Properties": {
+				"id": "20261029051700-k3s9gxa",
+				"updated": "20261029135500"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "Long-term memory"
+				}
+			]
+		},
+		{
+			"ID": "20261029135500-80jfq5t",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261029135500-80jfq5t",
+				"updated": "20261029135500"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "Long-term memory retains facts and preferences across conversations. For setup, management and privacy, see "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "block-ref",
+					"TextMarkTextContent": "Long-term memory",
+					"TextMarkBlockRefID": "20261029135500-sc9beol",
 					"TextMarkBlockRefSubtype": "s"
 				},
 				{

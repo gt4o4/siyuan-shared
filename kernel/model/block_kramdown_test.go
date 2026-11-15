@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
@@ -30,7 +18,7 @@ func TestCanonicalBlockKramdownIAL(t *testing.T) {
 	ial := testBlockKramdownIAL(
 		"custom-z", "title-img", "fold", "style", "icon", "tags", "bookmark", "memo", "alias", "name", "title",
 		"type", "updated", "id", "custom-sy-readonly", "custom-riff-decks", "custom-reminder-wechat",
-		"custom-heading-mode", "custom-avs", "unknown", "heading-fold", "custom-a",
+		"custom-heading-mode", "custom-heading-level", "custom-avs", "unknown", "heading-fold", "custom-a",
 	)
 	originalNames := blockKramdownIALAttrNames(ial)
 
@@ -38,7 +26,7 @@ func TestCanonicalBlockKramdownIAL(t *testing.T) {
 
 	assertBlockKramdownIALAttrNames(t, canonical, []string{
 		"id", "updated", "type", "title", "name", "alias", "memo", "bookmark", "tags", "icon", "title-img", "style",
-		"fold", "custom-avs", "custom-heading-mode", "custom-reminder-wechat", "custom-riff-decks", "custom-sy-readonly",
+		"fold", "custom-avs", "custom-heading-level", "custom-heading-mode", "custom-reminder-wechat", "custom-riff-decks", "custom-sy-readonly",
 		"custom-a", "custom-z", "heading-fold", "unknown",
 	})
 	assertBlockKramdownIALAttrNames(t, ial, originalNames)

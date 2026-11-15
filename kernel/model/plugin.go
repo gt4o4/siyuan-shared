@@ -1,26 +1,15 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
+	"slices"
 	"strings"
 	"sync"
 
@@ -28,19 +17,22 @@ import (
 	"github.com/siyuan-note/filelock"
 	"github.com/siyuan-note/logging"
 	"github.com/siyuan-note/siyuan/kernel/bazaar"
+	"github.com/siyuan-note/siyuan/kernel/conf"
 	"github.com/siyuan-note/siyuan/kernel/util"
 	"golang.org/x/sync/singleflight"
 )
 
 // Petal represents a plugin's management status.
 type Petal struct {
-	Name              string `json:"name"`              // Plugin name
-	DisplayName       string `json:"displayName"`       // Plugin display name
-	Version           string `json:"version"`           // Plugin version
-	Enabled           bool   `json:"enabled"`           // Whether enabled
-	Incompatible      bool   `json:"incompatible"`      // Whether incompatible
-	DisabledInPublish bool   `json:"disabledInPublish"` // Whether disabled in publish mode
-	DisallowInstall   bool   `json:"disallowInstall"`   // Whether disallow install
+	Name                  string `json:"name"`                     // Plugin name
+	DisplayName           string `json:"displayName"`              // Plugin display name
+	Version               string `json:"version"`                  // Plugin version
+	Enabled               bool   `json:"enabled"`                  // Whether enabled
+	Incompatible          bool   `json:"incompatible"`             // Whether incompatible
+	DisabledInPublish     bool   `json:"disabledInPublish"`        // Whether disabled in publish mode
+	UserDisabledInPublish bool   `json:"userDisabledInPublish"`    // 是否由用户在发布服务中禁用
+	DisallowInstall       bool   `json:"disallowInstall"`          // Whether disallow install
+	SettingsWindow        bool   `json:"settingsWindow,omitempty"` // 已验证设置窗口运行声明
 
 	JS     string         `json:"js"`     // JS code
 	CSS    string         `json:"css"`    // CSS code
@@ -62,8 +54,6 @@ var (
 )
 
 func SetPetalEnabled(name string, enabled bool) (ret *Petal, err error) {
-	petals := getPetals()
-
 	found, version, displayName, incompatible, disabledInPublish, disallowInstall, kernelIncompatible := bazaar.ParseInstalledPlugin(name, "")
 	if !found {
 		err = fmt.Errorf("plugin [%s] not found", name)
@@ -71,30 +61,26 @@ func SetPetalEnabled(name string, enabled bool) (ret *Petal, err error) {
 		return
 	}
 
-	ret = getPetalByName(name, petals)
-	if nil == ret {
-		ret = &Petal{
-			Name: name,
+	ret, err = updatePetal(name, func(petal *Petal) error {
+		petal.Version = version
+		petal.DisplayName = displayName
+		petal.Enabled = enabled
+		petal.Incompatible = incompatible
+		petal.DisabledInPublish = disabledInPublish
+		petal.DisallowInstall = disallowInstall
+		petal.Kernel = KernelPetal{
+			Incompatible: kernelIncompatible,
 		}
-		petals = append(petals, ret)
-	}
-	ret.Version = version
-	ret.DisplayName = displayName
-	ret.Enabled = enabled
-	ret.Incompatible = incompatible
-	ret.DisabledInPublish = disabledInPublish
-	ret.DisallowInstall = disallowInstall
-	ret.Kernel = KernelPetal{
-		Incompatible: kernelIncompatible,
-	}
 
-	if enabled && disallowInstall {
-		err = fmt.Errorf("require upgrade SiYuan to use this plugin [%s]", name)
+		if enabled && disallowInstall {
+			return fmt.Errorf("require upgrade SiYuan to use this plugin [%s]", name)
+		}
+		return nil
+	})
+	if err != nil {
 		logging.LogInfof("%s", err)
 		return
 	}
-
-	savePetals(petals)
 
 	loadCode(ret)
 
@@ -107,6 +93,47 @@ func SetPetalEnabled(name string, enabled bool) (ret *Petal, err error) {
 		if OnKernelPluginStop != nil {
 			OnKernelPluginStop(ret)
 		}
+	}
+	return
+}
+
+func SetPetalPublishEnabled(name string, enabled bool) (ret *Petal, err error) {
+	found, version, displayName, incompatible, disabledInPublish, disallowInstall, kernelIncompatible := bazaar.ParseInstalledPlugin(name, "")
+	if !found {
+		err = fmt.Errorf("plugin [%s] not found", name)
+		logging.LogErrorf("%s", err)
+		return
+	}
+
+	ret, err = updatePetal(name, func(petal *Petal) error {
+		petal.Version = version
+		petal.DisplayName = displayName
+		petal.Incompatible = incompatible
+		petal.DisabledInPublish = disabledInPublish
+		petal.UserDisabledInPublish = !enabled
+		petal.DisallowInstall = disallowInstall
+		petal.Kernel.Incompatible = kernelIncompatible
+		return nil
+	})
+	return
+}
+
+func updatePetal(name string, update func(petal *Petal) error) (ret *Petal, err error) {
+	petalsStoreLock.Lock()
+	defer petalsStoreLock.Unlock()
+
+	petals := getPetals0()
+	ret = getPetalByName(name, petals)
+	if ret == nil {
+		ret = &Petal{Name: name}
+		petals = append(petals, ret)
+	}
+	if err = update(ret); err != nil {
+		return
+	}
+	err = savePetals0(petals)
+	if err == nil {
+		IncSyncIfNeeded(filepath.Join(util.DataDir, "storage", "petal", "petals.json"))
 	}
 	return
 }
@@ -130,12 +157,17 @@ var loadPetalsFlight singleflight.Group
 
 // IsPetalsEnabled returns whether petals are enabled and trusted to be loaded
 func IsPetalsEnabled() bool {
-	if Conf.Bazaar.PetalDisabled {
+	return petalsEnabled(Conf.Bazaar.Load())
+}
+
+func petalsEnabled(confBazaarSnapshot *conf.Bazaar) bool {
+
+	if confBazaarSnapshot.PetalDisabled {
 		return false
 	}
 
-	if !Conf.Bazaar.Trust {
-		// 移动端没有集市模块，所以要默认开启，桌面端和 Docker 容器需要用户手动确认过信任后才能开启
+	if !confBazaarSnapshot.Trust {
+		// 移动端为了兼容通过同步获得的已有插件，不要求先确认集市信任；桌面端和 Docker 容器仍需用户手动确认
 		if util.Container == util.ContainerStd || util.Container == util.ContainerDocker {
 			return false
 		}
@@ -143,11 +175,30 @@ func IsPetalsEnabled() bool {
 	return true
 }
 
-func LoadPetals(frontend string, isPublish bool) (ret []*Petal) {
+func normalizePetalNames(names []string) []string {
+	if names == nil {
+		return nil
+	}
+	ret := append([]string{}, names...)
+	slices.Sort(ret)
+	return slices.Compact(ret)
+}
+
+func loadPetalsKey(frontend string, isPublish bool, names []string) string {
+	key, _ := json.Marshal(struct {
+		Frontend  string
+		IsPublish bool
+		Names     []string
+	}{frontend, isPublish, names})
+	return "loadPetals:" + string(key)
+}
+
+func LoadPetals(frontend string, isPublish bool, names []string) (ret []*Petal) {
 	// 调用 setPetalEnabled 接口之后推送消息到所有前端实例，接着会同时调用 loadPetals 接口，合并相同类型的请求为一次执行
-	key := "loadPetals:" + frontend + ":" + strconv.FormatBool(isPublish)
+	names = normalizePetalNames(names)
+	key := loadPetalsKey(frontend, isPublish, names)
 	v, err, _ := loadPetalsFlight.Do(key, func() (any, error) {
-		return loadPetals(frontend, isPublish, false), nil
+		return loadPetals(frontend, isPublish, false, names), nil
 	})
 	if err != nil {
 		return []*Petal{}
@@ -157,7 +208,7 @@ func LoadPetals(frontend string, isPublish bool) (ret []*Petal) {
 
 func LoadKernelPetals() (ret []*Petal) {
 	v, err, _ := loadPetalsFlight.Do("loadKernelPetals", func() (any, error) {
-		return loadPetals("", false, true), nil
+		return loadPetals("", false, true, nil), nil
 	})
 	if err != nil {
 		return []*Petal{}
@@ -165,17 +216,50 @@ func LoadKernelPetals() (ret []*Petal) {
 	return v.([]*Petal)
 }
 
-func loadPetals(frontend string, isPublish, isKernel bool) (ret []*Petal) {
+// LoadSettingsWindowPetals 保留启用、信任、前端兼容和发布权限检查，只返回主动声明支持设置窗口的插件。
+func LoadSettingsWindowPetals(frontend string, isPublish bool, names []string) (ret []*Petal) {
+	ret = []*Petal{}
+	for _, petal := range LoadPetals(frontend, isPublish, names) {
+		manifest, err := bazaar.ParsePackageJSON(filepath.Join(util.DataDir, "plugins", petal.Name, "plugin.json"))
+		if err == nil && bazaar.IsValidInstalledPackage(manifest, petal.Name) && manifest.SettingsWindow {
+			copy := *petal
+			copy.SettingsWindow = true
+			ret = append(ret, &copy)
+		}
+	}
+	return
+}
+
+func loadPetals(frontend string, isPublish, isKernel bool, names []string) (ret []*Petal) {
 	ret = []*Petal{}
 
 	if !IsPetalsEnabled() {
 		return
 	}
+	if names != nil && len(names) == 0 {
+		return
+	}
+	selected := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		selected[name] = struct{}{}
+	}
 
 	var petalNames []string
 	petals := getPetals()
 	for _, petal := range petals {
-		_, petal.Version, petal.DisplayName, petal.Incompatible, petal.DisabledInPublish, petal.DisallowInstall, petal.Kernel.Incompatible = bazaar.ParseInstalledPlugin(petal.Name, frontend)
+		if names != nil {
+			if _, ok := selected[petal.Name]; !ok {
+				continue
+			}
+		}
+		found, version, displayName, incompatible, disabledInPublish, disallowInstall, kernelIncompatible :=
+			bazaar.ParseInstalledPlugin(petal.Name, frontend)
+		if !found {
+			logging.LogWarnf("plugin [%s] manifest is invalid, skip loading", petal.Name)
+			continue
+		}
+		petal.Version, petal.DisplayName, petal.Incompatible, petal.DisabledInPublish, petal.DisallowInstall,
+			petal.Kernel.Incompatible = version, displayName, incompatible, disabledInPublish, disallowInstall, kernelIncompatible
 		if !petal.Enabled {
 			// disabled plugin
 			continue
@@ -193,11 +277,6 @@ func loadPetals(frontend string, isPublish, isKernel bool) (ret []*Petal) {
 				// incompatible client plugin
 				continue
 			}
-
-			if isPublish && petal.DisabledInPublish {
-				// disabled plugin in publish mode
-				continue
-			}
 		}
 
 		if petal.DisallowInstall {
@@ -206,8 +285,17 @@ func loadPetals(frontend string, isPublish, isKernel bool) (ret []*Petal) {
 			logging.LogInfof("plugin [%s] disallowed install, auto disabled", petal.Name)
 			continue
 		}
+		if isPublish && !isPetalAccessableInPublish(petal, disabledInPublish, disallowInstall) {
+			continue
+		}
 
-		loadCode(petal)
+		if isPublish {
+			if !loadPluginPublishCode(petal) {
+				continue
+			}
+		} else {
+			loadCode(petal)
+		}
 		if isKernel {
 			if !petal.Kernel.Existed {
 				logging.LogWarnf("plugin [%s] kernel.js not found, skip loading as kernel plugin", petal.Name)
@@ -322,10 +410,12 @@ var petalsStoreLock = sync.Mutex{}
 func savePetals(petals []*Petal) {
 	petalsStoreLock.Lock()
 	defer petalsStoreLock.Unlock()
-	savePetals0(petals)
+	if err := savePetals0(petals); err == nil {
+		IncSyncIfNeeded(filepath.Join(util.DataDir, "storage", "petal", "petals.json"))
+	}
 }
 
-func savePetals0(petals []*Petal) {
+func savePetals0(petals []*Petal) (err error) {
 	if 1 > len(petals) {
 		petals = []*Petal{}
 	}
@@ -341,12 +431,16 @@ func savePetals0(petals []*Petal) {
 		logging.LogErrorf("write petals [%s] failed: %s", confPath, err)
 		return
 	}
+	return
 }
 
 func getPetals() (ret []*Petal) {
 	petalsStoreLock.Lock()
 	defer petalsStoreLock.Unlock()
+	return getPetals0()
+}
 
+func getPetals0() (ret []*Petal) {
 	ret = []*Petal{}
 	petalDir := filepath.Join(util.DataDir, "storage", "petal")
 	if err := os.MkdirAll(petalDir, 0755); err != nil {

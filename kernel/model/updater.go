@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
@@ -21,9 +9,9 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -32,27 +20,28 @@ import (
 	"github.com/88250/gulu"
 	"github.com/imroc/req/v3"
 	"github.com/siyuan-note/logging"
+	"github.com/siyuan-note/siyuan/kernel/conf"
 	"github.com/siyuan-note/siyuan/kernel/util"
 	"golang.org/x/mod/semver"
 )
 
-func getNewVerInstallPkgPath() string {
+func getNewVerInstallPkgPath(preserve bool) string {
 	if skipNewVerInstallPkg() {
 		return ""
 	}
 
-	downloadPkgURLs, checksum, err := getUpdatePkg()
-	if err != nil {
-		return ""
+	for _, installDir := range []string{sharedInstallPackageDir(), filepath.Join(util.TempDir, "install")} {
+		if path := readyInstallPackagePath(installDir, util.Ver,
+			Conf.LoadSystem().UpdateChannel, currentInstallPackageSuffix(), Conf.CookieKey, preserve); path != "" {
+			return path
+		}
 	}
+	return ""
+}
 
-	pkg := path.Base(downloadPkgURLs[0])
-	pkgPath := filepath.Join(util.TempDir, "install", pkg)
-	localChecksum, _ := sha256Hash(pkgPath)
-	if checksum != localChecksum {
-		return ""
-	}
-	return pkgPath
+type installPackageDownload struct {
+	Metadata installPackageMetadata
+	URLs     []string
 }
 
 var checkDownloadInstallPkgLock = sync.Mutex{}
@@ -61,7 +50,7 @@ var errUpdatePackageUnavailable = errors.New("update package is unavailable")
 func checkDownloadInstallPkg(notifyPackageUnavailable bool) {
 	defer logging.Recover()
 
-	if skipNewVerInstallPkg() {
+	if skipNewVerInstallPkg() || !Conf.LoadSystem().DownloadInstallPkg {
 		return
 	}
 
@@ -70,7 +59,7 @@ func checkDownloadInstallPkg(notifyPackageUnavailable bool) {
 	}
 	defer checkDownloadInstallPkgLock.Unlock()
 
-	downloadPkgURLs, checksum, err := getUpdatePkg()
+	pkg, err := getUpdatePkg()
 	if err != nil {
 		if notifyPackageUnavailable && errors.Is(err, errUpdatePackageUnavailable) {
 			if release, releaseErr := getUpdateRelease(false); nil == releaseErr && !isVersionUpToDate(release.Version) {
@@ -80,35 +69,43 @@ func checkDownloadInstallPkg(notifyPackageUnavailable bool) {
 		return
 	}
 
-	existingPkgPath := getNewVerInstallPkgPath()
+	installUpdatePackage(pkg)
+}
+
+func installUpdatePackage(pkg *installPackageDownload) {
+	existingPkgPath, err := reuseInstallPackage(sharedInstallPackageDir(), &pkg.Metadata, Conf.CookieKey)
+	if err != nil {
+		logging.LogErrorf("prepare existing install package failed: %s", err)
+		return
+	}
 	if "" != existingPkgPath {
-		// 存在经过 sha256Hash 检查的安装包
+		clearOldInstallPackagesLocked(installPackageVersion(filepath.Base(existingPkgPath)), existingPkgPath)
 		util.PushUpdateMsg("update-pkg-ready", Conf.Language(62), 15*1000)
 		return
 	}
 
-	util.PushUpdateMsg("update-pkg-downloading", Conf.Language(103), 1000*7)
-	success := false
-	for _, downloadPkgURL := range downloadPkgURLs {
-		err = downloadInstallPkg(downloadPkgURL, checksum)
-		if err == nil {
-			success = true
-			break
-		}
-	}
-	if success {
+	if err = downloadInstallPkgSources(pkg.URLs, &pkg.Metadata); err == nil {
+		pkgPath := filepath.Join(sharedInstallPackageDir(), pkg.Metadata.FileName)
+		clearOldInstallPackagesLocked(installPackageVersion(filepath.Base(pkgPath)), pkgPath)
 		util.PushUpdateMsg("update-pkg-ready", Conf.Language(62), 15*1000)
-	} else {
-		util.PushUpdateMsg("update-pkg-downloading", Conf.Language(104), 7000)
+		return
 	}
+	if errors.Is(err, errInstallPackageDownloadBusy) {
+		util.PushUpdateMsg("update-pkg-downloading", Conf.Language(421), 7000)
+		return
+	}
+	util.PushUpdateMsg("update-pkg-downloading", Conf.Language(104), 7000)
 }
 
-func getUpdatePkg() (downloadPkgURLs []string, checksum string, err error) {
+func getUpdatePkg() (ret *installPackageDownload, err error) {
 	release, err := getUpdateRelease(false)
 	if err != nil {
 		return
 	}
+	return getReleaseInstallPackage(release)
+}
 
+func getReleaseInstallPackage(release *updateRelease) (ret *installPackageDownload, err error) {
 	if isVersionUpToDate(release.Version) {
 		err = fmt.Errorf("version is up to date")
 		return
@@ -128,29 +125,134 @@ func getUpdatePkg() (downloadPkgURLs []string, checksum string, err error) {
 		err = fmt.Errorf("%w: [%s] checksum is unavailable", errUpdatePackageUnavailable, pkgName)
 		return
 	}
-	downloadPkgURLs = append(downloadPkgURLs, pkg.URLs...)
-	checksum = pkg.Checksum
+	ret = &installPackageDownload{
+		Metadata: installPackageMetadata{
+			FormatVersion: installPackageMetadataVersion,
+			Version:       release.Version,
+			Channel:       release.Channel,
+			FileName:      pkgName,
+			Checksum:      pkg.Checksum,
+		},
+		URLs: append([]string(nil), pkg.URLs...),
+	}
 	return
 }
 
-func downloadInstallPkg(pkgURL, checksum string) (err error) {
-	if "" == pkgURL || "" == checksum {
-		err = errors.New("update package URL or checksum is empty")
+// DownloadUpdate 只下载当前通道中与通知版本一致的安装包，不修改自动下载设置。
+func DownloadUpdate(version string) error {
+	if skipNewVerInstallPkg() || version == "" {
+		return errUpdatePackageUnavailable
+	}
+	release, err := getUpdateRelease(false)
+	if err != nil {
+		return err
+	}
+	if release.Version != version {
+		pushNewVersionNotification(release)
+		return errUpdatePackageUnavailable
+	}
+	pkg, err := getReleaseInstallPackage(release)
+	if err != nil {
+		return err
+	}
+	go func() {
+		defer logging.Recover()
+		if !checkDownloadInstallPkgLock.TryLock() {
+			util.PushUpdateMsg("update-pkg-downloading", Conf.Language(421), 7000)
+			return
+		}
+		defer checkDownloadInstallPkgLock.Unlock()
+		installUpdatePackage(pkg)
+	}()
+	return nil
+}
+
+func downloadInstallPkg(pkgURL string, metadata *installPackageMetadata) (err error) {
+	return downloadInstallPkgSources([]string{pkgURL}, metadata)
+}
+
+// downloadInstallPkgSources 在下载锁保护下并发探测各源吞吐量，让最快的源在同一个连接上继续下载。
+// 探测即下载：各源都在真实读取，胜出源的探测字节直接落盘后继续读完，其余源立即断开。
+// 胜出源失败时按原顺序重新完整下载，保持原有的顺序回退能力。
+func downloadInstallPkgSources(urls []string, metadata *installPackageMetadata) (err error) {
+	if !validInstallPackageMetadata(metadata) {
+		err = errors.New("update package metadata is invalid")
 		return
 	}
-
-	pkg := path.Base(pkgURL)
-	savePath := filepath.Join(util.TempDir, "install", pkg)
-	if gulu.File.IsExist(savePath) {
-		localChecksum, _ := sha256Hash(savePath)
-		if localChecksum == checksum {
+	if 1 > len(urls) {
+		err = errors.New("update package URL is invalid")
+		return
+	}
+	for _, pkgURL := range urls {
+		if "" == pkgURL {
+			err = errors.New("update package URL is invalid")
 			return
 		}
 	}
 
-	err = os.MkdirAll(filepath.Join(util.TempDir, "install"), 0755)
+	installDir := sharedInstallPackageDir()
+	lock, err := tryInstallPackageDownloadLock(installDir)
 	if err != nil {
-		logging.LogErrorf("create temp install dir failed: %s", err)
+		return err
+	}
+	defer lock.Close()
+	if existingPath, reuseErr := reuseInstallPackage(installDir, metadata, Conf.CookieKey); reuseErr != nil || existingPath != "" {
+		return reuseErr
+	}
+	if err = copyLegacyInstallPackage(filepath.Join(util.TempDir, "install"), installDir, metadata, Conf.CookieKey); err != nil {
+		return err
+	}
+	if existingPath, reuseErr := reuseInstallPackage(installDir, metadata, Conf.CookieKey); reuseErr != nil || existingPath != "" {
+		return reuseErr
+	}
+
+	// 探测阶段也在真实下载，先提示用户，避免这段时间看起来没有反应
+	util.PushUpdateMsg("update-pkg-downloading", Conf.Language(103), 7000)
+	if 2 > len(urls) {
+		if err = downloadInstallPkgURL(urls[0], installDir, metadata); nil == err {
+			logging.LogInfof("downloaded install package [%s]", urls[0])
+			util.PushStatusBar(Conf.Language(62))
+		}
+		return
+	}
+
+	if probeErr := probeAndDownloadInstallPkg(installDir, urls, metadata); nil != probeErr {
+		logging.LogWarnf("download install package from the fastest source failed: %s", probeErr)
+		if errors.Is(probeErr, errNoUsableInstallPkgSource) {
+			// 探测阶段每个源都拿不到可用连接，逐个重试不会改善
+			err = probeErr
+			return
+		}
+		for _, pkgURL := range urls {
+			if err = downloadInstallPkgURL(pkgURL, installDir, metadata); nil == err {
+				logging.LogInfof("downloaded install package [%s]", pkgURL)
+				util.PushStatusBar(Conf.Language(62))
+				return nil
+			}
+			logging.LogErrorf("download install package [%s] failed: %s", pkgURL, err)
+		}
+		return
+	}
+	util.PushStatusBar(Conf.Language(62))
+	return nil
+}
+
+// downloadInstallPkgURL 从单个源完整下载并发布安装包，调用方需持有下载锁。
+func downloadInstallPkgURL(pkgURL, installDir string, metadata *installPackageMetadata) (err error) {
+	pkg := metadata.FileName
+	savePath := filepath.Join(installDir, pkg)
+	temporaryFile, err := os.CreateTemp(installDir, pkg+".*.part")
+	if err != nil {
+		logging.LogErrorf("create temporary install package failed: %s", err)
+		return
+	}
+	temporaryPath := temporaryFile.Name()
+	defer func() {
+		if removeErr := os.Remove(temporaryPath); removeErr != nil && !os.IsNotExist(removeErr) {
+			logging.LogErrorf("remove incomplete install package [%s] failed: %s", temporaryPath, removeErr)
+		}
+	}()
+	if err = temporaryFile.Close(); err != nil {
 		return
 	}
 
@@ -161,26 +263,17 @@ func downloadInstallPkg(pkgURL, checksum string) (err error) {
 		// logging.LogDebugf("downloading install package [%s %s]", pkgURL, progress)
 		util.PushStatusBar(fmt.Sprintf(Conf.Language(133), progress))
 	}
-	_, err = client.R().SetOutputFile(savePath).SetDownloadCallbackWithInterval(callback, 1*time.Second).Get(pkgURL)
+	_, err = client.R().SetOutputFile(temporaryPath).SetDownloadCallbackWithInterval(callback, 1*time.Second).Get(pkgURL)
 	if err != nil {
 		logging.LogErrorf("download install package [%s] failed: %s", pkgURL, err)
-		if removeErr := os.Remove(savePath); nil != removeErr && !os.IsNotExist(removeErr) {
-			logging.LogErrorf("remove incomplete install package [%s] failed: %s", savePath, removeErr)
-		}
 		return
 	}
 
-	localChecksum, _ := sha256Hash(savePath)
-	if checksum != localChecksum {
-		err = fmt.Errorf("verify checksum failed, download install package [%s] checksum [%s] not equal to downloaded [%s] checksum [%s]", pkgURL, checksum, savePath, localChecksum)
-		logging.LogError(err.Error())
-		if removeErr := os.Remove(savePath); nil != removeErr && !os.IsNotExist(removeErr) {
-			logging.LogErrorf("remove invalid install package [%s] failed: %s", savePath, removeErr)
-		}
+	if err = verifyAndPublishInstallPkg(installDir, temporaryPath, metadata); err != nil {
+		logging.LogErrorf("publish install package [%s] failed: %s", pkgURL, err)
 		return
 	}
 	logging.LogInfof("downloaded install package [%s] to [%s]", pkgURL, savePath)
-	util.PushStatusBar(Conf.Language(62))
 	return
 }
 
@@ -234,7 +327,7 @@ func CheckUpdate(showMsg bool) {
 		return
 	}
 
-	if Conf.System.IsMicrosoftStore {
+	if Conf.System.Load().IsMicrosoftStore {
 		return
 	}
 
@@ -256,7 +349,14 @@ func CheckUpdate(showMsg bool) {
 
 func pushNewVersionNotification(release *updateRelease) {
 	releaseLink := "<a href=\"" + release.ReleaseURL + "\">" + release.ReleaseURL + "</a>"
-	util.PushUpdateMsg("update-notify", fmt.Sprintf(Conf.Language(9), releaseLink), 15000)
+	message := fmt.Sprintf(Conf.Language(9), releaseLink)
+	if !skipNewVerInstallPkg() {
+		if _, err := getReleaseInstallPackage(release); err == nil {
+			message = fmt.Sprintf(`<div class="b3-snackbar__actions"><div class="b3-snackbar__body">%s</div><button type="button" class="b3-button b3-button--white b3-button--wrap b3-snackbar__action" data-type="download-update" data-version="%s">%s</button></div>`,
+				message, html.EscapeString(release.Version), html.EscapeString(Conf.Language(437)))
+		}
+	}
+	util.PushUpdateMsg("update-notify", message, 15000)
 }
 
 func isVersionUpToDate(releaseVer string) bool {
@@ -267,9 +367,13 @@ func isVersionUpToDate(releaseVer string) bool {
 var skipInstallPkgPlatformCached = -1
 
 func skipNewVerInstallPkg() bool {
-	// Conf.System.DownloadInstallPkg(自动下载更新安装包) 强制赋值为false
-	Conf.System.DownloadInstallPkg = false
-	Conf.Save()
+	confSystemSnapshot := Conf.LoadSystem()
+	// 强制关闭官方安装包自动下载，配置按快照更新。
+	if confSystemSnapshot.DownloadInstallPkg {
+		confSystemSnapshot = UpdateSystemConf(func(system *conf.System) {
+			system.DownloadInstallPkg = false
+		})
+	}
 
 	if skipInstallPkgPlatformCached == -1 {
 		skipInstallPkgPlatformCached = 0
@@ -278,7 +382,7 @@ func skipNewVerInstallPkg() bool {
 		} else if util.ISMicrosoftStore || util.ContainerStd != util.Container {
 			skipInstallPkgPlatformCached = 1
 		} else if gulu.OS.IsWindows() {
-			plat := strings.ToLower(Conf.System.OSPlatform)
+			plat := strings.ToLower(confSystemSnapshot.OSPlatform)
 			// Windows 7, 8 and Server 2012 are no longer supported https://github.com/siyuan-note/siyuan/issues/7347
 			if strings.Contains(plat, " 7 ") || strings.Contains(plat, " 8 ") || strings.Contains(plat, "2012") {
 				skipInstallPkgPlatformCached = 1
@@ -286,7 +390,7 @@ func skipNewVerInstallPkg() bool {
 		}
 	}
 
-	if skipInstallPkgPlatformCached == 1 || !Conf.System.DownloadInstallPkg {
+	if skipInstallPkgPlatformCached == 1 {
 		return true
 	}
 	return false

@@ -7,6 +7,10 @@ import {setPosition} from "../../../util/setPosition";
 
 const getViewIcon = (type: TAVView) => {
     switch (type) {
+        case "calendar":
+            return "iconCalendar";
+        case "list":
+            return "iconList";
         case "gallery":
             return "iconGallery";
         case "kanban":
@@ -84,7 +88,7 @@ const getFieldVisibilityItemsHTML = (views: IAVFieldView[], backColId: string) =
     ${view.hidden ? "" : '<svg class="b3-menu__checked"><use xlink:href="#iconSelect"></use></svg>'}
 </button>`;
     };
-    const titleIconHTML = `<span class="block__icon" style="padding: 8px;margin-left: -4px;" data-type="editCol" data-id="${backColId}">
+    const titleIconHTML = `<span class="block__icon block__icon--menu-back" data-type="editCol" data-id="${backColId}">
         <svg><use xlink:href="#iconLeft"></use></svg>
     </span>`;
     let html = `<button class="b3-menu__item av__field-visibility-title" data-type="nobg">
@@ -267,10 +271,11 @@ export const openFieldVisibilityPanel = async (options: {
     const currentViewID = options.blockElement.getAttribute(Constants.CUSTOM_SY_AV_VIEW) ||
         options.blockElement.querySelector(".layout-tab-bar .item--focus")?.getAttribute("data-id");
     const panelRect = options.menuElement.getBoundingClientRect();
-    const previousItemsElement = options.menuElement.firstElementChild;
+    // 移动端菜单顶部会插入抓手标题，按 items 容器判断面板内容是否已被替换
+    const previousItemsElement = options.menuElement.querySelector(":scope > .b3-menu__items");
     const views = getSupportedFieldViews(await fetchFieldViews(avID, options.colId), options.field.type);
     if (!views || !options.menuElement.isConnected ||
-        options.menuElement.firstElementChild !== previousItemsElement) {
+        options.menuElement.querySelector(":scope > .b3-menu__items") !== previousItemsElement) {
         return;
     }
 

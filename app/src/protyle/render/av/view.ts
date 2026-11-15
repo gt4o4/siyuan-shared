@@ -1,8 +1,11 @@
+import {isTableLikeView} from "./viewType";
+import {locateRequests} from "./locateState";
 import {Menu} from "../../../plugin/Menu";
 import {unicode2Emoji} from "../../../emoji";
 import {transaction} from "../../wysiwyg/transaction";
 import {openMenuPanel} from "./openMenuPanel";
-import {focusBlock, focusByRange, getEditorRange} from "../../util/selection";
+import {focusBlock, getEditorRange} from "../../util/selection";
+import {focusByRange} from "../../util/selectionOffsets";
 import {upDownHint} from "../../../util/upDownHint";
 import {escapeAriaLabel, escapeAttr, escapeHtml} from "../../../util/escape";
 import {hasClosestByClassName} from "../../util/hasClosest";
@@ -10,22 +13,9 @@ import {Constants} from "../../../constants";
 import {clearSelect} from "../../util/clear";
 import {getAVVisibleViewIDs, setAVVisibleViewIDs} from "./viewVisibility";
 import {isNotEditBlock} from "../../wysiwyg/getBlock";
-
-// countFilterLeaves 递归统计过滤节点树中的叶子数量（分组不计入）。
-const countFilterLeaves = (filters: IAVFilter[]): number => {
-    let count = 0;
-    const walk = (nodes: IAVFilter[]) => {
-        nodes.forEach(n => {
-            if (n.filters) {
-                walk(n.filters);
-            } else {
-                count++;
-            }
-        });
-    };
-    walk(filters);
-    return count;
-};
+import {countFilterLeaves} from "./filterTree";
+import {isMobile} from "../../../util/functions";
+import {copyBlockSelection} from "../../util/blockClipboard";
 
 export const setAVBlockVisibleViewIDs = (
     protyle: IProtyle,
@@ -61,21 +51,24 @@ const copyViewMirror = (blockElement: Element, viewID: string) => {
     const oldViewID = blockElement.getAttribute(Constants.CUSTOM_SY_AV_VIEW);
     blockElement.setAttribute(Constants.CUSTOM_SY_AV_VISIBLE_VIEWS, viewID);
     blockElement.setAttribute(Constants.CUSTOM_SY_AV_VIEW, viewID);
-    if (isNotEditBlock(blockElement)) {
-        focusBlock(blockElement);
-    } else {
-        focusByRange(getEditorRange(blockElement));
-    }
-    document.execCommand("copy");
-    if (null === oldVisibleViewIDs) {
-        blockElement.removeAttribute(Constants.CUSTOM_SY_AV_VISIBLE_VIEWS);
-    } else {
-        blockElement.setAttribute(Constants.CUSTOM_SY_AV_VISIBLE_VIEWS, oldVisibleViewIDs);
-    }
-    if (null === oldViewID) {
-        blockElement.removeAttribute(Constants.CUSTOM_SY_AV_VIEW);
-    } else {
-        blockElement.setAttribute(Constants.CUSTOM_SY_AV_VIEW, oldViewID);
+    try {
+        if (isNotEditBlock(blockElement)) {
+            focusBlock(blockElement);
+        } else {
+            focusByRange(getEditorRange(blockElement));
+        }
+        copyBlockSelection(blockElement);
+    } finally {
+        if (null === oldVisibleViewIDs) {
+            blockElement.removeAttribute(Constants.CUSTOM_SY_AV_VISIBLE_VIEWS);
+        } else {
+            blockElement.setAttribute(Constants.CUSTOM_SY_AV_VISIBLE_VIEWS, oldVisibleViewIDs);
+        }
+        if (null === oldViewID) {
+            blockElement.removeAttribute(Constants.CUSTOM_SY_AV_VIEW);
+        } else {
+            blockElement.setAttribute(Constants.CUSTOM_SY_AV_VIEW, oldViewID);
+        }
     }
 };
 
@@ -120,7 +113,7 @@ export const openViewMenu = (options: { protyle: IProtyle, blockElement: HTMLEle
     menu.addItem({
         id: "duplicate",
         icon: "iconCopy",
-        label: window.siyuan.languages.duplicate,
+        label: window.siyuan.languages.duplicateCopy,
         click() {
             document.querySelector(".av__panel")?.remove();
             const id = Lute.NewNodeID();
@@ -191,7 +184,8 @@ export const openViewMenu = (options: { protyle: IProtyle, blockElement: HTMLEle
     const rect = options.element.getBoundingClientRect();
     menu.open({
         x: rect.left,
-        y: rect.bottom
+        y: rect.bottom,
+        h: rect.height
     });
 };
 
@@ -228,7 +222,9 @@ export const bindViewEvent = (options: {
             options.menuElement.parentElement.remove();
         }
     });
-    inputElement.select();
+    if (!isMobile()) {
+        inputElement.select();
+    }
     inputElement.value = inputElement.dataset.value;
     const descElement = options.menuElement.querySelector('.b3-text-field[data-type="desc"]') as HTMLTextAreaElement;
     inputElement.nextElementSibling.addEventListener("click", () => {
@@ -277,7 +273,7 @@ export const getViewHTML = (data: IAV) => {
     <span class="b3-menu__label ft__center">${window.siyuan.languages.config}</span>
 </button>
 <button class="b3-menu__separator"></button>
-<button class="b3-menu__item" data-type="nobg">
+<button class="b3-menu__item av__panel-name" data-type="nobg">
     <div class="fn__block">
         <div class="fn__flex">
             <span class="b3-menu__avemoji" data-type="update-view-icon">${view.icon ? unicode2Emoji(view.icon) : `<svg style="height: 14px;width: 14px"><use xlink:href="#${getViewIcon(data.viewType)}"></use></svg>`}</span>
@@ -306,10 +302,26 @@ export const getViewHTML = (data: IAV) => {
     <span class="b3-menu__accelerator">${fields.filter((item: IAVColumn) => !item.hidden).length}/${fields.length}</span>
     <svg class="b3-menu__icon b3-menu__icon--small"><use xlink:href="#iconRight"></use></svg>
 </button>
+<button class="b3-menu__item" data-type="go-sub-items">
+    <svg class="b3-menu__icon"><use xlink:href="#iconListTree"></use></svg>
+    <span class="b3-menu__label">${window.siyuan.languages.avSubItems}</span>
+    <svg class="b3-menu__icon b3-menu__icon--small"><use xlink:href="#iconRight"></use></svg>
+</button>
 <button class="b3-menu__item" data-type="goFilters">
     <svg class="b3-menu__icon"><use xlink:href="#iconFilter"></use></svg>
     <span class="b3-menu__label">${window.siyuan.languages.filter}</span>
     <span class="b3-menu__accelerator">${countFilterLeaves(view.filters)}</span>
+    <svg class="b3-menu__icon b3-menu__icon--small"><use xlink:href="#iconRight"></use></svg>
+</button>
+<button class="b3-menu__item" data-type="goConditionalColors">
+    <svg class="b3-menu__icon"><use xlink:href="#iconFont"></use></svg>
+    <span class="b3-menu__label">${window.siyuan.languages.conditionalColors}</span>
+    <span class="b3-menu__accelerator">${view.conditionalColors?.length || 0}</span>
+    <svg class="b3-menu__icon b3-menu__icon--small"><use xlink:href="#iconRight"></use></svg>
+</button>
+<button class="b3-menu__item" data-type="automations">
+    <svg class="b3-menu__icon"><use xlink:href="#iconZap"></use></svg>
+    <span class="b3-menu__label">${window.siyuan.languages.databaseAutomations}</span>
     <svg class="b3-menu__icon b3-menu__icon--small"><use xlink:href="#iconRight"></use></svg>
 </button>
 <button class="b3-menu__item" data-type="goSorts">
@@ -318,10 +330,10 @@ export const getViewHTML = (data: IAV) => {
     <span class="b3-menu__accelerator">${view.sorts.length}</span>
     <svg class="b3-menu__icon b3-menu__icon--small"><use xlink:href="#iconRight"></use></svg>
 </button>
-<button class="b3-menu__item" data-type="goGroups">
+<button class="b3-menu__item${data.viewType === "calendar" ? " fn__none" : ""}" data-type="goGroups">
     <svg class="b3-menu__icon"><use xlink:href="#iconGroups"></use></svg>
     <span class="b3-menu__label">${window.siyuan.languages.group}</span>
-    <span class="b3-menu__accelerator">${escapeHtml((data.view.group && data.view.group.field) ? fields.filter((item: IAVColumn) => item.id === data.view.group.field)[0].name : "")}</span>
+    <span class="b3-menu__accelerator">${escapeHtml((data.view.group && data.view.group.field) ? fields.find((item: IAVColumn) => item.id === data.view.group.field)?.name || "" : "")}</span>
     <svg class="b3-menu__icon b3-menu__icon--small"><use xlink:href="#iconRight"></use></svg>
 </button>
 <button class="b3-menu__separator"></button>
@@ -329,7 +341,7 @@ export const getViewHTML = (data: IAV) => {
     <svg class="b3-menu__icon">
         <use xlink:href="#iconCopy"></use>
     </svg>
-    <span class="b3-menu__label">${window.siyuan.languages.duplicate}</span>
+    <span class="b3-menu__label">${window.siyuan.languages.duplicateCopy}</span>
 </button>
 <button class="b3-menu__item b3-menu__item--warning${data.views.length > 1 ? "" : " fn__none"}" data-type="delete-view">
     <svg class="b3-menu__icon"><use xlink:href="#iconTrashcan"></use></svg>
@@ -340,7 +352,9 @@ export const getViewHTML = (data: IAV) => {
 
 export const bindSwitcherEvent = (options: { protyle: IProtyle, menuElement: Element, blockElement: Element }) => {
     const inputElement = options.menuElement.querySelector(".b3-text-field") as HTMLInputElement;
-    inputElement.focus();
+    if (!isMobile()) {
+        inputElement.focus();
+    }
     inputElement.addEventListener("keydown", (event) => {
         event.stopPropagation();
         if (event.isComposing) {
@@ -350,6 +364,7 @@ export const bindSwitcherEvent = (options: { protyle: IProtyle, menuElement: Ele
         if (event.key === "Enter") {
             const currentElement = options.menuElement.querySelector(".b3-menu__item--current") as HTMLElement;
             if (currentElement) {
+                locateRequests.delete(options.blockElement as HTMLElement);
                 const currentViewID = options.blockElement.getAttribute(Constants.CUSTOM_SY_AV_VIEW) ||
                     options.blockElement.querySelector(".av__views .item--focus")?.getAttribute("data-id");
                 if (currentElement.dataset.id !== currentViewID) {
@@ -453,7 +468,7 @@ export const getSwitcherHTML = (views: IAVView[], viewId: string, blockElement: 
 </div>${hiddenHTML}` : "";
     return `<div class="b3-menu__items fn__flex-column">
 <div class="b3-menu__item fn__flex-shrink" data-type="nobg">
-    <input class="b3-text-field fn__block" type="text" style="margin: 4px 0" placeholder="${window.siyuan.languages.searchPlaceholder}">
+    <input spellcheck="false" class="b3-text-field fn__block" type="text" style="margin: 4px 0" placeholder="${window.siyuan.languages.searchPlaceholder}">
 </div>
 <div class="fn__flex-1" style="overflow: auto">
     ${visibleSectionHTML}
@@ -498,19 +513,19 @@ export const addView = (protyle: IProtyle, blockElement: Element) => {
         }
     });
     addMenu.addItem({
-        icon: "iconBoard",
-        label: window.siyuan.languages.kanban,
+        icon: "iconList",
+        label: window.siyuan.languages.listView,
         click() {
             addVisibleView();
             transaction(protyle, [{
                 action: "addAttrViewView",
                 avID,
-                layout: "kanban",
+                layout: "list",
                 id,
                 blockID: blockElement.getAttribute("data-node-id")
             }], [{
                 action: "removeAttrViewView",
-                layout: "kanban",
+                layout: "list",
                 avID,
                 id,
                 blockID: blockElement.getAttribute("data-node-id")
@@ -537,18 +552,52 @@ export const addView = (protyle: IProtyle, blockElement: Element) => {
             }]);
         }
     });
+    addMenu.addItem({
+        icon: "iconBoard",
+        label: window.siyuan.languages.kanban,
+        click() {
+            addVisibleView();
+            transaction(protyle, [{
+                action: "addAttrViewView",
+                avID,
+                layout: "kanban",
+                id,
+                blockID: blockElement.getAttribute("data-node-id")
+            }], [{
+                action: "removeAttrViewView",
+                layout: "kanban",
+                avID,
+                id,
+                blockID: blockElement.getAttribute("data-node-id")
+            }]);
+        }
+    });
+    addMenu.addItem({
+        icon: "iconCalendar",
+        label: window.siyuan.languages.calendarView,
+        click() {
+            addVisibleView();
+            const context = {avID, id, blockID: blockElement.getAttribute("data-node-id"), layout: "calendar"};
+            transaction(protyle, [{...context, action: "addAttrViewView"}], [{...context, action: "removeAttrViewView"}]);
+        }
+    });
     viewElement.classList.add("av__views--show");
     const addRect = viewElement.querySelector('.block__icon[data-type="av-add"]')?.getBoundingClientRect();
     addMenu.open({
         x: addRect.left,
-        y: addRect.bottom + 8
+        y: addRect.bottom + 8,
+        h: addRect.height + 8
     });
 };
 
 export const getViewIcon = (type: string) => {
     switch (type) {
+        case "calendar":
+            return "iconCalendar";
         case "table":
             return "iconTable";
+        case "list":
+            return "iconList";
         case "gallery":
             return "iconGallery";
         case "kanban":
@@ -558,8 +607,12 @@ export const getViewIcon = (type: string) => {
 
 export const getViewName = (type: string) => {
     switch (type) {
+        case "calendar":
+            return window.siyuan.languages.calendarView;
         case "table":
             return window.siyuan.languages.table;
+        case "list":
+            return window.siyuan.languages.listView;
         case "gallery":
             return window.siyuan.languages.gallery;
         case "kanban":
@@ -568,7 +621,7 @@ export const getViewName = (type: string) => {
 };
 
 export const getFieldsByData = (data: IAV) => {
-    return data.viewType === "table" ? (data.view as IAVTable).columns : (data.view as IAVGallery).fields;
+    return isTableLikeView(data.viewType) || data.viewType === "calendar" ? (data.view as IAVTable).columns : (data.view as IAVGallery).fields;
 };
 
 export const dragoverTab = (event: DragEvent) => {

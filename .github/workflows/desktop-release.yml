@@ -27,7 +27,7 @@ jobs:
           submodules: recursive
 
       - name: Build libkernel linux/amd64
-        run: go build -buildmode=c-archive -buildvcs=false --tags fts5 -o "../app/native/linux-amd64/libkernel.a" -ldflags "$BUILD_ARGS" ./cshared/
+        run: go build -buildmode=c-archive -buildvcs=false --tags "fts5 sqlcipher" -o "../app/native/linux-amd64/libkernel.a" -ldflags "$BUILD_ARGS" ./cshared/
         working-directory: kernel
         env:
           CGO_ENABLED: 1
@@ -36,7 +36,7 @@ jobs:
           CC: x86_64-linux-gnu-gcc
 
       - name: Build libkernel linux/arm64
-        run: go build -buildmode=c-archive -buildvcs=false --tags fts5 -o "../app/native/linux-arm64/libkernel.a" -ldflags "$BUILD_ARGS" ./cshared/
+        run: go build -buildmode=c-archive -buildvcs=false --tags "fts5 sqlcipher" -o "../app/native/linux-arm64/libkernel.a" -ldflags "$BUILD_ARGS" ./cshared/
         working-directory: kernel
         env:
           CGO_ENABLED: 1
@@ -48,7 +48,7 @@ jobs:
         run: |
           export CC=$(ls /usr/local/osxcross/bin/x86_64-apple-darwin*-cc | sort -V | tail -1)
           echo "using CC=$CC"
-          go build -buildmode=c-archive -buildvcs=false --tags fts5 -o "../app/native/darwin-amd64/libkernel.a" -ldflags "$BUILD_ARGS" ./cshared/
+          go build -buildmode=c-archive -buildvcs=false --tags "fts5 sqlcipher" -o "../app/native/darwin-amd64/libkernel.a" -ldflags "$BUILD_ARGS" ./cshared/
         working-directory: kernel
         env:
           CGO_ENABLED: 1
@@ -59,7 +59,7 @@ jobs:
         run: |
           export CC=$(ls /usr/local/osxcross/bin/aarch64-apple-darwin*-cc | sort -V | tail -1)
           echo "using CC=$CC"
-          go build -buildmode=c-archive -buildvcs=false --tags fts5 -o "../app/native/darwin-arm64/libkernel.a" -ldflags "$BUILD_ARGS" ./cshared/
+          go build -buildmode=c-archive -buildvcs=false --tags "fts5 sqlcipher" -o "../app/native/darwin-arm64/libkernel.a" -ldflags "$BUILD_ARGS" ./cshared/
         working-directory: kernel
         env:
           CGO_ENABLED: 1
@@ -70,7 +70,7 @@ jobs:
         run: |
           OUTDIR=$(realpath ../app/native/windows-amd64)
           mkdir -p "$OUTDIR"
-          go build -buildmode=c-shared -buildvcs=false --tags fts5 \
+          go build -buildmode=c-shared -buildvcs=false --tags "fts5 sqlcipher" \
             -o "$OUTDIR/libkernel.dll" \
             -ldflags "$BUILD_ARGS -extldflags '-Wl,--output-def,$OUTDIR/libkernel.def,--out-implib,$OUTDIR/libkernel.lib'" \
             ./cshared/

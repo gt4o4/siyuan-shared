@@ -1,5 +1,5 @@
+import {mobileConfirmDialog} from "../../../dialog/mobileConfirmDialog";
 import type {SettingTabBuilder} from "../../setting/builder";
-import {confirmDialog} from "../../../dialog/confirmDialog";
 import {showMessage} from "../../../dialog/message";
 import {fetchPost} from "../../../util/fetch";
 import {
@@ -20,6 +20,23 @@ import {
     genGroupedModelPickerHtml,
     mountGroupedModelPicker,
 } from "./aiProviderUi";
+import {
+    getAgentCapabilityKeywords,
+    mountAgentCapabilityBlock,
+} from "./aiCapabilityUi";
+import {
+    getBuiltinSkillsBlockKeywords,
+    getUserSkillsBlockKeywords,
+    mountBuiltinSkillsBlock,
+    mountUserSkillsBlock,
+} from "./aiSkillUi";
+import {isAgentStreamingMarkdownEnabled, setAgentStreamingMarkdownEnabled} from "./agentStreamingMarkdown";
+import {openSkillManager} from "../../../ai/skills/manager";
+import {openAgentInstructions} from "./aiInstructions";
+import {genDecisionCardsHtml, mountDecisionCards} from "./aiDecisionUi";
+import {genMcpOAuthHtml, mountMcpOAuth} from "./mcpOAuthUi";
+import {registerAiWebGroup} from "./aiWeb";
+import {registerAiMemoryGroup} from "./aiMemory";
 
 const registerAiProvidersGroup = (tab: SettingTabBuilder) => {
     const group = tab.group("providers", window.siyuan.languages.apiProvider);
@@ -81,6 +98,22 @@ const registerAiAgentGroup = (tab: SettingTabBuilder) => {
         desc: window.siyuan.languages.apiMaxTokensTip,
         min: 0,
     });
+    group.button({
+        id: "aiAgentInstructions",
+        title: window.siyuan.languages.agentInstructions,
+        desc: window.siyuan.languages.agentInstructionsTip,
+        label: window.siyuan.languages.edit,
+        icon: "iconEdit",
+        afterMount: root => {
+            root.querySelector("#aiAgentInstructions")?.addEventListener("click", openAgentInstructions);
+        },
+    });
+    group.switch("agentStreamingMarkdown", {
+        title: window.siyuan.languages.agentStreamingMarkdown,
+        desc: window.siyuan.languages.agentStreamingMarkdownTip,
+        readConfig: isAgentStreamingMarkdownEnabled,
+        save: (value) => setAgentStreamingMarkdownEnabled(value === true),
+    });
     group.number("ai.agent.maxToolCallRounds", {
         title: window.siyuan.languages.agentMaxToolCallRounds,
         desc: window.siyuan.languages.agentMaxToolCallRoundsTip,
@@ -119,6 +152,34 @@ const registerAiAgentGroup = (tab: SettingTabBuilder) => {
         min: 0,
         max: 10,
     });
+    group.button({
+        id: "aiAgentCapabilities",
+        title: window.siyuan.languages.agentCapabilities,
+        desc: window.siyuan.languages.agentCapabilitiesTip,
+        label: window.siyuan.languages.config,
+        icon: "iconSettings",
+        keywords: getAgentCapabilityKeywords(),
+        afterMount: mountAgentCapabilityBlock,
+    });
+};
+
+const registerAiDecisionGroup = (tab: SettingTabBuilder) => {
+    const group = tab.group("decision", window.siyuan.languages.decisionModel);
+    const keywords = [window.siyuan.languages.decisionModel, window.siyuan.languages.decisionModelTip,
+        "TypeSafe", "OpenAI", "Decisions", window.siyuan.languages.apiKey,
+        window.siyuan.languages.apiEndpoint, window.siyuan.languages.apiModel,
+        window.siyuan.languages.apiTimeout, window.siyuan.languages.testConnection];
+    group.switch("ai.decision.enabled", {
+        title: window.siyuan.languages.decisionModel,
+        desc: window.siyuan.languages.decisionModelTip,
+        keywords,
+    });
+    group.slot({
+        key: "decisionProviders",
+        keywords,
+        html: genDecisionCardsHtml,
+        afterMount: mountDecisionCards,
+    });
 };
 
 const registerAiImageGenerationGroup = (tab: SettingTabBuilder) => {
@@ -142,6 +203,39 @@ const registerAiImageGenerationGroup = (tab: SettingTabBuilder) => {
     });
 };
 
+const registerAiSkillsGroup = (tab: SettingTabBuilder) => {
+    const group = tab.group("skills", window.siyuan.languages.tokenCatSkills);
+
+    group.button({
+        id: "aiBuiltinSkills",
+        title: window.siyuan.languages.agentBuiltinSkills,
+        desc: window.siyuan.languages.agentBuiltinSkillsTip,
+        label: window.siyuan.languages.config,
+        icon: "iconSettings",
+        keywords: getBuiltinSkillsBlockKeywords(),
+        afterMount: mountBuiltinSkillsBlock,
+    });
+    group.button({
+        id: "aiWorkspaceSkills",
+        title: window.siyuan.languages.agentWorkspaceSkills,
+        desc: window.siyuan.languages.agentWorkspaceSkillsTip,
+        label: window.siyuan.languages.manage,
+        icon: "iconSettings",
+        afterMount: root => {
+            root.querySelector("#aiWorkspaceSkills")?.addEventListener("click", () => openSkillManager(root));
+        },
+    });
+    group.button({
+        id: "aiUserSkills",
+        title: window.siyuan.languages.agentUserSkills,
+        desc: window.siyuan.languages.agentUserSkillsTip,
+        label: window.siyuan.languages.config,
+        icon: "iconSettings",
+        keywords: getUserSkillsBlockKeywords(),
+        afterMount: mountUserSkillsBlock,
+    });
+};
+
 const registerAiMcpGroup = (tab: SettingTabBuilder) => {
     const group = tab.group("mcp", window.siyuan.languages.configGroupMcp);
 
@@ -150,6 +244,13 @@ const registerAiMcpGroup = (tab: SettingTabBuilder) => {
         keywords: getMcpServersBlockKeywords(),
         html: genMcpServersBlockHtml,
         afterMount: mountMcpServersBlock,
+    });
+    tab.group("mcpOAuth", window.siyuan.languages.mcpOAuthServer).slot({
+        key: "mcpOAuthServer",
+        keywords: [window.siyuan.languages.mcpOAuthServer, "OAuth", "ChatGPT",
+            window.siyuan.languages.mcpOAuthPublicURL, window.siyuan.languages.mcpOAuthRegister],
+        html: genMcpOAuthHtml,
+        afterMount: mountMcpOAuth,
     });
 };
 
@@ -161,16 +262,19 @@ const registerAiEmbeddingGroup = (tab: SettingTabBuilder) => {
         desc: window.siyuan.languages.semanticSearchTip,
     });
     group.textBlock("ai.embedding.baseURL", {
+        spellcheck: false,
         title: window.siyuan.languages.apiBaseURL,
         desc: window.siyuan.languages.apiBaseURLEmbeddingTip,
         mode: "input-text",
     });
     group.textBlock("ai.embedding.apiKey", {
+        spellcheck: false,
         title: window.siyuan.languages.apiKey,
         desc: window.siyuan.languages.apiKeyTip,
         mode: "input-password",
     });
     group.textBlock("ai.embedding.name", {
+        spellcheck: false,
         title: window.siyuan.languages.apiModel,
         desc: window.siyuan.languages.apiModelTip,
         mode: "input-text",
@@ -187,6 +291,18 @@ const registerAiEmbeddingGroup = (tab: SettingTabBuilder) => {
         min: 1,
         unit: "s",
     });
+    group.number("ai.embedding.concurrency", {
+        title: window.siyuan.languages.apiConcurrency,
+        desc: window.siyuan.languages.apiConcurrencyTip,
+        min: 1,
+        max: 64,
+    });
+    group.number("ai.embedding.batchSize", {
+        title: window.siyuan.languages.apiBatchSize,
+        desc: window.siyuan.languages.apiBatchSizeTip,
+        min: 1,
+        max: 128,
+    });
 
     // 独立的嵌入索引重建按钮，不与全局重建索引耦合
     group.button({
@@ -197,7 +313,7 @@ const registerAiEmbeddingGroup = (tab: SettingTabBuilder) => {
         icon: "iconRefresh",
         afterMount: (root) => {
             root.querySelector("#rebuildEmbeddingIndex")?.addEventListener("click", () => {
-                confirmDialog(window.siyuan.languages.rebuildEmbeddingIndex,
+                mobileConfirmDialog(window.siyuan.languages.rebuildEmbeddingIndex,
                     window.siyuan.languages.rebuildEmbeddingIndexConfirmTip, () => {
                     fetchPost("/api/ai/reindexEmbedding", {}, () => {
                         showMessage(window.siyuan.languages.rebuildEmbeddingIndexStarted);
@@ -223,17 +339,28 @@ const registerAiRerankGroup = (tab: SettingTabBuilder) => {
         title: window.siyuan.languages.rerankModel,
         desc: window.siyuan.languages.rerankTip,
     });
+    group.select("ai.rerank.requestFormat", {
+        title: window.siyuan.languages.rerankRequestFormat,
+        desc: window.siyuan.languages.rerankRequestFormatTip,
+        options: [
+            {value: "cohere", label: window.siyuan.languages.rerankRequestFormatCohere},
+            {value: "dashscope", label: window.siyuan.languages.rerankRequestFormatDashScope},
+        ],
+    });
     group.textBlock("ai.rerank.endpoint", {
+        spellcheck: false,
         title: window.siyuan.languages.apiEndpoint,
         desc: window.siyuan.languages.apiEndpointRerankTip,
         mode: "input-text",
     });
     group.textBlock("ai.rerank.apiKey", {
+        spellcheck: false,
         title: window.siyuan.languages.apiKey,
         desc: window.siyuan.languages.apiKeyTip,
         mode: "input-password",
     });
     group.textBlock("ai.rerank.name", {
+        spellcheck: false,
         title: window.siyuan.languages.apiModel,
         desc: window.siyuan.languages.apiModelTip,
         mode: "input-text",
@@ -257,9 +384,12 @@ export const registerAiTab = (tab: SettingTabBuilder) => {
     registerAiProvidersGroup(tab);
     registerAiEditingGroup(tab);
     registerAiAgentGroup(tab);
+    registerAiWebGroup(tab);
+    registerAiDecisionGroup(tab);
+    registerAiSkillsGroup(tab);
     registerAiImageGenerationGroup(tab);
     registerAiMcpGroup(tab);
-    // TODO: add skills group?
     registerAiEmbeddingGroup(tab);
     registerAiRerankGroup(tab);
+    registerAiMemoryGroup(tab);
 };

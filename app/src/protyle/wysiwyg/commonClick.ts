@@ -7,11 +7,26 @@ import {isMobile} from "../../util/functions";
 import {isOnlyMeta} from "../util/compatibility";
 import {hasClosestBlock} from "../util/hasClosest";
 import {zoomOut} from "../../menus/protyle";
+/// #if MOBILE
+import {openMobileBacklinks} from "../../mobile/util/openBacklinks";
+/// #endif
 
 export const commonClick = (event: MouseEvent & {
     target: HTMLElement
 }, protyle: IProtyle, data?: Record<string, string>) => {
     const isM = isMobile();
+    /// #if MOBILE
+    const attrRefCountElement = hasClosestByClassName(event.target, "protyle-attr--refcount");
+    if (isM && attrRefCountElement) {
+        const blockId = attrRefCountElement.parentElement.parentElement.getAttribute("data-node-id");
+        if (blockId) {
+            openMobileBacklinks(protyle, blockId);
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        return true;
+    }
+    /// #endif
     const attrBookmarkElement = hasClosestByClassName(event.target, "protyle-attr--bookmark");
     if (attrBookmarkElement) {
         if (!isM && isOnlyMeta(event)) {
@@ -116,6 +131,17 @@ export const commonClick = (event: MouseEvent & {
                 openAttr(attrMemoElement.parentElement.parentElement, "memo", protyle);
             }
         }
+        event.stopPropagation();
+        return true;
+    }
+    const titleElement = event.target.closest<HTMLElement>('[data-document-title="true"]');
+    if (titleElement) {
+        const id = titleElement.dataset.nodeId;
+        if (id) {
+            void import("../header/documentTitleDialog").then(({openDocumentTitleDialog}) =>
+                openDocumentTitleDialog({id, app: protyle.app}));
+        }
+        event.preventDefault();
         event.stopPropagation();
         return true;
     }

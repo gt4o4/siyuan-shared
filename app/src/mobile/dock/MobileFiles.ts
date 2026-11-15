@@ -1,66 +1,97 @@
-import {hasClosestByClassName, hasClosestByTag, hasTopClosestByTag} from "../../protyle/util/hasClosest";
-import {escapeHtml} from "../../util/escape";
+import {renderDocTreeRow, renderDocTreeRowHTML} from "../../layout/dock/docTree/row";
+import {updateNotebookBreadcrumbIcon} from "../../protyle/breadcrumb/iconRefresh";
+import {getDocTreeItem, isEncryptedDocTreeItem, notebookTreeItem} from "../../layout/dock/docTree/rowData";
+import {DocTreeController, getActiveDocTreeController} from "../../layout/dock/docTree/DocTreeController";
+import {refreshImportedDocTree} from "../../layout/dock/docTree/importRefresh";
+import type {IDocTreeItem} from "../../layout/dock/docTree/types";
+import {createDocTreeSelectionProgress} from "../../layout/dock/docTree/selectionProgress";
+import {saveDocTreeState, restoreDocTreeState} from "../../util/docTreeState";
+import {config as configApi} from "../../config/util/configApi";
 import {Model} from "../../layout/Model";
 import {Constants} from "../../constants";
-import {getDocDisplayName, isMoveTargetAllowed, pathPosix, setNoteBook} from "../../util/pathName";
+import {isMoveTargetAllowed, setNoteBook} from "../../util/pathName";
 import {initFileMenu, initNavigationMenu, sortMenu} from "../../menus/navigation";
+import {getDocTreeActionItems} from "../../menus/navigationSelection";
+import {toggleMenu, type IMenuSession} from "../../menus/menuToggle";
 import {
     getPublishAccessLevel,
     getPublishAccessOptionByLevel,
     openPublishAccessDialog
 } from "../../protyle/util/publishAccess";
 import {fetchPost, fetchSyncPost} from "../../util/fetch";
+import {reorderSortedFileTree} from "../../util/fileTreeReorder";
 import {genUUID} from "../../util/genID";
 import {openMobileFileById} from "../editor";
-import {unicode2Emoji} from "../../emoji";
+
 import {newNotebook, openEncryptedNotebook} from "../../util/mount";
 import {newFileInTree} from "../../util/newFile";
 import {MenuItem} from "../../menus/Menu";
 import type {App} from "../../index";
 import {refreshFileTree} from "../../dialog/processSystem";
-import {setStorageVal} from "../../protyle/util/compatibility";
+import {mobileConfirmDialog as confirmDialog} from "../../dialog/mobileConfirmDialog";
 import {showMessage} from "../../dialog/message";
 import {dragOverScroll, stopScrollAnimation} from "../../boot/globalEvent/dragover";
-import {
-    cancelFileTreeCollapse,
-    collapseFileTree,
-    expandFileTree,
-    isFileTreeCollapsing
-} from "../../layout/dock/fileTreeAnimation";
 import {bindMousePointerTouchBridge, isMousePointerTouchEvent} from "../util/mousePointerTouchBridge";
-import {
-    collectExpandedDocIDs,
-    findMovedFileTreeItem,
-    getFileTreeChildList,
-    IFileTreeMove,
-    restoreMovedExpandedDocItems,
-    updateMovedSubtree
-} from "../../util/fileTreeMove";
+import {getRelativeReorderRequest} from "../../util/fileTreeMove";
+import {type IDocSortModeChanged, updateFileTreeSortMode} from "../../util/fileTreeSort";
+import {MobileOpenedFileSelection} from "./mobileOpenedFileSelection";
+import {insertMobileMultiSelectMenu, renderMultiSelectToolbar, updateMultiSelectToolbar} from "../util/multiSelectToolbar";
+import {PinnedDocs} from "../../layout/dock/PinnedDocs";
+import {ParentDocClick} from "../../layout/dock/parentDocClick";
+import {emitToPlugins} from "../../plugin/EventBusCore";
 
 export class MobileFiles extends Model {
     public element: HTMLElement;
+    public docTree: DocTreeController;
+
+    public getSelectedItems(): {id: string, path: string, notebookId: string}[] {
+        const controller = getActiveDocTreeController(this.element.parentElement) || this.docTree;
+        return getDocTreeActionItems(controller.getSelectedItems()).map(({id, path, notebookId}) => ({id, path, notebookId}));
+    }
+
+    public getSelectionElements(): NodeListOf<HTMLElement> {
+        return (getActiveDocTreeController(this.element.parentElement) || this.docTree).getSelectionElements();
+    }
+
+    private saveStateTimeout: number;
+    private selectionProgress = createDocTreeSelectionProgress();
+    private publishAccessKey = "";
+    private publishAccessGeneration = 0;
+    private publishAccessTimeout: number;
     private actionsElement: HTMLElement;
+    private selectionElement: HTMLElement;
+
+    private multiSelect = false;
+    private pinnedDocs: PinnedDocs;
     private closeElement: HTMLElement;
     private reloadNotebookInfoTimeout: number;
-    private movedExpandedDocIDs = new Set<string>();
+    private lifecycleEvents = new AbortController();
+    private disposed = false;
+    private cancelTouchDrag: () => void;
+
+    private openedFileSelection = new MobileOpenedFileSelection();
+    private parentDocClick = new ParentDocClick();
     private touchDragState: {
         selectedElement: HTMLElement;
         startX: number;
         startY: number;
+        pointerX: number;
+        pointerY: number;
         isDragging: boolean;
         ghostElement: HTMLElement;
         startTime: number;
+        source?: IDocTreeItem;
+        selectionVersion?: number;
     };
 
-    constructor(app: App) {
+    constructor(app: App, filesElement: HTMLElement) {
         super({app});
         this.connect({
             id: genUUID(),
             type: "filetree",
             msgCallback: this.handleMsgCallback.bind(this)
         });
-        const filesElement = document.querySelector('#sidebar [data-type="sidebar-file"]');
-        filesElement.innerHTML = `<div class="toolbar toolbar--border toolbar--dark">
+        filesElement.innerHTML = `<div class="toolbar toolbar--dark">
     <div class="fn__space"></div>
     <div class="toolbar__text">${window.siyuan.languages.fileTree}</div>
     <div class="fn__space"></div>
@@ -84,14 +115,71 @@ export class MobileFiles extends Model {
 </ul>`;
         this.actionsElement = filesElement.firstElementChild as HTMLElement;
         this.element = this.actionsElement.nextElementSibling as HTMLElement;
+        this.docTree = new DocTreeController({
+            element: this.element, renderRow: item => this.renderTreeRow(item),
+            onSelectionChange: () => {
+                if (this.docTree?.getSelectedItems().length) { this.pinnedDocs?.clearSelection(); }
+                this.updateMultiSelect();
+            },
+            onExpansionChange: () => this.getOpenPaths(),
+            onSelectionProgress: this.selectionProgress.update,
+            onRowsRendered: () => {
+                this.refreshPublishAccessSwitch();
+                if (this.touchDragState?.isDragging) { this.updateTouchDrop(this.touchDragState); }
+            },
+        });
+        this.element.addEventListener("scroll", () => {
+            window.clearTimeout(this.saveStateTimeout);
+            this.saveStateTimeout = window.setTimeout(() => this.getOpenPaths(), 250);
+        }, {passive: true});
+        this.pinnedDocs = new PinnedDocs(app, this.element, (id, notebook) => {
+            openMobileFileById(app, id, [Constants.CB_GET_SCROLL], undefined, notebook);
+        }, true);
         this.closeElement = this.element.nextElementSibling as HTMLElement;
+        this.selectionElement = document.createElement("div");
+        this.selectionElement.className = "protyle-util fn__none";
+        this.selectionElement.style.cssText = "position:relative;margin:8px;flex-shrink:0";
+        this.actionsElement.after(this.selectionElement);
+
+        renderMultiSelectToolbar(this.selectionElement, 0, (_menu, session) => this.showMultiSelectMenu(session), () => this.setMultiSelect(false));
+        filesElement.addEventListener("click", (event) => {
+            if (!this.multiSelect || this.selectionElement.contains(event.target as Node)) {
+                return;
+            }
+            const target = event.target as HTMLElement;
+            const item = target.closest<HTMLElement>('li[data-type="navigation-file"], li[data-type="navigation-root"]');
+            const toggle = target.closest(".b3-list-item__toggle:not(.fn__hidden)") ||
+                (target.closest(".b3-list-item__icon") ? item?.querySelector(":scope > .b3-list-item__toggle:not(.fn__hidden)") : null);
+            if (item && this.element.contains(item) && !this.pinnedDocs.element.contains(item)) {
+                if (toggle) {
+                    this.toggleTreeItem(item);
+                } else {
+                    const selected = this.docTree.getItemFromElement(item);
+                    if (selected) { void this.docTree.select(selected.occurrenceKey, {toggle: true, scroll: false}); }
+                }
+            }
+            event.preventDefault();
+            event.stopPropagation();
+        }, true);
+        filesElement.addEventListener("touchstart", (event) => {
+            if (this.multiSelect && this.pinnedDocs.element.contains(event.target as Node)) {
+                event.stopPropagation();
+            }
+        }, {capture: true, passive: true});
         filesElement.addEventListener("click", (event: MouseEvent & { target: HTMLElement }) => {
             let target = event.target as HTMLElement;
+            const parentTitle = target.closest<HTMLElement>(".b3-list-item__text");
+            const parentRow = parentTitle?.parentElement;
+            const isParentTitle = window.siyuan.config.fileTree.parentDocTitleClickMode !== 0 &&
+                !!parentRow?.getAttribute("data-node-id") && (getDocTreeItem(parentRow)?.subFileCount || 0) > 0;
+            if (!isParentTitle) {
+                this.parentDocClick.cancel();
+            }
             while (target && !target.isEqualNode(this.actionsElement)) {
                 if (target.classList.contains("b3-list-item__icon")) {
-                    const notebookElement = target.closest("li[data-encrypted=true]");
-                    if (notebookElement) {
-                        openEncryptedNotebook(this.app, notebookElement.getAttribute("data-url"), notebookElement.querySelector(".b3-list-item__text").textContent);
+                    const notebookElement = target.closest("li[data-tree-key]");
+                    if (notebookElement && isEncryptedDocTreeItem(notebookElement) && this.closeElement.contains(notebookElement)) {
+                        openEncryptedNotebook(this.app, getDocTreeItem(notebookElement)?.notebookId, notebookElement.querySelector(".b3-list-item__text").textContent);
                         event.preventDefault();
                         event.stopPropagation();
                         break;
@@ -102,13 +190,13 @@ export class MobileFiles extends Model {
                 if (type === "refresh") {
                     if (!target.getAttribute("disabled")) {
                         target.setAttribute("disabled", "disabled");
-                        const notebooks: string[] = [];
-                        Array.from(this.element.children).forEach(item => {
-                            notebooks.push(item.getAttribute("data-url"));
-                        });
-                        refreshFileTree(() => {
+                        confirmDialog(window.siyuan.languages.rebuildDataIndex, window.siyuan.languages.rebuildDataIndexTip, () => {
+                            refreshFileTree(() => {
+                                target.removeAttribute("disabled");
+                                this.init(false);
+                            });
+                        }, () => {
                             target.removeAttribute("disabled");
-                            this.init(false);
                         });
                     }
                     event.preventDefault();
@@ -122,32 +210,27 @@ export class MobileFiles extends Model {
                 } else if (type === "newNotebook") {
                     newNotebook();
                 } else if (type === "collapse") {
-                    Array.from(this.element.children).forEach(item => {
-                        const liElement = item.firstElementChild;
-                        const toggleElement = liElement.querySelector(".b3-list-item__arrow");
-                        if (toggleElement.classList.contains("b3-list-item__arrow--open")) {
-                            toggleElement.classList.remove("b3-list-item__arrow--open");
-                            liElement.nextElementSibling.remove();
-                        }
-                    });
+                    this.pinnedDocs.collapse();
+                    this.docTree.collapseAll();
                     event.preventDefault();
                     break;
                 } else if (target.classList.contains("b3-list-item__switch")) {
-                    if (target.closest("[data-encrypted=true]")) {
+                    if (isEncryptedDocTreeItem(target)) {
                         event.preventDefault();
                         event.stopPropagation();
                         break;
                     }
                     const rect = target.getBoundingClientRect();
-                    const rootUL = hasTopClosestByTag(target, "UL");
+                    const rootUL = target.closest<HTMLElement>("li[data-tree-key]");
                     openPublishAccessDialog(target.parentElement.getAttribute("data-type") === "navigation-root" ?
-                        rootUL ? rootUL.getAttribute("data-url") : "" : target.parentElement.getAttribute("data-node-id"), {
+                        getDocTreeItem(rootUL)?.notebookId || "" : target.parentElement.getAttribute("data-node-id"), {
                         x: rect.left,
                         y: rect.bottom,
                         h: rect.height,
                         w: rect.width,
                     }, (access) => {
                         target.innerHTML = access.iconHTML;
+                        this.publishAccessKey = "";
                         fetchPost("/api/filetree/setPublishAccess", {
                             id: access.id,
                             visible: access.visible,
@@ -171,18 +254,7 @@ export class MobileFiles extends Model {
                     event.stopPropagation();
                     break;
                 } else if (target.classList.contains("b3-list-item__toggle") && !target.classList.contains("fn__hidden") && target.parentElement.getAttribute("data-type") !== "toggle") {
-                    const ulElement = hasTopClosestByTag(target, "UL");
-                    if (ulElement) {
-                        const notebookId = ulElement.getAttribute("data-url");
-                        const liElement = target.parentElement;
-                        if (liElement.querySelector(".b3-list-item__arrow--open")) {
-                            collapseFileTree(liElement, () => this.getOpenPaths());
-                        } else if (!isFileTreeCollapsing(liElement)) {
-                            this.getLeaf(liElement, notebookId);
-                        }
-                        this.setCurrent(target.parentElement);
-                        window.siyuan.menus.menu.remove();
-                    }
+                    this.toggleTreeItem(target.parentElement);
                     event.preventDefault();
                     event.stopPropagation();
                     break;
@@ -201,10 +273,10 @@ export class MobileFiles extends Model {
                     event.preventDefault();
                     break;
                 } else if (type === "open") {
-                    const notebookId = target.getAttribute("data-url");
+                    const notebookId = getDocTreeItem(target)?.notebookId;
                     const liElement = target.closest("li");
                     // 加密笔记本关闭（锁定）时点"打开"先弹解锁框，解锁成功后再挂载
-                    if (liElement && liElement.getAttribute("data-encrypted") === "true") {
+                    if (liElement && isEncryptedDocTreeItem(liElement)) {
                         openEncryptedNotebook(this.app, notebookId, liElement.querySelector(".b3-list-item__text").textContent);
                     } else {
                         fetchPost("/api/notebook/openNotebook", {
@@ -216,36 +288,68 @@ export class MobileFiles extends Model {
                     break;
                 } else if (target.classList.contains("b3-list-item__action")) {
                     const type = target.getAttribute("data-type");
-                    const pathString = target.parentElement.getAttribute("data-path");
-                    const ulElement = hasTopClosestByTag(target, "UL");
+                    const pathString = getDocTreeItem(target.parentElement)?.path;
+                    const ulElement = target.closest<HTMLElement>("li[data-tree-key]");
                     if (ulElement) {
-                        const notebookId = ulElement.getAttribute("data-url");
+                        const notebookId = getDocTreeItem(ulElement)?.notebookId;
                         if (!window.siyuan.config.readonly) {
                             if (type === "new") {
                                 newFileInTree(app, notebookId, pathString);
                             } else if (type === "more-root") {
-                                initNavigationMenu(app, target.parentElement);
-                                window.siyuan.menus.menu.fullscreen("bottom");
+                                toggleMenu({
+                                    target: target, build: () => {
+                                        initNavigationMenu(app, target.parentElement);
+                                        this.insertMultiSelectMenu(target.parentElement);
+                                        window.siyuan.menus.menu.fullscreen("bottom");
+                                    }
+                                });
                             }
                         }
                         if (type === "more-file") {
-                            initFileMenu(app, notebookId, pathString, target.parentElement);
-                            window.siyuan.menus.menu.fullscreen("bottom");
+                            toggleMenu({
+                                target: target, build: () => {
+                                    initFileMenu(app, notebookId, pathString, target.parentElement);
+                                    this.insertMultiSelectMenu(target.parentElement);
+                                    window.siyuan.menus.menu.fullscreen("bottom");
+                                }
+                            });
                         }
                     }
                     event.preventDefault();
                     event.stopPropagation();
                     break;
                 } else if (target.tagName === "LI") {
-                    this.setCurrent(target);
-                    const ulElement = hasTopClosestByTag(target, "UL");
-                    const notebookId = ulElement ? ulElement.getAttribute("data-url") : "";
+                    this.setCurrent(target, !isParentTitle || parentRow !== target);
+                    const ulElement = target.closest<HTMLElement>("li[data-tree-key]");
+                    const notebookId = ulElement ? getDocTreeItem(ulElement)?.notebookId : "";
                     if (target.getAttribute("data-type") === "navigation-file") {
-                        openMobileFileById(app, target.getAttribute("data-node-id"), [Constants.CB_GET_SCROLL], undefined, notebookId);
+                        if (window.siyuan.config.fileTree.parentDocTitleClickMode !== 0 && (getDocTreeItem(target)?.subFileCount || 0) > 0) {
+                            if (parentRow === target) {
+                                this.handleParentDocClick(target, notebookId);
+                            } else {
+                                this.parentDocClick.cancel();
+                                this.toggleTreeItem(target);
+                            }
+                        } else if (getDocTreeItem(target)?.file?.specTooNew) {
+                            showMessage(window.siyuan.languages._kernel[275]);
+                        } else {
+                            openMobileFileById(app, target.getAttribute("data-node-id"), [Constants.CB_GET_SCROLL], undefined, notebookId);
+                        }
                     } else if (target.getAttribute("data-type") === "navigation-root") {
                         const boxDocID = target.getAttribute("data-node-id");
                         if (boxDocID) {
-                            openMobileFileById(app, boxDocID, [Constants.CB_GET_SCROLL], undefined, notebookId);
+                            if (window.siyuan.config.fileTree.parentDocTitleClickMode !== 0 && (getDocTreeItem(target)?.subFileCount || 0) > 0) {
+                                if (parentRow === target) {
+                                    this.handleParentDocClick(target, notebookId);
+                                } else {
+                                    this.parentDocClick.cancel();
+                                    this.toggleTreeItem(target);
+                                }
+                            } else if (getDocTreeItem(target)?.file?.specTooNew) {
+                                showMessage(window.siyuan.languages._kernel[275]);
+                            } else {
+                                openMobileFileById(app, boxDocID, [Constants.CB_GET_SCROLL], undefined, notebookId);
+                            }
                         } else if (ulElement) {
                             this.getLeaf(target, notebookId);
                         }
@@ -257,11 +361,13 @@ export class MobileFiles extends Model {
             }
         });
         filesElement.addEventListener("touchstart", (event: TouchEvent) => {
+            if (this.multiSelect) return;
             if (window.siyuan.config.readonly) return;
             if (event.touches.length !== 1) return;
 
             const touch = event.touches[0];
             const target = touch.target as HTMLElement;
+            if (this.pinnedDocs.element.contains(target)) return;
             const liElement = target.closest(".b3-list-item") as HTMLElement;
             if (!liElement) return;
 
@@ -270,16 +376,14 @@ export class MobileFiles extends Model {
 
             if (dataType === "navigation-root") {
                 if (window.siyuan.config.fileTree.sort !== 6) return;
-            } else {
-                const ulElement = liElement.closest("ul[data-sortmode]") as HTMLElement;
-                const sortMode = ulElement?.getAttribute("data-sortmode");
-                if (sortMode !== "6" && !(window.siyuan.config.fileTree.sort === 6 && sortMode === "15")) return;
             }
             this.touchDragState = {
                 isDragging: false,
                 selectedElement: liElement,
                 startX: touch.clientX,
                 startY: touch.clientY,
+                pointerX: touch.clientX,
+                pointerY: touch.clientY,
                 ghostElement: null,
                 startTime: Date.now() - (isMousePointerTouchEvent(event) ? Constants.TIMEOUT_LONGPRESS : 0),
             };
@@ -320,213 +424,67 @@ export class MobileFiles extends Model {
                 // 进入拖拽后阻止原生滚动，避免列表伴随手指滚动
                 event.preventDefault();
                 event.stopPropagation();
+                state.pointerX = touch.clientX;
+                state.pointerY = touch.clientY;
                 state.ghostElement.style.left = `${touch.clientX}px`;
                 state.ghostElement.style.top = `${touch.clientY}px`;
 
                 // 手指接近列表上下边缘时自动滚动，避免拖拽时触不到屏外目标
                 dragOverScroll({clientY: touch.clientY} as MouseEvent, this.element.getBoundingClientRect(), this.element);
 
-                const target = document.elementFromPoint(touch.clientX, touch.clientY);
-                const liElement = target?.closest(".b3-list-item") as HTMLElement;
-                if (!liElement) return;
-
-                this.clearDragIndicators();
-                const targetDataType = liElement.getAttribute("data-type");
-                const selectedDataType = state.selectedElement.getAttribute("data-type");
-                if (targetDataType === "navigation-file" && selectedDataType === "navigation-root") {
-                    return;
-                }
-                if (selectedDataType === "navigation-file" && targetDataType === "navigation-root") {
-                    liElement.classList.add("dragover");
-                    return;
-                }
-                const liRect = liElement.getBoundingClientRect();
-                if (selectedDataType === "navigation-root" && targetDataType === "navigation-root") {
-                    if (touch.clientY > liRect.top + liRect.height / 2) {
-                        liElement.classList.add("dragover__bottom");
-                    } else {
-                        liElement.classList.add("dragover__top");
-                    }
-                    return;
-                }
-                const dragHeight = liRect.height * .2;
-                if (touch.clientY > liRect.bottom - dragHeight) {
-                    liElement.classList.add("dragover__bottom");
-                } else if (touch.clientY < liRect.top + dragHeight) {
-                    liElement.classList.add("dragover__top");
-                }
-
-                if (!liElement.classList.contains("dragover__top") && !liElement.classList.contains("dragover__bottom") &&
-                    !(selectedDataType === "navigation-root" && targetDataType === "navigation-root")) {
-                    liElement.classList.add("dragover");
-                }
+                this.updateTouchDrop(state);
             }
         }, {passive: false});
 
-        filesElement.addEventListener("touchend", async () => {
+        filesElement.addEventListener("touchend", async (event: TouchEvent) => {
             const state = this.touchDragState;
-            if (!state) return;
+            if (!state) { return; }
             stopScrollAnimation();
-            state.selectedElement.style.opacity = "";
-            if (state.isDragging) {
-                state.ghostElement?.remove();
-                const newElement = this.element.querySelector(".dragover, .dragover__bottom, .dragover__top");
-                if (!newElement) {
-                    this.touchDragState = null;
-                    return;
-                }
-                const newUlElement = hasTopClosestByTag(newElement, "UL");
-                if (!newUlElement) {
-                    this.clearDragIndicators();
-                    this.touchDragState = null;
-                    return;
-                }
-                const oldScrollTop = this.element.scrollTop;
-                const toURL = newUlElement.getAttribute("data-url");
-                const toPath = newElement.getAttribute("data-path");
-
-                const selectRootElements: HTMLElement[] = [];
-                const selectFileElements: HTMLElement[] = [];
-                const fromPaths: string[] = [];
-                if (state.selectedElement.getAttribute("data-type") === "navigation-root") {
-                    selectRootElements.push(state.selectedElement);
-                } else {
-                    const dataPath = state.selectedElement.getAttribute("data-path");
-                    // 禁止父节点移动到子节点 https://github.com/siyuan-note/siyuan/issues/12539
-                    if (newElement.getAttribute("data-path").startsWith(dataPath.replace(".sy", ""))) {
-                        this.clearDragIndicators();
-                        this.touchDragState = null;
-                        return;
-                    }
-                    fromPaths.push(dataPath);
-                    selectFileElements.push(state.selectedElement);
-                }
-
-                if (newElement.classList.contains("dragover")) {
-                    const sourceNotebookId = state.selectedElement.getAttribute("data-notebook-id") ||
-                        state.selectedElement.closest("ul[data-url]")?.getAttribute("data-url") ||
-                        state.selectedElement.getAttribute("data-url") || "";
-                    if (!isMoveTargetAllowed([sourceNotebookId], toURL)) {
-                        showMessage(window.siyuan.languages._kernel[313]);
-                        this.clearDragIndicators();
-                        this.touchDragState = null;
-                        return;
-                    }
-                    fetchPost("/api/filetree/moveDocs", {
-                        toNotebook: toURL,
-                        fromPaths,
-                        toPath,
-                    });
-                    this.clearDragIndicators();
-                    this.touchDragState = null;
-                    return;
-                }
-                if (newElement.classList.contains("dragover__bottom") || newElement.classList.contains("dragover__top")) {
-                    const ulSort = newUlElement.getAttribute("data-sortmode");
-                    if (window.siyuan.config.fileTree.sort === 6 && selectRootElements.length > 0 &&
-                        newElement.getAttribute("data-path") === "/") {
-                        if (newElement.classList.contains("dragover__top")) {
-                            selectRootElements.forEach(item => {
-                                newElement.parentElement.before(item.parentElement);
-                            });
-                        } else {
-                            selectRootElements.reverse().forEach(item => {
-                                newElement.parentElement.after(item.parentElement);
-                            });
-                        }
-                        const notebooks: string[] = [];
-                        Array.from(this.element.children).forEach(item => {
-                            notebooks.push(item.getAttribute("data-url"));
-                        });
-                        fetchPost("/api/notebook/changeSortNotebook", {
-                            notebooks,
-                        });
-                    } else if ((ulSort === "6" || (window.siyuan.config.fileTree.sort === 6 && ulSort === "15")) && selectFileElements.length > 0) {
-                        let hasMove = false;
-                        const toDir = pathPosix().dirname(toPath);
-                        if (fromPaths.length > 0) {
-                            const sourceNotebookId = state.selectedElement.getAttribute("data-notebook-id") ||
-                                state.selectedElement.closest("ul[data-url]")?.getAttribute("data-url") ||
-                                state.selectedElement.getAttribute("data-url") || "";
-                            if (!isMoveTargetAllowed([sourceNotebookId], toURL)) {
-                                showMessage(window.siyuan.languages._kernel[313]);
-                                this.clearDragIndicators();
-                                this.touchDragState = null;
-                                return;
-                            }
-                            await fetchSyncPost("/api/filetree/moveDocs", {
-                                toNotebook: toURL,
-                                fromPaths,
-                                toPath: toDir === "/" ? "/" : toDir + ".sy",
-                                callback: Constants.CB_MOVE_NOLIST,
-                            });
-                            selectFileElements.forEach(item => {
-                                const fromPath = item.getAttribute("data-path");
-                                const newPath = pathPosix().join(toDir, item.getAttribute("data-node-id") + ".sy");
-                                updateMovedSubtree(item, getFileTreeChildList(item), fromPath, newPath);
-                            });
-                            hasMove = true;
-                        }
-                        if (newElement.classList.contains("dragover__top")) {
-                            selectFileElements.forEach(item => {
-                                let nextULElement;
-                                if (item.nextElementSibling && item.nextElementSibling.tagName === "UL") {
-                                    nextULElement = item.nextElementSibling;
-                                }
-                                newElement.before(item);
-                                if (nextULElement) {
-                                    item.after(nextULElement);
-                                }
-                            });
-                        } else if (newElement.classList.contains("dragover__bottom")) {
-                            selectFileElements.reverse().forEach(item => {
-                                let nextULElement;
-                                if (item.nextElementSibling && item.nextElementSibling.tagName === "UL") {
-                                    nextULElement = item.nextElementSibling;
-                                }
-                                if (newElement.nextElementSibling && newElement.nextElementSibling.tagName === "UL") {
-                                    newElement.nextElementSibling.after(item);
-                                } else {
-                                    newElement.after(item);
-                                }
-                                if (nextULElement) {
-                                    item.after(nextULElement);
-                                }
-                            });
-                        }
-                        const paths: string[] = [];
-                        Array.from(newElement.parentElement.children).forEach(item => {
-                            if (item.tagName === "LI") {
-                                paths.push(item.getAttribute("data-path"));
-                            }
-                        });
-                        fetchPost("/api/filetree/changeSort", {
-                            paths,
-                            notebook: toURL
-                        }, () => {
-                            if (hasMove) {
-                                fetchPost("/api/filetree/listDocsByPath", {
-                                    notebook: toURL,
-                                    path: toDir === "/" ? "/" : toDir + ".sy",
-                                    app: Constants.SIYUAN_APPID,
-                                }, response => {
-                                    if (response.data.path === "/" && response.data.files.length === 0) {
-                                        showMessage(window.siyuan.languages.emptyContent);
-                                        return;
-                                    }
-                                    this.onLsHTML(response.data, oldScrollTop);
-                                });
-                            }
-                        });
-                    }
-                }
+            const ended = event.changedTouches[0];
+            if (state.isDragging && ended) {
+                state.pointerX = ended.clientX;
+                state.pointerY = ended.clientY;
+                this.updateTouchDrop(state);
             }
+            state.selectedElement.style.opacity = "";
+            state.ghostElement?.remove();
+            this.docTree.release();
+            const source = this.getTouchDragSource(state);
+            const targetRow = this.element.querySelector<HTMLElement>(".dragover, .dragover__bottom, .dragover__top");
+            const target = this.docTree.getItemFromElement(targetRow);
+            const after = targetRow?.classList.contains("dragover__bottom");
+            const inside = targetRow?.classList.contains("dragover");
             this.clearDragIndicators();
             this.touchDragState = null;
+            if (!state.isDragging || !source) { return; }
+            const at = document.elementFromPoint(state.pointerX, state.pointerY);
+            if (at && this.pinnedDocs.element.contains(at) && source.kind === "document") {
+                await this.pinnedDocs.drop([source.id], state.pointerX, state.pointerY);
+                return;
+            }
+            if (!target || target.id === source.id) { return; }
+            if (source.kind === "notebook") {
+                if (target.kind === "notebook" && window.siyuan.config.fileTree.sort === 6) {
+                    await fetchSyncPost("/api/notebook/reorder", getRelativeReorderRequest([source.id], target.id, after));
+                    setNoteBook(() => this.init(false));
+                }
+                return;
+            }
+            if (!isMoveTargetAllowed([source.notebookId], target.notebookId)) {
+                showMessage(window.siyuan.languages._kernel[391]);
+                return;
+            }
+            if (source.notebookId === target.notebookId && target.path.startsWith(source.path.replace(/\.sy$/, "") + "/")) { return; }
+            if (inside) {
+                await fetchSyncPost("/api/filetree/moveDocs", {toNotebook: target.notebookId, fromPaths: [source.path], toPath: target.path});
+            } else if (target.kind === "document") {
+                await reorderSortedFileTree([source.id], target.id, after);
+            }
         });
 
         const cancelTouchDrag = () => {
             stopScrollAnimation();
+            this.docTree.release();
             this.touchDragState?.ghostElement?.remove();
             if (this.touchDragState?.selectedElement) {
                 this.touchDragState.selectedElement.style.opacity = "";
@@ -536,139 +494,87 @@ export class MobileFiles extends Model {
         };
         filesElement.addEventListener("touchcancel", cancelTouchDrag);
         filesElement.addEventListener("pointercancel", cancelTouchDrag);
-        window.addEventListener("blur", cancelTouchDrag);
+        this.cancelTouchDrag = cancelTouchDrag;
+        window.addEventListener("blur", cancelTouchDrag, {signal: this.lifecycleEvents.signal});
         bindMousePointerTouchBridge(filesElement);
         this.init();
     }
 
     private handleMsgCallback(data: IWebSocketData) {
-        if (data) {
-            switch (data.cmd) {
-                case "moveDocs":
-                    this.onMove(data);
-                    break;
-                case "reloadFiletree":
-                    setNoteBook(() => {
-                        this.init(false);
-                    });
-                    break;
-                case "notebookIconChanged":
-                    this.updateNotebookIcon(data.data);
-                    break;
-                case "reloadNotebookInfo":
-                    window.clearTimeout(this.reloadNotebookInfoTimeout);
-                    this.reloadNotebookInfoTimeout = window.setTimeout(() => {
-                        setNoteBook((notebooks) => {
-                            notebooks.forEach((notebook) => {
-                                const liElement = this.element.querySelector<HTMLElement>(
-                                    `ul[data-url="${notebook.id}"] > li[data-type="navigation-root"]`
-                                );
-                                if (liElement) {
-                                    this.updateSubFileCount(liElement, notebook.subFileCount);
-                                }
-                            });
-                        });
-                    }, 128);
-                    break;
-                case "mount":
-                    this.onMount(data);
-                    break;
-                case "createnotebook":
-                    setNoteBook((notebooks) => {
-                        let previousId: string;
-                        notebooks.find(item => {
-                            if (!item.closed) {
-                                if (item.id === data.data.box.id) {
-                                    if (previousId) {
-                                        this.element.querySelector(`.b3-list[data-url="${previousId}"]`).insertAdjacentHTML("afterend", this.genNotebook(data.data.box));
-                                    } else {
-                                        this.element.insertAdjacentHTML("afterbegin", this.genNotebook(data.data.box));
-                                    }
-                                    return true;
-                                }
-                                previousId = item.id;
-                            }
-                        });
-                    });
-                    break;
-                case "closeBox":
-                case "removeBox":
-                case "removeDoc":
-                    this.onRemove(data);
-                    break;
-                case "create":
-                    if (data.data.listDocTree) {
-                        this.selectItem(data.data.box.id, data.data.path);
-                    } else {
-                        this.updateItemArrow(data.data.box.id, data.data.path);
-                    }
-                    break;
-                case "createdailynote":
-                case "heading2doc":
-                case "li2doc":
-                    this.selectItem(data.data.box.id, data.data.path);
-                    break;
-                case "reloadDocInfo":
-                    this.updateDocInfo(data);
-                    break;
-                case "renamenotebook": {
-                    const name = data.data.name;
-                    if (typeof name !== "string") {
-                        break;
-                    }
-                    const notebook = window.siyuan.notebooks.find((item) => item.id === data.data.box);
-                    if (notebook) {
-                        notebook.name = name;
-                    }
-                    const textElement = this.element.querySelector(`[data-url="${data.data.box}"] .b3-list-item__text`) ||
-                        this.closeElement.querySelector(`[data-url="${data.data.box}"] .b3-list-item__text`);
-                    if (textElement) {
-                        textElement.textContent = name;
-                    }
-                    break;
-                }
-                case "rename":
-                    this.onRename(data.data);
-                    break;
-            }
+        if (!data) { return; }
+        const notebook = typeof data.data === "string" ? data.data : data.data?.box?.id || data.data?.box || data.data?.id;
+        if (["closeBox", "removeBox"].includes(data.cmd) &&
+            getDocTreeItem(this.touchDragState?.selectedElement)?.notebookId === notebook) {
+            this.cancelTouchDrag?.();
+        }
+        if (data.cmd === "notebookIconChanged") updateNotebookBreadcrumbIcon(data.data.boxID, data.data.icon);
+        this.pinnedDocs?.onFileTreeMessage(data);
+        this.docTree?.handleMessage(data);
+        if (["reloadFiletree", "boxDocFeatureChanged", "notebookIconChanged", "reloadNotebookInfo", "mount", "createnotebook", "closeBox", "removeBox", "renamenotebook"].includes(data.cmd)) {
+            window.clearTimeout(this.reloadNotebookInfoTimeout);
+            this.reloadNotebookInfoTimeout = window.setTimeout(() => setNoteBook(() => this.init(false)), 100);
+        }
+        if (data.cmd === "mount") { emitToPlugins("opened-notebook", data); }
+        if (data.cmd === "closeBox" || data.cmd === "removeBox") { emitToPlugins("closed-notebook", data); }
+        if ((data.cmd === "create" && data.data.listDocTree) || data.cmd === "createdailynote" || data.cmd === "li2doc") {
+            void this.selectItem(data.data.box.id, data.data.path);
         }
     }
 
-    private updateNotebookIcon(data: { boxID: string, icon: string }) {
-        if (!data || typeof data.boxID !== "string" || typeof data.icon !== "string") {
-            return;
-        }
-        const notebook = window.siyuan.notebooks.find((item) => item.id === data.boxID);
-        if (!notebook) {
-            return;
-        }
-        notebook.icon = data.icon;
-        if (notebook.encrypted && notebook.closed) {
-            return;
-        }
-        const liElement = notebook.closed ?
-            this.closeElement.querySelector<HTMLElement>(`li[data-url="${data.boxID}"]`) :
-            this.element.querySelector<HTMLElement>(
-                `ul[data-url="${data.boxID}"] > li[data-type="navigation-root"]`
-            );
-        const iconElement = liElement?.querySelector<HTMLElement>(".b3-list-item__icon");
-        if (iconElement) {
-            const iconHTML = unicode2Emoji(data.icon || window.siyuan.storage[Constants.LOCAL_IMAGES].note);
-            if (iconElement.innerHTML !== iconHTML) {
-                iconElement.innerHTML = iconHTML;
+    private updateTouchDrop(state: MobileFiles["touchDragState"]) {
+        this.clearDragIndicators();
+        const target = document.elementFromPoint(state.pointerX, state.pointerY);
+        const source = this.getTouchDragSource(state);
+        if (!source) { return; }
+        if (target && this.pinnedDocs.element.contains(target)) {
+            if (source.kind === "document") {
+                this.pinnedDocs.previewDrop(state.pointerX, state.pointerY);
             }
+            return;
         }
+        this.pinnedDocs.clearDrop();
+        const row = target?.closest<HTMLElement>("li[data-tree-key]");
+        const item = this.docTree.getItemFromElement(row);
+        if (!item || item.occurrenceKey === source.occurrenceKey ||
+            (source.kind === "notebook" && item.kind !== "notebook")) { return; }
+        if (source.kind === "document" && item.kind === "notebook") {
+            row.classList.add("dragover");
+            return;
+        }
+        const rect = row.getBoundingClientRect();
+        if (source.kind === "notebook") {
+            row.classList.add(state.pointerY > rect.top + rect.height / 2 ? "dragover__bottom" : "dragover__top");
+        } else if (state.pointerY > rect.bottom - rect.height * .2) {
+            row.classList.add("dragover__bottom");
+        } else if (state.pointerY < rect.top + rect.height * .2) {
+            row.classList.add("dragover__top");
+        } else {
+            row.classList.add("dragover");
+        }
+    }
+
+    private getTouchDragSource(state: MobileFiles["touchDragState"]) {
+        const source = state.source;
+        const current = source && this.docTree.getItem(source.occurrenceKey);
+        if (!current || state.selectionVersion !== this.docTree.selectionVersion || current.id !== source.id ||
+            current.notebookId !== source.notebookId || current.path !== source.path) { return; }
+        return source;
     }
 
     private startTouchDrag(state: MobileFiles["touchDragState"], clientX: number, clientY: number, vibrate = false) {
         if (state.isDragging) {
             return;
         }
+        const item = this.docTree.getItemFromElement(state.selectedElement);
+        if (!item) { return; }
+        state.source = {...item};
+        state.selectionVersion = this.docTree.selectionVersion;
+        this.docTree.retain(item.occurrenceKey);
         state.isDragging = true;
         const ghostElement = document.createElement("ul");
         ghostElement.id = "dragGhost";
         ghostElement.append(state.selectedElement.cloneNode(true));
-        ghostElement.setAttribute("style", `background-color: var(--b3-theme-surface);width: 100%;touch-action: none;margin-left: -50%;margin-top:20px;z-index:${window.siyuan.zIndex};position: fixed;top:${clientY}px;left:${clientX}px`);
+        ghostElement.setAttribute("style", `background-color: var(--b3-theme-surface);width: 100%;touch-action: none;pointer-events:none;margin-left: -50%;margin-top:20px;z-index:${window.siyuan.zIndex};position: fixed;top:${clientY}px;left:${clientX}px`);
         ghostElement.setAttribute("class", "b3-list b3-list--background");
         document.body.append(ghostElement);
         state.ghostElement = ghostElement;
@@ -683,703 +589,261 @@ export class MobileFiles extends Model {
     }
 
     private clearDragIndicators = () => {
+        this.pinnedDocs.clearDrop();
         if (!this.touchDragState) return;
         this.element.querySelectorAll(".dragover__top, .dragover__bottom, .dragover").forEach(el => {
             el.classList.remove("dragover__top", "dragover__bottom", "dragover");
         });
     };
 
+    public destroy() {
+        this.disposed = true;
+        super.destroy();
+        this.lifecycleEvents.abort();
+        this.cancelTouchDrag?.();
+        window.clearTimeout(this.saveStateTimeout);
+        this.getOpenPaths();
+        this.publishAccessGeneration++;
+        this.parentDocClick.cancel();
+        this.openedFileSelection.cancel();
+        this.touchDragState?.ghostElement?.remove();
+        window.clearTimeout(this.reloadNotebookInfoTimeout);
+        window.clearTimeout(this.publishAccessTimeout);
+        this.pinnedDocs.destroy();
+        this.docTree.destroy();
+        this.selectionProgress.destroy();
+    }
+
     private genSort() {
-        window.siyuan.menus.menu.remove();
-        const subMenu = sortMenu("notebooks", window.siyuan.config.fileTree.sort, (sort: number) => {
-            fetchPost("/api/setting/setFiletree", {
-                ...window.siyuan.config.fileTree,
-                sort,
-            }, (response) => {
-                window.siyuan.config.fileTree = response.data;
-                setNoteBook(() => {
-                    this.init(false);
-                });
-            });
-        });
-        subMenu.forEach((item) => {
-            window.siyuan.menus.menu.append(new MenuItem(item).element);
-        });
-        window.siyuan.menus.menu.fullscreen("bottom");
-    }
-
-    private updateItemArrow(notebookId: string, filePath: string) {
-        const treeElement = this.element.querySelector(`[data-url="${notebookId}"]`);
-        if (!treeElement) {
-            return;
-        }
-        let currentPath = filePath;
-        let liElement;
-        while (!liElement) {
-            liElement = treeElement.querySelector(`[data-path="${currentPath}"]`);
-            if (!liElement) {
-                const dirname = pathPosix().dirname(currentPath);
-                if (dirname === "/") {
-                    const rootElement = treeElement.firstElementChild as HTMLElement;
-                    if (rootElement.querySelector(".b3-list-item__arrow--open")) {
-                        this.getLeaf(rootElement, notebookId, true);
+        toggleMenu({
+            target: this.actionsElement.querySelector("[data-type=sort]"),
+            build: (_menu, session) => {
+                const subMenu = sortMenu("notebooks", window.siyuan.config.fileTree.sort, (sort) => {
+                    if (sort === null) {
+                        return;
                     }
-                    break;
-                } else {
-                    currentPath = dirname + ".sy";
-                }
-            } else {
-                const hiddenElement = liElement.querySelector(".fn__hidden");
-                if (hiddenElement) {
-                    // 原先无子文档：显示展开箭头
-                    hiddenElement.classList.remove("fn__hidden");
-                } else if (liElement.querySelector(".b3-list-item__arrow--open")) {
-                    // 父文档已展开：刷新子列表
-                    this.getLeaf(liElement, notebookId, true);
-                }
-                break;
-            }
-        }
-    }
+                    configApi.set("fileTree.sort", sort, () => {
+                        this.onDocSortModeChanged({
+                            scope: "global",
+                            box: "",
+                            id: "",
+                            path: "/",
+                            sortMode: sort,
+                        });
+                    });
+                });
+                subMenu.forEach((item) => {
+                    window.siyuan.menus.menu.append(new MenuItem(item).element);
+                });
+                session.show(() => window.siyuan.menus.menu.fullscreen("bottom"));
 
-    private updateDocInfo(data: IWebSocketData) {
-        const notebook = window.siyuan.notebooks.find((item) => item.id === data.data.rootID);
-        const subFileCount = notebook && window.siyuan.isPublish ? notebook.subFileCount : data.data.subFileCount;
-        if (notebook) {
-            notebook.subFileCount = subFileCount;
-        }
-        const liElement = this.element.querySelector(
-            `li[data-node-id="${data.data.rootID}"][data-type="navigation-file"], ` +
-            `li[data-node-id="${data.data.rootID}"][data-type="navigation-root"]`
-        );
-        if (liElement) {
-            this.updateSubFileCount(liElement as HTMLElement, subFileCount);
-        }
-    }
-
-    private updateSubFileCount(liElement: HTMLElement, subFileCount: number) {
-        liElement.setAttribute("data-count", subFileCount.toString());
-        if (subFileCount === 0) {
-            liElement.querySelector(".b3-list-item__toggle")?.classList.add("fn__hidden");
-            liElement.querySelector(".b3-list-item__arrow")?.classList.remove("b3-list-item__arrow--open");
-            if (liElement.nextElementSibling?.tagName === "UL") {
-                liElement.nextElementSibling.remove();
-            }
-        } else {
-            liElement.querySelector(".b3-list-item__toggle")?.classList.remove("fn__hidden");
-        }
-        this.updateDocActionElement(liElement);
-    }
-
-    private updateDocActionElement(liElement: HTMLElement) {
-        if (liElement.getAttribute("data-type") !== "navigation-root" || !liElement.getAttribute("data-node-id")) {
-            return;
-        }
-        liElement.querySelector(".b3-list-item__icon")?.setAttribute("aria-label",
-            Number(liElement.getAttribute("data-count")) > 0 ?
-                window.siyuan.languages.docIconClickExpand : window.siyuan.languages.openDocument);
+            },
+        });
     }
 
     private genNotebook(item: INotebook) {
-        const editingPublishAccess = this.actionsElement.querySelector('[data-type="publish-access"]').classList.contains("block__icon--active");
-        // 加密笔记本关闭（锁定）时用 🔒 提示需解锁；打开（解锁）后恢复正常 emoji
-        const iconContent = (item.encrypted && item.closed)
-            ? "🔒️"
-            : unicode2Emoji(item.icon || window.siyuan.storage[Constants.LOCAL_IMAGES].note);
-        const isBoxDoc = !item.closed && window.siyuan.config.fileTree.boxDocEnabled;
-        const hasChildren = isBoxDoc && item.subFileCount > 0;
-        const iconAriaLabel = isBoxDoc ?
-            (hasChildren ? window.siyuan.languages.docIconClickExpand : window.siyuan.languages.openDocument) :
-            window.siyuan.languages.changeIcon;
-        const emojiHTML = `<span class="b3-list-item__icon b3-tooltips b3-tooltips__e${editingPublishAccess && !item.encrypted ? " fn__none" : ""}" aria-label="${iconAriaLabel}">${iconContent}</span>`;
-        const switchHTML = `<span class="b3-list-item__switch b3-tooltips b3-tooltips__e${editingPublishAccess && !item.encrypted ? "" : " fn__none"}" aria-label="${window.siyuan.languages.publishAccess}">${getPublishAccessOptionByLevel("public").iconHTML}</span>`;
-        if (item.closed) {
-            return `<li data-url="${item.id}" class="b3-list-item"${item.encrypted ? ' data-encrypted="true"' : ""}>
-    <span class="b3-list-item__toggle fn__hidden">
-        <svg class="b3-list-item__arrow"><use xlink:href="#iconRight"></use></svg>
-    </span>
-    ${emojiHTML}
-    ${switchHTML}
-    <span class="b3-list-item__text">${escapeHtml(item.name)}</span>
-    <span data-type="open" data-url="${item.id}" class="b3-list-item__action${(window.siyuan.config.readonly) ? " fn__none" : ""}">
-        <svg><use xlink:href="#iconOpen"></use></svg>
-    </span>
-</li>`;
-        } else {
-            return `<ul class="b3-list b3-list--background" data-url="${item.id}" data-sortmode="${item.sortMode}"${item.encrypted ? " data-encrypted=\"true\"" : ""}>
-<li class="b3-list-item" data-type="navigation-root" data-path="/" data-count="${item.subFileCount || 0}" data-node-id="${window.siyuan.config.fileTree.boxDocEnabled ? item.id : ""}" style="--file-toggle-width:24px">
-    <span class="b3-list-item__toggle${isBoxDoc && !hasChildren ? " fn__hidden" : ""}">
-        <svg class="b3-list-item__arrow"><use xlink:href="#iconRight"></use></svg>
-    </span>
-    ${emojiHTML}
-    ${switchHTML}
-    <span class="b3-list-item__text${item.closed ? " ft__on-surface" : ""}">${escapeHtml(item.name)}</span>
-    <span data-type="more-root" class="b3-list-item__action${(window.siyuan.config.readonly || item.closed) ? " fn__none" : ""}">
-        <svg><use xlink:href="#iconMore"></use></svg>
-    </span>
-    <span data-type="new" class="b3-list-item__action${(window.siyuan.config.readonly || item.closed) ? " fn__none" : ""}">
-        <svg><use xlink:href="#iconAdd"></use></svg>
-    </span>
-</li></ul>`;
-        }
+        return renderDocTreeRowHTML(notebookTreeItem(item), {mobile: true, editingPublishAccess: this.actionsElement.querySelector('[data-type="publish-access"]').classList.contains("block__icon--active")});
     }
 
     public init(init = true) {
-        let html = "";
-        let closeHtml = "";
-        let closeCounter = 0;
-        const scrollTop = this.element.scrollTop;
-        window.siyuan.notebooks.forEach((item) => {
-            if (item.closed) {
-                closeCounter++;
-                closeHtml += this.genNotebook(item);
-            } else {
-                html += this.genNotebook(item);
-            }
-        });
-        this.element.innerHTML = html;
-        this.closeElement.lastElementChild.innerHTML = closeHtml;
-        const counterElement = this.closeElement.querySelector(".counter");
-        counterElement.textContent = closeCounter.toString();
-        if (closeCounter) {
-            this.closeElement.classList.remove("fn__none");
-        } else {
-            this.closeElement.classList.add("fn__none");
+        if (this.disposed) { return; }
+        this.pinnedDocs?.scheduleRefresh();
+        const notebooks = window.siyuan.notebooks;
+        this.docTree.setRoots(notebooks.filter(item => !item.closed).map(item => ({
+            id: item.id, notebookId: item.id, path: "/", name: item.name, kind: "notebook",
+            subFileCount: item.subFileCount || 0, effectiveSortMode: item.sortMode, notebook: item,
+        })));
+        const closed = notebooks.filter(item => item.closed);
+        this.closeElement.lastElementChild.innerHTML = closed.map(item => this.genNotebook(item)).join("");
+        this.closeElement.querySelector(".counter").textContent = String(closed.length);
+        this.closeElement.classList.toggle("fn__none", closed.length === 0);
+        if (init) {
+            void restoreDocTreeState(this.docTree);
+            const hasOpen = notebooks.some(item => !item.closed);
+            this.closeElement.style.height = hasOpen ? "42px" : "40%";
+            this.closeElement.querySelector("svg").classList.toggle("b3-list-item__arrow--open", !hasOpen);
+            this.closeElement.lastElementChild.classList.toggle("fn__none", hasOpen);
         }
-        window.siyuan.storage[Constants.LOCAL_FILESPATHS].forEach(async (item: IFilesPath) => {
-            for (const openPath of item.openPaths) {
-                await this.selectItem(item.notebookId, openPath, undefined, false, false);
-            }
-            this.element.scrollTop = scrollTop;
-        });
-        this.refreshPublishAccessSwitch();
-        if (!init) {
-            return;
-        }
-        const svgElement = this.closeElement.querySelector("svg");
-        if (html !== "") {
-            this.closeElement.style.height = "42px";
-            svgElement.classList.remove("b3-list-item__arrow--open");
-            this.closeElement.lastElementChild.classList.add("fn__none");
-        } else {
-            this.closeElement.style.height = "40%";
-            svgElement.classList.add("b3-list-item__arrow--open");
-            this.closeElement.lastElementChild.classList.remove("fn__none");
-        }
-    }
-
-    private onMove(response: IWebSocketData) {
-        const refreshTargets = new Map<string, { element: HTMLElement, notebookId: string }>();
-        (response.data.moves as IFileTreeMove[]).forEach((move) => {
-            const expandedDocIDs = new Set<string>();
-            const movedItem = findMovedFileTreeItem(this.element, move);
-            const sourceElement = movedItem?.element;
-            const sourceAtTarget = movedItem?.isAtTarget;
-            let childListElement: HTMLElement;
-            if (sourceElement) {
-                childListElement = getFileTreeChildList(sourceElement);
-                collectExpandedDocIDs(sourceElement, childListElement, expandedDocIDs);
-                updateMovedSubtree(sourceElement, childListElement, move.fromPath, move.newPath);
-            }
-            if (sourceElement && !sourceAtTarget) {
-                const sourceListElement = sourceElement.parentElement;
-                childListElement?.remove();
-                if (sourceListElement.childElementCount === 1) {
-                    const parentLiElement = sourceListElement.previousElementSibling as HTMLElement;
-                    if (parentLiElement) {
-                        if (parentLiElement.getAttribute("data-type") !== "navigation-root" ||
-                            parentLiElement.dataset.nodeId) {
-                            parentLiElement.querySelector(".b3-list-item__toggle").classList.add("fn__hidden");
-                        }
-                        parentLiElement.querySelector(".b3-list-item__arrow").classList.remove(
-                            "b3-list-item__arrow--open"
-                        );
-                        parentLiElement.setAttribute("data-count", "0");
-                        this.updateDocActionElement(parentLiElement);
-                        const emojiElement = parentLiElement.querySelector(".b3-list-item__icon");
-                        if (emojiElement.innerHTML === unicode2Emoji(
-                            window.siyuan.storage[Constants.LOCAL_IMAGES].folder
-                        )) {
-                            emojiElement.innerHTML = unicode2Emoji(
-                                window.siyuan.storage[Constants.LOCAL_IMAGES].file
-                            );
-                        }
-                    }
-                    sourceListElement.remove();
-                } else {
-                    sourceElement.remove();
-                }
-            } else if (!sourceElement || sourceAtTarget) {
-                const parentPath = pathPosix().dirname(move.fromPath);
-                const parentElement = this.element.querySelector(
-                    `ul[data-url="${move.fromNotebook}"] li[data-path="${parentPath === "/" ? "/" : parentPath + ".sy"}"]`
-                ) as HTMLElement;
-                if (parentElement && parentElement.getAttribute("data-count") === "1") {
-                    parentElement.querySelector(".b3-list-item__toggle").classList.add("fn__hidden");
-                    parentElement.querySelector(".b3-list-item__arrow").classList.remove(
-                        "b3-list-item__arrow--open"
-                    );
-                }
-            }
-
-            const targetElement = this.element.querySelector(
-                `[data-url="${move.toNotebook}"] li[data-path="${move.toPath}"]`
-            ) as HTMLElement;
-            if (!targetElement) {
-                expandedDocIDs.forEach((id) => this.movedExpandedDocIDs.add(id));
-                return;
-            }
-            targetElement.querySelector(".b3-list-item__toggle").classList.remove("fn__hidden");
-            if (targetElement.getAttribute("data-type") === "navigation-root") {
-                targetElement.setAttribute(
-                    "data-count",
-                    Math.max(1, Number(targetElement.getAttribute("data-count"))).toString()
-                );
-                this.updateDocActionElement(targetElement);
-            }
-            const emojiElement = targetElement.querySelector(".b3-list-item__icon");
-            if (emojiElement.innerHTML === unicode2Emoji(window.siyuan.storage[Constants.LOCAL_IMAGES].file)) {
-                emojiElement.innerHTML = unicode2Emoji(window.siyuan.storage[Constants.LOCAL_IMAGES].folder);
-            }
-
-            const targetListElement = getFileTreeChildList(targetElement);
-            const targetExpanded = Boolean(targetElement.querySelector(".b3-list-item__arrow--open"));
-            if (sourceElement && targetListElement && !sourceAtTarget) {
-                targetListElement.append(sourceElement);
-                if (childListElement) {
-                    sourceElement.after(childListElement);
-                }
-            }
-            if (!targetExpanded || !sourceElement || (!sourceAtTarget && !targetListElement)) {
-                expandedDocIDs.forEach((id) => this.movedExpandedDocIDs.add(id));
-            }
-            if (targetExpanded) {
-                refreshTargets.set(`${move.toNotebook}:${move.toPath}`, {
-                    element: targetElement,
-                    notebookId: move.toNotebook,
-                });
-            }
-        });
-        if (response.callback !== Constants.CB_MOVE_NOLIST) {
-            refreshTargets.forEach((target) => {
-                this.getLeaf(target.element, target.notebookId, true);
-            });
-        }
-    }
-
-    private restoreMovedExpandedItems(listElement: Element, notebookId: string) {
-        restoreMovedExpandedDocItems(listElement, this.movedExpandedDocIDs, (item) => {
-            this.getLeaf(item, notebookId, true);
-        });
-    }
-
-    private onRemove(data: IWebSocketData) {
-        // "doc2heading" 后删除文件或挂载帮助文档前的 unmount
-        if (data.cmd === "closeBox" || data.cmd === "removeBox") {
-            setNoteBook((notebooks) => {
-                const targetElement = this.element.querySelector(`ul[data-url="${data.data.box}"] li[data-path="${"/"}"]`);
-                if (targetElement) {
-                    targetElement.parentElement.remove();
-                    if (data.cmd === "closeBox") {
-                        let closeHTML = "";
-                        notebooks.find(item => {
-                            if (item.closed) {
-                                closeHTML += this.genNotebook(item);
-                            }
-                        });
-                        this.closeElement.lastElementChild.innerHTML = closeHTML;
-                        const counterElement = this.closeElement.querySelector(".counter");
-                        counterElement.textContent = (parseInt(counterElement.textContent) + 1).toString();
-                        this.closeElement.classList.remove("fn__none");
-                    }
-                }
-            });
-            if (data.cmd === "removeBox") {
-                const removeElement = this.closeElement.querySelector(`li[data-url="${data.data.box}"]`);
-                if (removeElement) {
-                    removeElement.remove();
-                    const counterElement = this.closeElement.querySelector(".counter");
-                    counterElement.textContent = (parseInt(counterElement.textContent) - 1).toString();
-                    if (counterElement.textContent === "0") {
-                        this.closeElement.classList.add("fn__none");
-                    }
-                }
-            }
-            return;
-        }
-        data.data.ids.forEach((item: string) => {
-            const targetElement = this.element.querySelector(`li.b3-list-item[data-node-id="${item}"]`);
-            if (targetElement) {
-                // 子节点展开则删除
-                if (targetElement.nextElementSibling?.tagName === "UL") {
-                    targetElement.nextElementSibling.remove();
-                }
-                // 移除当前节点
-                const parentElement = targetElement.parentElement.previousElementSibling as HTMLElement;
-                if (targetElement.parentElement.childElementCount === 1) {
-                    if (parentElement) {
-                        const iconElement = parentElement.querySelector("svg");
-                        iconElement.classList.remove("b3-list-item__arrow--open");
-                        if (parentElement.dataset.type !== "navigation-root" || parentElement.dataset.nodeId) {
-                            iconElement.parentElement.classList.add("fn__hidden");
-                        }
-                        parentElement.setAttribute("data-count", "0");
-                        this.updateDocActionElement(parentElement);
-                        const emojiElement = iconElement.parentElement.nextElementSibling;
-                        if (emojiElement.innerHTML === unicode2Emoji(window.siyuan.storage[Constants.LOCAL_IMAGES].folder)) {
-                            emojiElement.innerHTML = unicode2Emoji(window.siyuan.storage[Constants.LOCAL_IMAGES].file);
-                        }
-                    }
-                    targetElement.parentElement.remove();
-                } else {
-                    targetElement.remove();
-                }
-            }
-        });
-    }
-
-    public onRename(data: { path: string, title: string, box: string }) {
-        const fileItemElement = this.element.querySelector(`ul[data-url="${data.box}"] li[data-path="${data.path}"]`);
-        if (!fileItemElement) {
-            return;
-        }
-        fileItemElement.setAttribute("data-name", data.title);
-        fileItemElement.querySelector(".b3-list-item__text").innerHTML = escapeHtml(data.title);
-    }
-
-    public onFiletreeSortChanged(data: { notebook: string, parentPath: string }) {
-        const notebookElement = this.element.querySelector(`ul[data-url="${data.notebook}"]`);
-        if (!notebookElement) {
-            return;
-        }
-        const sortMode = notebookElement.getAttribute("data-sortmode");
-        if (sortMode !== "6" && !(sortMode === "15" && window.siyuan.config.fileTree.sort === 6)) {
-            return;
-        }
-
-        const listPath = data.parentPath === "/" ? "/" : `${data.parentPath}.sy`;
-        const liElement = notebookElement.querySelector(`li[data-path="${listPath}"]`);
-        if (!liElement?.nextElementSibling || liElement.nextElementSibling.tagName !== "UL") {
-            return;
-        }
-        fetchPost("/api/filetree/listDocsByPath", {
-            notebook: data.notebook,
-            path: listPath,
-            app: Constants.SIYUAN_APPID,
-        }, response => {
-            this.onLsHTML(response.data);
-        });
-    }
-
-    public onNotebookSortChanged() {
-        if (window.siyuan.config.fileTree.sort !== 6) {
-            return;
-        }
-        setNoteBook(() => {
-            this.init(false);
-        });
-    }
-
-    private onMount(data: IWebSocketData) {
-        if (data.data.existed) {
-            return;
-        }
-        const liElement = this.closeElement.querySelector(`li[data-url="${data.data.box.id}"]`) as HTMLElement;
-        if (liElement) {
-            liElement.remove();
-            const counterElement = this.closeElement.querySelector(".counter");
-            counterElement.textContent = (parseInt(counterElement.textContent) - 1).toString();
-            if (counterElement.textContent === "0") {
-                this.closeElement.classList.add("fn__none");
-            }
-        }
-        setNoteBook((notebooks: INotebook[]) => {
-            const notebook = notebooks.find((item) => item.id === data.data.box.id) || data.data.box;
-            const html = this.genNotebook(notebook);
-            if (this.element.childElementCount === 0) {
-                this.element.innerHTML = html;
-            } else {
-                let previousId;
-                notebooks.find((item, index) => {
-                    if (item.id === data.data.box.id) {
-                        while (index > 0) {
-                            if (!notebooks[index - 1].closed) {
-                                previousId = notebooks[index - 1].id;
-                                break;
-                            } else {
-                                index--;
-                            }
-                        }
-                        return true;
-                    }
-                });
-                if (previousId) {
-                    this.element.querySelector(`[data-url="${previousId}"]`).insertAdjacentHTML("afterend", html);
-                } else {
-                    this.element.insertAdjacentHTML("afterbegin", html);
-                }
-            }
-        });
-
-    }
-
-    private onLsHTML(data: { files: IFile[], box: string, path: string }, scrollTop?: number) {
-        if (data.files.length === 0) {
-            return;
-        }
-        const liElement = this.element.querySelector(`ul[data-url="${data.box}"] li[data-path="${data.path}"]`);
-        if (!liElement) {
-            return;
-        }
-        let fileHTML = "";
-        data.files.forEach((item: IFile) => {
-            fileHTML += this.genFileHTML(item);
-        });
-        let nextElement = liElement.nextElementSibling;
-        if (nextElement && nextElement.tagName === "UL") {
-            // 文件展开时，刷新
-            const tempElement = document.createElement("template");
-            tempElement.innerHTML = fileHTML;
-            // 保持文件夹展开状态
-            nextElement.querySelectorAll(":scope > .b3-list-item > .b3-list-item__toggle> .b3-list-item__arrow--open").forEach(item => {
-                const openLiElement = hasClosestByClassName(item, "b3-list-item");
-                if (openLiElement) {
-                    const tempOpenLiElement = tempElement.content.querySelector(`.b3-list-item[data-node-id="${openLiElement.getAttribute("data-node-id")}"]`);
-                    if (tempOpenLiElement) {
-                        tempOpenLiElement.after(openLiElement.nextElementSibling);
-                        tempOpenLiElement.querySelector(".b3-list-item__arrow").classList.add("b3-list-item__arrow--open");
-                    }
-                }
-            });
-            nextElement.innerHTML = tempElement.innerHTML;
-            this.restoreMovedExpandedItems(nextElement, data.box);
-            if (typeof scrollTop === "number") {
-                this.element.scroll({top: scrollTop, behavior: "smooth"});
-            }
-            this.refreshPublishAccessSwitch();
-            return;
-        }
-        liElement.querySelector(".b3-list-item__arrow").classList.add("b3-list-item__arrow--open");
-        liElement.insertAdjacentHTML("afterend", `<ul>${fileHTML}</ul>`);
-        nextElement = liElement.nextElementSibling;
-        this.restoreMovedExpandedItems(nextElement, data.box);
-        expandFileTree(nextElement as HTMLElement, () => {
-            if (typeof scrollTop === "number") {
-                this.element.scroll({top: scrollTop, behavior: "smooth"});
-            }
-        });
         this.refreshPublishAccessSwitch();
     }
 
-    private async onLsSelect(data: {
-        files: IFile[],
-        box: string,
-        path: string
-    }, filePath: string, setStorage: boolean, isSetCurrent: boolean) {
-        let fileHTML = "";
-        data.files.forEach((item: IFile) => {
-            fileHTML += this.genFileHTML(item);
-        });
-        if (fileHTML === "") {
+    private renderTreeRow(item: IDocTreeItem): HTMLElement {
+        return renderDocTreeRow(item, {mobile: true, editingPublishAccess: this.actionsElement.querySelector('[data-type="publish-access"]').classList.contains("block__icon--active")});
+    }
+
+    public onRename(data: {path: string, title: string, box: string}) {
+        const parentID = data.path.split("/").slice(0, -1).filter(Boolean).pop() || "";
+        void this.docTree.reload({notebook: data.box, parentID});
+    }
+
+    public onFiletreeSortChanged(data: {notebook: string, parentPath: string}) {
+        const parentID = data.parentPath.split("/").filter(Boolean).pop()?.replace(/\.sy$/, "") || "";
+        void this.pinnedDocs?.docTree.reload({notebook: data.notebook, parentID});
+        void this.docTree.reload({notebook: data.notebook, parentID});
+    }
+
+    public onDocsImported(data: {notebook: string, parentPath: string, rootIDs: string[]}) {
+        this.pinnedDocs.scheduleRefresh();
+        void refreshImportedDocTree(this.docTree, data);
+    }
+
+    public onDocSortModeChanged(data: IDocSortModeChanged) {
+        this.pinnedDocs.scheduleRefresh();
+        void this.pinnedDocs.docTree.reload(data.scope === "global" ? undefined : {notebook: data.box});
+        updateFileTreeSortMode(data);
+        void this.docTree.reload(data.scope === "global" ? undefined : {notebook: data.box});
+    }
+
+    public onNotebookSortChanged() { setNoteBook(() => this.init(false)); }
+
+    private toggleTreeItem(row: HTMLElement) {
+        const item = this.docTree.getItemFromElement(row);
+        if (!item) { return; }
+        this.setCurrent(row, false);
+        void this.getLeaf(row, item.notebookId);
+        window.siyuan.menus.menu.remove();
+    }
+
+    private handleParentDocClick(row: HTMLElement, notebookId: string) {
+        const item = this.docTree.getItemFromElement(row);
+        if (!item) { return; }
+        if (window.siyuan.config.fileTree.parentDocTitleClickMode !== 2) {
+            this.parentDocClick.cancel();
+            this.toggleTreeItem(row);
             return;
         }
-        const liElement = this.element.querySelector(`ul[data-url="${data.box}"] li[data-path="${data.path}"]`);
-        if (liElement.nextElementSibling && liElement.nextElementSibling.tagName === "UL") {
-            // 文件展开时，刷新
-            liElement.nextElementSibling.remove();
+        this.parentDocClick.click(row, async () => {
+            const key = item.occurrenceKey;
+            const path = item.path;
+            const expanded = this.docTree.isExpanded(key);
+            if (!expanded && !await this.docTree.itemAtDirectoryIndex(key, 0)) { return; }
+            return () => {
+                if (this.docTree.getItem(key)?.path === path &&
+                    this.docTree.isExpanded(key) === expanded &&
+                    window.siyuan.config.fileTree.parentDocTitleClickMode === 2) {
+                    void this.docTree.toggle(key);
+                }
+            };
+        }, () => openMobileFileById(this.app, item.id, [Constants.CB_GET_SCROLL], undefined, notebookId));
+    }
+
+    private async showMultiSelectMenu(session: IMenuSession) {
+        const selected = this.docTree.getSelectedItems();
+        if (!selected.length) { return; }
+        const version = this.docTree.selectionVersion;
+        const item = await this.docTree.ensureRendered(selected[0].occurrenceKey);
+        if (!item || !session.isCurrent() || !this.docTree.validateSelection(version, selected)) { return; }
+        if (selected[0].kind === "notebook") {
+            initNavigationMenu(this.app, item);
+        } else {
+            initFileMenu(this.app, selected[0].notebookId, selected[0].path, item);
         }
-        const arrowElement = liElement.querySelector(".b3-list-item__arrow");
-        arrowElement.classList.add("b3-list-item__arrow--open");
-        arrowElement.parentElement.classList.remove("fn__hidden");
-        const emojiElement = liElement.querySelector(".b3-list-item__icon");
-        if (emojiElement.textContent === unicode2Emoji(window.siyuan.storage[Constants.LOCAL_IMAGES].file)) {
-            emojiElement.textContent = unicode2Emoji(window.siyuan.storage[Constants.LOCAL_IMAGES].folder);
+        session.show(() => window.siyuan.menus.menu.fullscreen("bottom"));
+    }
+
+    private insertMultiSelectMenu(item: HTMLElement) {
+        if (window.siyuan.config.readonly) {
+            return;
         }
-        liElement.insertAdjacentHTML("afterend", `<ul>${fileHTML}</ul>`);
-        this.restoreMovedExpandedItems(liElement.nextElementSibling, data.box);
-        let newLiElement;
-        for (let i = 0; i < data.files.length; i++) {
-            const item = data.files[i];
-            if (filePath === item.path) {
-                newLiElement = await this.selectItem(data.box, filePath, undefined, setStorage, isSetCurrent);
-            } else if (filePath.startsWith(item.path.replace(".sy", ""))) {
-                const response = await fetchSyncPost("/api/filetree/listDocsByPath", {
-                    notebook: data.box,
-                    path: item.path,
-                    app: Constants.SIYUAN_APPID,
-                });
-                newLiElement = await this.selectItem(response.data.box, filePath, response.data, setStorage, isSetCurrent);
+        const menuItem = new MenuItem({
+            id: "multiSelect",
+            icon: "iconCheck",
+            label: window.siyuan.languages.multiSelect,
+            click: () => {
+                this.setCurrent(item, false);
+                this.setMultiSelect(true);
             }
+        }).element;
+        insertMobileMultiSelectMenu(window.siyuan.menus.menu.element.lastElementChild, menuItem);
+    }
+
+    private setMultiSelect(enabled: boolean) {
+        this.parentDocClick.cancel();
+        this.multiSelect = enabled;
+        this.touchDragState?.ghostElement?.remove();
+        this.touchDragState = null;
+        this.docTree.release();
+        this.openedFileSelection.cancel();
+        this.actionsElement.classList.toggle("fn__none", enabled);
+        this.selectionElement.classList.toggle("fn__none", !enabled);
+        if (enabled) { showMessage(window.siyuan.languages.mobileFileTreeMultiSelectTip); }
+        else { this.docTree.clearSelection(); }
+        this.updateMultiSelect();
+    }
+
+    private updateMultiSelect() {
+        if (this.multiSelect) {
+            updateMultiSelectToolbar(this.selectionElement, this.docTree.getSelectedItems().length);
         }
-        if (isSetCurrent) {
-            this.setCurrent(newLiElement);
-        }
-        return newLiElement;
     }
 
     public setCurrent(target: HTMLElement, isScroll = true) {
-        if (!target) {
-            return;
-        }
-        this.element.querySelectorAll("li.b3-list-item--focus").forEach((liItem) => {
-            liItem.classList.remove("b3-list-item--focus");
-        });
-        target.classList.add("b3-list-item--focus");
-
-        if (isScroll) {
-            const elementRect = this.element.getBoundingClientRect();
-            this.element.scrollTop = this.element.scrollTop + (target.getBoundingClientRect().top - (elementRect.top + elementRect.height / 2));
-        }
+        if (this.multiSelect) { return; }
+        const item = this.docTree.getItemFromElement(target);
+        if (item) { void this.docTree.select(item.occurrenceKey, {scroll: isScroll}); }
     }
 
-    public getLeaf(liElement: Element, notebookId: string, focusUpdate = false) {
-        const toggleElement = liElement.querySelector(".b3-list-item__arrow");
-        if (cancelFileTreeCollapse(liElement)) {
-            this.getOpenPaths();
-            if (!focusUpdate) {
-                return;
-            }
-        }
-        const leafElement = liElement.nextElementSibling as HTMLElement;
-        if (toggleElement.classList.contains("b3-list-item__arrow--open") && !focusUpdate) {
-            toggleElement.classList.remove("b3-list-item__arrow--open");
-            leafElement?.remove();
-            this.getOpenPaths();
+    public async selectOpenedFile(notebookId: string, filePath: string) {
+        if (this.multiSelect) {
             return;
         }
-        fetchPost("/api/filetree/listDocsByPath", {
-            notebook: notebookId,
-            path: liElement.getAttribute("data-path"),
-            app: Constants.SIYUAN_APPID,
-        }, response => {
-            if (response.data.path === "/" && response.data.files.length === 0) {
-                newFileInTree(this.app, notebookId, "/");
-                return;
+        const selected = this.docTree.getSelectedItems();
+        if (selected.some(item => item.notebookId === notebookId && item.path === filePath)) {
+            this.openedFileSelection.cancel();
+            return;
+        }
+        const target = await this.openedFileSelection.resolve(
+            () => this.selectItem(notebookId, filePath, undefined, true, false),
+            () => {
+                const protyle = window.siyuan.mobile.editor?.protyle;
+                return window.siyuan.config.fileTree.alwaysSelectOpenedFile &&
+                    !protyle?.element.classList.contains("fn__none") &&
+                    protyle?.notebookId === notebookId && protyle.path === filePath;
             }
-            this.onLsHTML(response.data);
-            this.getOpenPaths();
-        });
+        );
+        this.setCurrent(target);
     }
 
-    public async selectItem(notebookId: string, filePath: string, data?: {
-        files: IFile[],
-        box: string,
-        path: string
-    }, setStorage = true, isSetCurrent = true) {
-        const treeElement = this.element.querySelector(`[data-url="${notebookId}"]`);
-        if (!treeElement) {
-            // 有文件树和编辑器的布局初始化时，文件树还未挂载
-            return;
-        }
-        const boxDocID = window.siyuan.config.fileTree.boxDocEnabled ? notebookId : "";
-        if (boxDocID && filePath === `/${boxDocID}.sy`) {
-            const boxDocElement = treeElement.querySelector("[data-type=\"navigation-root\"]") as HTMLElement;
-            if (isSetCurrent) {
-                this.setCurrent(boxDocElement);
-            }
-            return boxDocElement;
-        }
-        let currentPath = filePath;
-        let liElement: HTMLElement;
-        while (!liElement) {
-            liElement = treeElement.querySelector(`[data-path="${currentPath}"]`);
-            if (!liElement) {
-                const dirname = pathPosix().dirname(currentPath);
-                if (dirname === "/") {
-                    currentPath = dirname;
-                } else {
-                    currentPath = dirname + ".sy";
-                }
-            }
-        }
-
-        if (liElement.getAttribute("data-path") === filePath) {
-            if (setStorage) {
-                this.getOpenPaths();
-            }
-            if (isSetCurrent) {
-                this.setCurrent(liElement);
-            }
-            return liElement;
-        }
-
-        if (data && data.path === currentPath) {
-            liElement = await this.onLsSelect(data, filePath, setStorage, isSetCurrent);
+    public async getLeaf(row: Element, notebookId: string, focusUpdate = false) {
+        const item = this.docTree.getItemFromElement(row);
+        if (!item) { return; }
+        if (focusUpdate) {
+            void this.docTree.reload({notebook: notebookId, parentID: item.kind === "notebook" ? "" : item.id});
         } else {
-            const response = await fetchSyncPost("/api/filetree/listDocsByPath", {
-                notebook: notebookId,
-                path: currentPath,
-                app: Constants.SIYUAN_APPID,
-            });
-            liElement = await this.onLsSelect(response.data, filePath, setStorage, isSetCurrent);
+            const pending = this.docTree.toggle(item.occurrenceKey);
+            const interaction = this.docTree.interactionVersion;
+            await pending;
+            // 笔记本摘要计数可能未加载，只在目录范围确认为空且本次展开仍有效时新建。
+            if (item.kind === "notebook" && !window.siyuan.config.readonly &&
+                interaction === this.docTree.interactionVersion && this.docTree.isExpanded(item.occurrenceKey)) {
+                const directory = this.docTree.model.directory(item);
+                if (directory.revision && directory.total === 0) { newFileInTree(this.app, notebookId, "/"); }
+            }
         }
-        this.refreshPublishAccessSwitch();
-        return liElement;
+    }
+
+    public async selectItem(notebookId: string, filePath: string, data?: IFileTreeList,
+                            setStorage = true, isSetCurrent = true) {
+        const id = filePath === "/" ? notebookId : filePath.split("/").pop().replace(/\.sy$/, "");
+        const pending = this.docTree.locate(notebookId, id, {select: isSetCurrent, scroll: isSetCurrent});
+        const interaction = this.docTree.interactionVersion;
+        await pending;
+        if (interaction !== this.docTree.interactionVersion) { return; }
+        const item = this.docTree.findItem(notebookId, id);
+        const row = item ? await this.docTree.ensureRendered(item.occurrenceKey) : undefined;
+        if (setStorage) { this.getOpenPaths(); }
+        return row;
     }
 
     private getOpenPaths() {
-        const filesPaths: IFilesPath[] = [];
-        this.element.querySelectorAll(".b3-list[data-url]").forEach((item: HTMLElement) => {
-            const notebookPaths: IFilesPath = {
-                notebookId: item.getAttribute("data-url"),
-                openPaths: []
-            };
-            item.querySelectorAll(".b3-list-item__arrow--open").forEach((openItem) => {
-                const liElement = hasClosestByTag(openItem, "LI");
-                if (liElement) {
-                    notebookPaths.openPaths.push(liElement.getAttribute("data-path"));
-                }
-            });
-            if (notebookPaths.openPaths.length > 0) {
-                for (let i = 0; i < notebookPaths.openPaths.length; i++) {
-                    for (let j = i + 1; j < notebookPaths.openPaths.length; j++) {
-                        if (notebookPaths.openPaths[j].startsWith(notebookPaths.openPaths[i].replace(".sy", ""))) {
-                            notebookPaths.openPaths.splice(i, 1);
-                            j--;
-                        }
-                    }
-                }
-                notebookPaths.openPaths.forEach((openPath, index) => {
-                    const nextPath = this.element.querySelector(`[data-url="${notebookPaths.notebookId}"] li[data-path="${openPath}"]`)?.nextElementSibling?.firstElementChild?.getAttribute("data-path");
-                    if (nextPath) {
-                        notebookPaths.openPaths[index] = nextPath;
-                    }
-                });
-                filesPaths.push(notebookPaths);
-            }
-        });
-        window.siyuan.storage[Constants.LOCAL_FILESPATHS] = filesPaths;
-        setStorageVal(Constants.LOCAL_FILESPATHS, filesPaths);
+        if (this.docTree) { saveDocTreeState(this.docTree); }
     }
 
-    private genFileHTML = (item: IFile) => {
-        let countHTML = "";
-        if (item.count && item.count > 0) {
-            countHTML = `<span class="counter">${item.count}</span>`;
-        }
-        const paddingLeft = (item.path.split("/").length - 1) * 20;
-        const editingPublishAccess = this.actionsElement.querySelector('[data-type="publish-access"]').classList.contains("block__icon--active");
-        return `<li data-node-id="${item.id}" data-name="${Lute.EscapeHTMLStr(item.name)}" data-count="${item.subFileCount}" data-type="navigation-file" 
-class="b3-list-item" data-path="${item.path}" style="--file-toggle-width:${paddingLeft + 20}px" >
-    <span style="padding-left: ${paddingLeft}px" class="b3-list-item__toggle${item.subFileCount === 0 ? " fn__hidden" : ""}">
-        <svg class="b3-list-item__arrow"><use xlink:href="#iconRight"></use></svg>
-    </span>
-    <span class="b3-list-item__icon"${editingPublishAccess ? " fn__none" : ""}>${unicode2Emoji(item.icon || (item.subFileCount === 0 ? window.siyuan.storage[Constants.LOCAL_IMAGES].file : window.siyuan.storage[Constants.LOCAL_IMAGES].folder))}</span>
-    <span class="b3-list-item__switch${editingPublishAccess ? "" : " fn__none"}">${getPublishAccessOptionByLevel("public").iconHTML}</span>
-    <span class="b3-list-item__text">${getDocDisplayName(item.name, item.titleEmpty, true)}</span>
-    <span data-type="more-file" class="b3-list-item__action b3-tooltips b3-tooltips__nw" aria-label="${window.siyuan.languages.more}">
-        <svg><use xlink:href="#iconMore"></use></svg>
-    </span>
-    <span data-type="new" class="b3-list-item__action b3-tooltips b3-tooltips__nw${window.siyuan.config.readonly ? " fn__none" : ""}" aria-label="${window.siyuan.languages.newSubDoc}">
-        <svg><use xlink:href="#iconAdd"></use></svg>
-    </span>
-    ${countHTML}
-</li>`;
-    };
+
 
     private updatePublishAccessControls(editingPublishAccess: boolean) {
         this.element.querySelectorAll(".b3-list-item__icon").forEach(item => {
-            const encrypted = Boolean(item.closest("[data-encrypted=true]"));
+            const encrypted = Boolean(isEncryptedDocTreeItem(item));
             item.classList.toggle("fn__none", editingPublishAccess && !encrypted);
             const switchElement = item.nextElementSibling;
             if (switchElement) {
@@ -1392,28 +856,33 @@ class="b3-list-item" data-path="${item.path}" style="--file-toggle-width:${paddi
         const editingPublishAccess = this.actionsElement.querySelector('[data-type="publish-access"]').classList.contains("block__icon--active");
         this.updatePublishAccessControls(editingPublishAccess);
         if (window.siyuan.config.readonly || window.siyuan.isPublish || !editingPublishAccess) {
+            window.clearTimeout(this.publishAccessTimeout);
+            this.publishAccessKey = "";
+            this.publishAccessGeneration++;
             return;
         }
         const ids: string[] = [];
-        this.element.querySelectorAll("[data-url]").forEach((element: HTMLElement) => {
-            if (!element.closest("[data-encrypted=true]")) {
-                ids.push(element.getAttribute("data-url"));
-            }
+        this.element.querySelectorAll<HTMLElement>("li[data-tree-key]").forEach(element => {
+            const item = getDocTreeItem(element);
+            if (item && !isEncryptedDocTreeItem(element)) { ids.push(item.id); }
         });
-        this.element.querySelectorAll("[data-type=\"navigation-file\"][data-node-id]").forEach((element: HTMLElement) => {
-            if (!element.closest("[data-encrypted=true]")) {
-                ids.push(element.getAttribute("data-node-id"));
-            }
-        });
-        fetchPost("/api/filetree/getPublishAccess", {
-            ids
-        }, response => {
-            response.data.publishAccess.forEach((item: IPublishAccessItem) => {
-                const element = this.element.querySelector(`[data-url="${item.id}"] .b3-list-item__switch`) || this.element.querySelector(`[data-node-id="${item.id}"] .b3-list-item__switch`);
-                if (element) {
-                    element.innerHTML = getPublishAccessOptionByLevel(getPublishAccessLevel(item.visible, item.password, item.disable)).iconHTML;
-                }
+        const key = ids.sort().join(",");
+        if (key === this.publishAccessKey) { return; }
+        this.publishAccessKey = key;
+        const generation = ++this.publishAccessGeneration;
+        window.clearTimeout(this.publishAccessTimeout);
+        this.publishAccessTimeout = window.setTimeout(() => {
+            fetchPost("/api/filetree/getPublishAccess", {ids}, response => {
+                if (generation !== this.publishAccessGeneration || response.code !== 0) { return; }
+                response.data.publishAccess.forEach((item: IPublishAccessItem) => {
+                    const row = Array.from(this.element.querySelectorAll<HTMLElement>("li[data-tree-key]"))
+                        .find(row => getDocTreeItem(row)?.id === item.id);
+                    const element = row?.querySelector(".b3-list-item__switch");
+                    if (element && !isEncryptedDocTreeItem(element)) {
+                        element.innerHTML = getPublishAccessOptionByLevel(getPublishAccessLevel(item.visible, item.password, item.disable)).iconHTML;
+                    }
+                });
             });
-        });
+        }, 100);
     }
 }

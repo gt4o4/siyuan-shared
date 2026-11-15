@@ -1,57 +1,78 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package api
 
 import (
-	"net/http"
-
-	"github.com/88250/gulu"
 	"github.com/gin-gonic/gin"
+	"github.com/siyuan-note/siyuan/kernel/apicontract"
 	"github.com/siyuan-note/siyuan/kernel/conf"
 	"github.com/siyuan-note/siyuan/kernel/model"
 	"github.com/siyuan-note/siyuan/kernel/server/tunnel"
-	"github.com/siyuan-note/siyuan/kernel/util"
 )
 
-func setTunnel(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
-
-	arg, ok := util.JsonArg(c, ret)
-	if !ok {
-		return
+func settingTunnelPayload(value *conf.Tunnel) *apicontract.SettingTunnel {
+	if value == nil {
+		return nil
 	}
-
-	param, err := gulu.JSON.MarshalJSON(arg)
-	if err != nil {
-		ret.Code = -1
-		ret.Msg = err.Error()
-		return
+	result := &apicontract.SettingTunnel{}
+	if value.Tailscale != nil {
+		result.Tailscale = &apicontract.SettingTailscaleConf{
+			Enable:   value.Tailscale.Enable,
+			Hostname: value.Tailscale.Hostname,
+			AuthKey:  value.Tailscale.AuthKey,
+			Port:     value.Tailscale.Port,
+			UseTLS:   value.Tailscale.UseTLS,
+			StateDir: value.Tailscale.StateDir,
+		}
 	}
+	if value.Cloudflared != nil {
+		result.Cloudflared = &apicontract.SettingCloudflaredConf{
+			Enable:      value.Cloudflared.Enable,
+			TunnelType:  value.Cloudflared.TunnelType,
+			TunnelToken: value.Cloudflared.TunnelToken,
+		}
+	}
+	return result
+}
 
+func tunnelConfFromContract(request apicontract.SettingTunnel) *conf.Tunnel {
 	tunnelConf := &conf.Tunnel{}
-	if err = gulu.JSON.UnmarshalJSON(param, tunnelConf); err != nil {
-		ret.Code = -1
-		ret.Msg = err.Error()
-		return
+	if request.Tailscale != nil {
+		tunnelConf.Tailscale = &conf.TailscaleConf{
+			Enable:   request.Tailscale.Enable,
+			Hostname: request.Tailscale.Hostname,
+			AuthKey:  request.Tailscale.AuthKey,
+			Port:     request.Tailscale.Port,
+			UseTLS:   request.Tailscale.UseTLS,
+			StateDir: request.Tailscale.StateDir,
+		}
 	}
+	if request.Cloudflared != nil {
+		tunnelConf.Cloudflared = &conf.CloudflaredConf{
+			Enable:      request.Cloudflared.Enable,
+			TunnelType:  request.Cloudflared.TunnelType,
+			TunnelToken: request.Cloudflared.TunnelToken,
+		}
+	}
+	return tunnelConf
+}
 
-	oldTailscaleEnable := model.Conf.Tunnel.Tailscale != nil && model.Conf.Tunnel.Tailscale.Enable
-	oldCloudflaredEnable := model.Conf.Tunnel.Cloudflared != nil && model.Conf.Tunnel.Cloudflared.Enable
+func tunnelRuntimeStatusPayload(status tunnel.TunnelStatus) apicontract.TunnelRuntimeStatus {
+	return apicontract.TunnelRuntimeStatus{
+		Running:   status.Running,
+		URL:       status.URL,
+		Error:     status.Error,
+		StartedAt: status.StartedAt,
+	}
+}
+
+var setTunnel = contractHandler(apicontract.SetTunnel, func(c *gin.Context, request apicontract.SettingTunnel) apicontract.Response[apicontract.SetTunnelData] {
+	tunnelConf := tunnelConfFromContract(request)
+
+	oldTailscaleEnable := model.Conf.Tunnel != nil && model.Conf.Tunnel.Tailscale != nil && model.Conf.Tunnel.Tailscale.Enable
+	oldCloudflaredEnable := model.Conf.Tunnel != nil && model.Conf.Tunnel.Cloudflared != nil && model.Conf.Tunnel.Cloudflared.Enable
 
 	model.Conf.Tunnel = tunnelConf
 	model.Conf.Save()
@@ -59,7 +80,7 @@ func setTunnel(c *gin.Context) {
 	newTailscaleEnable := tunnelConf.Tailscale != nil && tunnelConf.Tailscale.Enable
 	newCloudflaredEnable := tunnelConf.Cloudflared != nil && tunnelConf.Cloudflared.Enable
 
-	// Restart tunnels if config changed
+	// 隧道开关变化或启用时重启对应隧道。
 	if oldTailscaleEnable != newTailscaleEnable || newTailscaleEnable {
 		go tunnel.RestartTailscale()
 	}
@@ -67,31 +88,25 @@ func setTunnel(c *gin.Context) {
 		go tunnel.RestartCloudflared()
 	}
 
-	ret.Data = map[string]any{
-		"tunnel":              model.Conf.Tunnel,
-		"cloudflaredAvailable": tunnel.CloudflaredAvailable,
-	}
-}
+	return apicontract.Success(apicontract.SetTunnelData{
+		Tunnel:               settingTunnelPayload(model.Conf.Tunnel),
+		CloudflaredAvailable: tunnel.CloudflaredAvailable,
+	})
+})
 
-func getTunnel(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+var getTunnel = contractHandler(apicontract.GetTunnel, func(c *gin.Context, request apicontract.EmptyRequest) apicontract.Response[apicontract.GetTunnelData] {
+	return apicontract.Success(apicontract.GetTunnelData{
+		Tunnel:               settingTunnelPayload(model.Conf.Tunnel),
+		TailscaleStatus:      tunnelRuntimeStatusPayload(tunnel.GetTailscaleStatus()),
+		CloudflaredStatus:    tunnelRuntimeStatusPayload(tunnel.GetCloudflaredStatus()),
+		CloudflaredAvailable: tunnel.CloudflaredAvailable,
+	})
+})
 
-	ret.Data = map[string]any{
-		"tunnel":              model.Conf.Tunnel,
-		"tailscaleStatus":    tunnel.GetTailscaleStatus(),
-		"cloudflaredStatus":  tunnel.GetCloudflaredStatus(),
-		"cloudflaredAvailable": tunnel.CloudflaredAvailable,
-	}
-}
-
-func tunnelStatus(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
-
-	ret.Data = map[string]any{
-		"tailscaleStatus":    tunnel.GetTailscaleStatus(),
-		"cloudflaredStatus":  tunnel.GetCloudflaredStatus(),
-		"cloudflaredAvailable": tunnel.CloudflaredAvailable,
-	}
-}
+var tunnelStatus = contractHandler(apicontract.GetTunnelStatus, func(c *gin.Context, request apicontract.EmptyRequest) apicontract.Response[apicontract.TunnelStatusData] {
+	return apicontract.Success(apicontract.TunnelStatusData{
+		TailscaleStatus:      tunnelRuntimeStatusPayload(tunnel.GetTailscaleStatus()),
+		CloudflaredStatus:    tunnelRuntimeStatusPayload(tunnel.GetCloudflaredStatus()),
+		CloudflaredAvailable: tunnel.CloudflaredAvailable,
+	})
+})

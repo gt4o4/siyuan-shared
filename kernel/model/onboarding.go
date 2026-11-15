@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
@@ -84,11 +72,11 @@ func EnsureOnboarding() (ret *conf.Onboarding, notebookCreated bool, err error) 
 	onboardingLock.Lock()
 	defer onboardingLock.Unlock()
 
-	if nil == Conf.Onboarding {
-		Conf.Onboarding = &conf.Onboarding{State: conf.OnboardingCompleted}
-		Conf.Save()
+	if nil == Conf.Onboarding.Load() {
+		UpdateOnboardingConf(func(value *conf.Onboarding) {})
 	}
-	onboarding := Conf.Onboarding
+	onboarding := cloneOnboarding(Conf.Onboarding.Load())
+	save := func() { UpdateOnboardingConf(func(value *conf.Onboarding) { *value = *onboarding }) }
 	if !onboarding.NewUser || onboarding.Dismissed {
 		return cloneOnboarding(onboarding), false, nil
 	}
@@ -100,12 +88,12 @@ func EnsureOnboarding() (ret *conf.Onboarding, notebookCreated bool, err error) 
 	documentExists := onboarding.NotebookID != "" && onboarding.DocumentID != "" && filelock.IsExist(filepath.Join(
 		util.DataDir, onboarding.NotebookID, onboarding.DocumentID+".sy"))
 	if reconcileOnboarding(onboarding, boxes, documentExists) {
-		Conf.Save()
+		save()
 	}
 	if !onboarding.NewUser || onboarding.State == conf.OnboardingCompleted {
 		return cloneOnboarding(onboarding), false, nil
 	}
-	if util.ReadOnly || Conf.Publish.Enable {
+	if util.ReadOnly || Conf.Publish.Load().Enable {
 		return cloneOnboarding(onboarding), false, errors.New(Conf.Language(34))
 	}
 
@@ -114,11 +102,11 @@ func EnsureOnboarding() (ret *conf.Onboarding, notebookCreated bool, err error) 
 			if len(boxes) == 1 && boxes[0].Name == Conf.Language(342) {
 				onboarding.NotebookID = boxes[0].ID
 				onboarding.State = conf.OnboardingNotebookCreated
-				Conf.Save()
+				save()
 			} else {
 				onboarding.State = conf.OnboardingCompleted
 				onboarding.NewUser = false
-				Conf.Save()
+				save()
 				return cloneOnboarding(onboarding), false, nil
 			}
 		}
@@ -129,7 +117,7 @@ func EnsureOnboarding() (ret *conf.Onboarding, notebookCreated bool, err error) 
 				return cloneOnboarding(onboarding), false, err
 			}
 			onboarding.State = conf.OnboardingNotebookCreated
-			Conf.Save()
+			save()
 			notebookCreated = true
 		}
 	}
@@ -139,7 +127,7 @@ func EnsureOnboarding() (ret *conf.Onboarding, notebookCreated bool, err error) 
 	}
 	if onboarding.DocumentID == "" {
 		onboarding.DocumentID = ast.NewNodeID()
-		Conf.Save()
+		save()
 	}
 
 	docPath := "/" + onboarding.DocumentID + ".sy"
@@ -150,7 +138,7 @@ func EnsureOnboarding() (ret *conf.Onboarding, notebookCreated bool, err error) 
 		}
 	}
 	onboarding.State = conf.OnboardingCompleted
-	Conf.Save()
+	save()
 	return cloneOnboarding(onboarding), notebookCreated, nil
 }
 
@@ -159,21 +147,23 @@ func TriggerOnboardingIfEmpty() {
 	onboardingLock.Lock()
 	defer onboardingLock.Unlock()
 
-	if nil == Conf.Onboarding {
-		Conf.Onboarding = &conf.Onboarding{State: conf.OnboardingCompleted}
+	if nil == Conf.Onboarding.Load() {
+		UpdateOnboardingConf(func(value *conf.Onboarding) {})
 	}
 	boxes, err := ListNotebooks()
 	if err != nil {
 		logging.LogErrorf("list notebooks before triggering onboarding failed: %s", err)
 		return
 	}
-	publishEnabled := Conf.Publish != nil && Conf.Publish.Enable
-	if !prepareOnboardingForEmptyWorkspace(Conf.Onboarding, util.ReadOnly || publishEnabled, len(boxes)) {
+	publish := Conf.Publish.Load()
+	publishEnabled := publish != nil && publish.Enable
+	onboarding := cloneOnboarding(Conf.Onboarding.Load())
+	if !prepareOnboardingForEmptyWorkspace(onboarding, util.ReadOnly || publishEnabled, len(boxes)) {
 		return
 	}
-	Conf.Save()
+	UpdateOnboardingConf(func(value *conf.Onboarding) { *value = *onboarding })
 	evt := util.NewCmdResult("onboarding", 0, util.PushModeBroadcast)
-	evt.Data = cloneOnboarding(Conf.Onboarding)
+	evt.Data = cloneOnboarding(Conf.Onboarding.Load())
 	util.PushEvent(evt)
 }
 
@@ -181,12 +171,8 @@ func DismissOnboarding() *conf.Onboarding {
 	onboardingLock.Lock()
 	defer onboardingLock.Unlock()
 
-	if nil == Conf.Onboarding {
-		Conf.Onboarding = &conf.Onboarding{State: conf.OnboardingCompleted}
-	}
-	Conf.Onboarding.Dismissed = true
-	Conf.Save()
-	return cloneOnboarding(Conf.Onboarding)
+	UpdateOnboardingConf(func(s *conf.Onboarding) { s.Dismissed = true })
+	return cloneOnboarding(Conf.Onboarding.Load())
 }
 
 func cloneOnboarding(onboarding *conf.Onboarding) *conf.Onboarding {

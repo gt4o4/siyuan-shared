@@ -4,10 +4,11 @@
 //   node scripts/android-dev-run.mjs [--flavor=official] [--android-dir=<路径>] [--device=<serial>] [--skip-ui] [--skip-kernel] [--skip-gradle]
 // 流程: 构建 mobile 前端 -> 打包 app.zip -> gomobile 构建 kernel.aar -> gradle assemble -> adb 安装 -> 启动应用
 import {spawnSync} from "node:child_process";
-import {copyFileSync, existsSync, readdirSync, readFileSync, statSync, unlinkSync} from "node:fs";
+import {copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {fileURLToPath} from "node:url";
+import {androidStageFiles} from "./android-assets.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const appDir = path.join(repoRoot, "app");
@@ -18,8 +19,8 @@ function usage() {
   console.log("Options:");
   console.log("  --flavor=<flavor>      Flavor: cn / googleplay / huawei / official (default: official)");
   console.log("  --android-dir=<path>   Path to the siyuan-android project (default: next to the siyuan project)");
-  console.log("  --device=<serial>      Specify an adb device (required when multiple devices are connected)");
-  console.log("  --skip-ui              Skip pnpm build:mobile and use the existing stage/build/mobile output");
+  console.log("  --device=<serial>      Specify an adb connection (required for different or unidentified devices)");
+  console.log("  --skip-ui              Reuse the existing stage/build/{mobile,markdown} output");
   console.log("  --skip-kernel          Skip the gomobile build and use the existing kernel/kernel.aar");
   console.log("  --skip-gradle          Skip the Gradle build and reinstall the most recently built APK");
   console.log("  -h, --help             Show help");
@@ -144,13 +145,52 @@ function findTool(name) {
   fail(`${name} not found. Install it and try again`);
 }
 
+function wait(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+function selectDuplicateDevice(adb, devices, execute = spawnSync) {
+  let identity = null;
+  for (const serial of devices) {
+    // 连接名称可能随无线服务重新发布而变化，使用手机报告的序列号核对身份。
+    const result = execute(adb, ["-s", serial, "shell", "getprop", "ro.serialno"], {
+      encoding: "utf8",
+      timeout: 3000,
+      windowsHide: true,
+    });
+    const value = result.stdout?.trim();
+    // 无法确认身份时保留手动选择，避免把未知连接合并到另一台手机。
+    if (result.error || result.status !== 0 || !value || /^(unknown|null|0+)$/i.test(value)) {
+      return null;
+    }
+    if (identity !== null && identity !== value) {
+      return null;
+    }
+    identity = value;
+  }
+  return devices[0] || null;
+}
+
 function deviceSerial(adb) {
-  const lines = capture(adb, ["devices"]).split(/\r?\n/);
-  const devices = [];
-  for (const line of lines) {
-    const parts = line.split(/\t/);
-    if (parts.length === 2 && parts[1] === "device") {
-      devices.push(parts[0]);
+  const maxAttempts = 11;
+  let devices = [];
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const lines = capture(adb, ["devices"]).split(/\r?\n/);
+    devices = [];
+    for (const line of lines) {
+      const parts = line.split(/\t/);
+      if (parts.length === 2 && parts[1] === "device") {
+        devices.push(parts[0]);
+      }
+    }
+    if (device ? devices.includes(device) : devices.length > 0) {
+      break;
+    }
+    if (attempt === 1) {
+      console.log("Waiting up to 10 seconds for an adb device...");
+    }
+    if (attempt < maxAttempts) {
+      wait(1000);
     }
   }
   if (device) {
@@ -165,7 +205,12 @@ function deviceSerial(adb) {
   if (devices.length === 0) {
     fail("No connected devices detected. To connect using wireless debugging, enable Wireless debugging on the device, run adb pair <ip>:<port> <pairing-code>, and then run adb connect <ip>:<port>");
   }
-  fail(`Multiple devices detected: ${devices.join(", ")}. Specify one using --device=<serial>`);
+  const selected = selectDuplicateDevice(adb, devices);
+  if (selected) {
+    console.log(`Multiple connections to the same device detected; using ${selected}`);
+    return selected;
+  }
+  fail(`Multiple different or unidentified devices detected: ${devices.join(", ")}. Specify one using --device=<serial>`);
 }
 
 const sdkDir = findSdkDir();
@@ -177,10 +222,11 @@ const startedAt = Date.now();
 console.log(`[1/6] Environment check complete: sdk=${sdkDir} ndk=${ndkDir} device=${serial} flavor=${flavor}`);
 
 if (!skipUi) {
-  console.log("[2/6] Building the mobile frontend (pnpm run build:mobile)...");
+  console.log("[2/6] Building the mobile and standalone Markdown frontends...");
   run("pnpm", ["run", "build:mobile"], {cwd: appDir, shell: true});
+  run("pnpm", ["run", "build:markdown"], {cwd: appDir, shell: true});
 } else {
-  console.log("[2/6] Skipping the frontend build and using the existing stage/build/mobile output");
+  console.log("[2/6] Skipping the frontend build and using the existing mobile/Markdown output");
 }
 const mobileIndex = path.join(appDir, "stage", "build", "mobile", "index.html");
 if (!existsSync(mobileIndex)) {
@@ -192,19 +238,35 @@ const zipPath = path.join(os.tmpdir(), "siyuan-android-app.zip");
 if (existsSync(zipPath)) {
   unlinkSync(zipPath);
 }
-const tarArgs = ["-a", "-cf", zipPath, "-C", appDir, "appearance", "guide", "stage"];
+const tarEntries = ["appearance", "guide"];
+const stageFiles = androidStageFiles(path.join(appDir, "stage"));
 const changelogsDir = path.join(appDir, "changelogs");
 if (existsSync(changelogsDir)) {
-  tarArgs.push("changelogs");
+  tarEntries.push("changelogs");
 }
 for (const file of ["LICENSE", "THIRD_PARTY_NOTICES.md"]) {
   if (existsSync(path.join(repoRoot, file))) {
-    tarArgs.push("-C", repoRoot, file);
+    tarEntries.push("-C", repoRoot, file);
   } else {
     console.log(`Warning: ${file} does not exist and will be skipped`);
   }
 }
-run("tar", tarArgs);
+// A file list avoids Windows command-line length limits.
+const listDir = mkdtempSync(path.join(os.tmpdir(), "siyuan-android-assets-"));
+try {
+  const listPath = path.join(listDir, "files.txt");
+  writeFileSync(listPath, stageFiles.join("\n") + "\n", "utf8");
+  // bsdtar requires -T before file operands; a later -T is treated as a filename.
+  const archive = spawnSync("tar", ["-a", "-cf", zipPath, "-C", appDir, "-T", listPath, ...tarEntries], {cwd: repoRoot, stdio: "inherit"});
+  if (archive.error || archive.status !== 0) {
+    throw archive.error || new Error(`tar failed with exit code ${archive.status}`);
+  }
+} finally {
+  if (path.dirname(path.resolve(listDir)) !== path.resolve(os.tmpdir())) {
+    throw new Error(`Unexpected temporary directory: ${listDir}`);
+  }
+  rmSync(listDir, {recursive: true, force: true});
+}
 const androidAssets = path.join(androidDir, "app", "src", "main", "assets");
 if (!existsSync(androidAssets)) {
   fail(`Unexpected siyuan-android directory structure: ${androidAssets} does not exist. Specify the correct project path using --android-dir`);

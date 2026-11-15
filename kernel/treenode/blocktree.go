@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package treenode
 
@@ -48,7 +36,8 @@ type BlockTree struct {
 }
 
 var (
-	db *sql.DB
+	db                        *sql.DB
+	errBlockTreeDBUnavailable = errors.New("block tree database is unavailable")
 
 	initDatabaseLock = sync.RWMutex{}
 )
@@ -73,8 +62,17 @@ func initDatabase(forceRebuild bool) {
 		}
 	}
 	if !forceRebuild {
+		if err := ensureDocumentMetadata(db); err != nil {
+			logging.LogFatalf(logging.ExitCodeUnavailableDatabase, "create document metadata failed: %s", err)
+		}
+		if err := ensureHPathIndexes(db); err != nil {
+			logging.LogFatalf(logging.ExitCodeUnavailableDatabase, "create hpath indexes failed: %s", err)
+		}
 		if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_blocktrees_box_id ON blocktrees(box_id)"); err != nil {
 			logging.LogFatalf(logging.ExitCodeUnavailableDatabase, "create blocktree box index failed: %s", err)
+		}
+		if err := ensureBlockTreeTypeIndex(db); err != nil {
+			logging.LogFatalf(logging.ExitCodeUnavailableDatabase, "create blocktree type index failed: %s", err)
 		}
 		if err := cleanupInvalidBlockTrees(db); err != nil {
 			logging.LogErrorf("cleanup invalid blocktrees failed: %s", err)
@@ -89,6 +87,15 @@ func initDatabase(forceRebuild bool) {
 }
 
 func initDBTables() {
+	if _, err := db.Exec("DROP TABLE IF EXISTS document_metadata_pending"); err != nil {
+		logging.LogFatalf(logging.ExitCodeUnavailableDatabase, "drop document metadata pending failed: %s", err)
+	}
+	if _, err := db.Exec("DROP TABLE IF EXISTS document_metadata_state"); err != nil {
+		logging.LogFatalf(logging.ExitCodeUnavailableDatabase, "drop document metadata state failed: %s", err)
+	}
+	if _, err := db.Exec("DROP TABLE IF EXISTS document_metadata"); err != nil {
+		logging.LogFatalf(logging.ExitCodeUnavailableDatabase, "drop document metadata failed: %s", err)
+	}
 	_, err := db.Exec("DROP TABLE IF EXISTS blocktrees")
 	if err != nil {
 		logging.LogFatalf(logging.ExitCodeUnavailableDatabase, "drop table [blocks] failed: %s", err)
@@ -112,6 +119,20 @@ func initDBTables() {
 	if err != nil {
 		logging.LogFatalf(logging.ExitCodeUnavailableDatabase, "create index [idx_blocktrees_box_id] failed: %s", err)
 	}
+	if err = ensureHPathIndexes(db); err != nil {
+		logging.LogFatalf(logging.ExitCodeUnavailableDatabase, "create hpath indexes failed: %s", err)
+	}
+	if err = ensureBlockTreeTypeIndex(db); err != nil {
+		logging.LogFatalf(logging.ExitCodeUnavailableDatabase, "create blocktree type index failed: %s", err)
+	}
+	if err = ensureDocumentMetadata(db); err != nil {
+		logging.LogFatalf(logging.ExitCodeUnavailableDatabase, "create document metadata failed: %s", err)
+	}
+}
+
+func ensureBlockTreeTypeIndex(database *sql.DB) (err error) {
+	_, err = database.Exec("CREATE INDEX IF NOT EXISTS idx_blocktrees_type ON blocktrees(type)")
+	return
 }
 
 func cleanupInvalidBlockTrees(database *sql.DB) (err error) {
@@ -125,13 +146,10 @@ func initDBConnection() {
 	util.LogDatabaseSize(util.BlockTreeDBPath)
 	dsn := util.BlockTreeDBPath + "?_journal_mode=WAL" +
 		"&_synchronous=OFF" +
-		"&_mmap_size=4294967296" +
 		"&_secure_delete=OFF" +
-		"&_cache_size=-128000" +
-		"&_page_size=32768" +
+		util.SQLitePageCacheDSN() +
 		"&_busy_timeout=7000" +
 		"&_ignore_check_constraints=ON" +
-		"&_temp_store=MEMORY" +
 		"&_case_sensitive_like=OFF"
 	var err error
 	db, err = sql.Open("sqlite3_extended", dsn)
@@ -158,7 +176,6 @@ func closeDatabase() {
 	debug.FreeOSMemory()
 	db = nil
 	runtime.GC()
-	return
 }
 
 func GetBlockTreesByType(typ string) (ret []*BlockTree) {
@@ -204,30 +221,11 @@ func GetBlockTreesByTypeInBox(typ, boxID string) (ret []*BlockTree) {
 	return
 }
 
-func GetBlockTreeByBoxPath(boxID, path string) (ret *BlockTree) {
-	ret = &BlockTree{}
-	sqlStmt := "SELECT * FROM blocktrees WHERE box_id = ? AND path = ?"
-	row := queryRowForBox(boxID, sqlStmt, boxID, path)
-	if row == nil {
-		return
-	}
-	err := row.Scan(&ret.ID, &ret.RootID, &ret.ParentID, &ret.BoxID, &ret.Path, &ret.HPath, &ret.Updated, &ret.Type)
-	if err != nil {
-		ret = nil
-		if errors.Is(err, sql.ErrNoRows) {
-			return
-		}
-		logging.LogErrorf("sql query [%s] failed: %s", sqlStmt, err)
-		return
-	}
-	return
-}
-
 func CountTrees() (ret int) {
 	sqlStmt := "SELECT COUNT(*) FROM blocktrees WHERE type = 'd'"
-	err := queryRow(sqlStmt).Scan(&ret)
+	err := scanQueryRow(queryRow(sqlStmt), &ret)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) || errors.Is(err, errBlockTreeDBUnavailable) {
 			return 0
 		}
 		logging.LogErrorf("sql query [%s] failed: %s", sqlStmt, err)
@@ -237,9 +235,9 @@ func CountTrees() (ret int) {
 
 func CountBlocks() (ret int) {
 	sqlStmt := "SELECT COUNT(*) FROM blocktrees"
-	err := queryRow(sqlStmt).Scan(&ret)
+	err := scanQueryRow(queryRow(sqlStmt), &ret)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) || errors.Is(err, errBlockTreeDBUnavailable) {
 			return 0
 		}
 		logging.LogErrorf("sql query [%s] failed: %s", sqlStmt, err)
@@ -286,68 +284,23 @@ func GetBlockTreeRootByHPath(boxID, hPath string) (ret *BlockTree) {
 	return
 }
 
-func GetBlockTreeRootsByHPath(boxID, hPath string) (ret []*BlockTree) {
-	hPath = gulu.Str.RemoveInvisible(hPath)
-	sqlStmt := "SELECT * FROM blocktrees WHERE box_id = ? AND hpath = ? AND type = 'd'"
-	rows, err := queryForBox(boxID, sqlStmt, boxID, hPath)
-	if err != nil {
-		logging.LogErrorf("sql query [%s] failed: %s", sqlStmt, err)
-		return
+// GetBlockTreeRootByIDAndHPath 按笔记本、根块 ID 和原始 HPath 精确查找文档。
+func GetBlockTreeRootByIDAndHPath(boxID, id, hPath string) (ret *BlockTree) {
+	ret = GetBlockTreeInExactBox(id, boxID)
+	if nil == ret || ret.ID != ret.RootID || "d" != ret.Type || hPath != ret.HPath {
+		ret = nil
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var block BlockTree
-		if err = rows.Scan(&block.ID, &block.RootID, &block.ParentID, &block.BoxID, &block.Path, &block.HPath, &block.Updated, &block.Type); err != nil {
-			logging.LogErrorf("query scan field failed: %s", err)
-			return
-		}
-		ret = append(ret, &block)
-	}
-	return
-}
-
-func GetBlockTreeByHPathPreferredParentID(boxID, hPath, preferredParentID string) (ret *BlockTree) {
-	hPath = gulu.Str.RemoveInvisible(hPath)
-	var roots []*BlockTree
-	sqlStmt := "SELECT * FROM blocktrees WHERE box_id = ? AND hpath = ? AND parent_id = ? LIMIT 1"
-	rows, err := queryForBox(boxID, sqlStmt, boxID, hPath, preferredParentID)
-	if err != nil {
-		logging.LogErrorf("sql query [%s] failed: %s", sqlStmt, err)
-		return
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var block BlockTree
-		if err = rows.Scan(&block.ID, &block.RootID, &block.ParentID, &block.BoxID, &block.Path, &block.HPath, &block.Updated, &block.Type); err != nil {
-			logging.LogErrorf("query scan field failed: %s", err)
-			return
-		}
-		if "" == preferredParentID {
-			ret = &block
-			return
-		}
-		roots = append(roots, &block)
-	}
-
-	if 1 > len(roots) {
-		return
-	}
-
-	for _, root := range roots {
-		if root.ID == preferredParentID {
-			ret = root
-			return
-		}
-	}
-	ret = roots[0]
 	return
 }
 
 func ExistBlockTree(id string) bool {
 	sqlStmt := "SELECT COUNT(*) FROM blocktrees WHERE id = ?"
 	var count int
-	err := queryRow(sqlStmt, id).Scan(&count)
+	err := scanQueryRow(queryRow(sqlStmt, id), &count)
 	if err != nil {
+		if errors.Is(err, errBlockTreeDBUnavailable) {
+			return false
+		}
 		if errors.Is(err, sql.ErrNoRows) {
 			// 全局未命中，遍历加密 box
 			for _, encBoxID := range GetOpenedEncryptedBoxIDs() {
@@ -489,36 +442,40 @@ func GetBlockTrees(ids []string) (ret map[string]*BlockTree) {
 	return
 }
 
-func GetBlockTree(id string) (ret *BlockTree) {
-	if "" == id {
-		return
-	}
+func GetBlockTree(id string) *BlockTree {
+	ret, _ := LookupBlockTree(id)
+	return ret
+}
 
+// LookupBlockTree 区分索引读取故障与已确认不存在的块。
+func LookupBlockTree(id string) (ret *BlockTree, err error) {
+	if id == "" {
+		return nil, sql.ErrNoRows
+	}
 	ret = &BlockTree{}
 	sqlStmt := "SELECT * FROM blocktrees WHERE id = ?"
-	err := queryRow(sqlStmt, id).Scan(&ret.ID, &ret.RootID, &ret.ParentID, &ret.BoxID, &ret.Path, &ret.HPath, &ret.Updated, &ret.Type)
+	err = scanQueryRow(queryRow(sqlStmt, id), &ret.ID, &ret.RootID, &ret.ParentID, &ret.BoxID, &ret.Path,
+		&ret.HPath, &ret.Updated, &ret.Type)
 	if err != nil {
-		ret = nil
 		if errors.Is(err, sql.ErrNoRows) {
-			// 全局 blocktree 未命中，遍历已打开的加密笔记本查找
-			for _, encBoxID := range GetOpenedEncryptedBoxIDs() {
-				if encBT := GetBlockTreeInBox(id, encBoxID); nil != encBT {
-					return encBT
+			for _, boxID := range GetOpenedEncryptedBoxIDs() {
+				if encrypted := GetBlockTreeInBox(id, boxID); encrypted != nil {
+					return encrypted, nil
 				}
 			}
-			return
+		} else if !errors.Is(err, errBlockTreeDBUnavailable) {
+			logging.LogErrorf("sql query [%s] failed: %v\n\t%s", sqlStmt, err, logging.ShortStack())
 		}
-		logging.LogErrorf("sql query [%s] failed: %v\n\t%s", sqlStmt, err, logging.ShortStack())
-		return
+		return nil, err
 	}
-	return
+	return ret, nil
 }
 
 // IsContainerType 按主类型缩写判断块是否为容器块（可合法接收子块）。
 // 入参 abbrType 对应 BlockTree.Type（如 "d"/"h"/"p"），由 TypeAbbr 写入。
 func IsContainerType(abbrType string) bool {
 	switch abbrType {
-	case "d", "b", "l", "i", "s", "callout":
+	case "d", "b", "l", "i", "s", "callout", "tabs", "tab", "mindmap", "mindmap_item":
 		return true
 	}
 	return false
@@ -560,8 +517,7 @@ func CheckListItemNesting(parentID, childID string) error {
 }
 
 func SetBlockTreePath(tree *parse.Tree) {
-	RemoveBlockTreesByRootID(tree.Box, tree.ID)
-	IndexBlockTree(tree)
+	indexBlockTree(tree, true)
 }
 
 func RemoveBlockTreesByRootID(boxID, rootID string) {
@@ -571,22 +527,6 @@ func RemoveBlockTreesByRootID(boxID, rootID string) {
 		logging.LogErrorf("sql exec [%s] failed: %s", sqlStmt, err)
 		return
 	}
-}
-
-func CountBlockTreesByPathPrefix(boxID, pathPrefix string) (ret int) {
-	sqlStmt := "SELECT COUNT(*) FROM blocktrees WHERE path LIKE ? AND box_id = ?"
-	row := queryRowForBox(boxID, sqlStmt, pathPrefix+"%", boxID)
-	if row == nil {
-		return
-	}
-	err := row.Scan(&ret)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return 0
-		}
-		logging.LogErrorf("sql query [%s] failed: %s", sqlStmt, err)
-	}
-	return
 }
 
 func GetBlockTreesByPathPrefix(boxID, pathPrefix string) (ret []*BlockTree) {
@@ -700,17 +640,18 @@ func RemoveBlockTreesByBoxID(boxID string) (ids []string) {
 	return
 }
 
-func RemoveBlockTreesByIDs(boxID string, ids []string) {
+func RemoveBlockTreesByIDsWithError(boxID string, ids []string) error {
 	if 1 > len(ids) {
-		return
+		return nil
 	}
 
 	sqlStmt := "DELETE FROM blocktrees WHERE id IN ('" + strings.Join(ids, "','") + "')"
 	_, err := execForBox(boxID, sqlStmt)
 	if err != nil {
 		logging.LogErrorf("sql exec [%s] failed: %s", sqlStmt, err)
-		return
+		return err
 	}
+	return nil
 }
 
 func RemoveBlockTree(boxID, id string) {
@@ -725,6 +666,17 @@ func RemoveBlockTree(boxID, id string) {
 var indexBlockTreeLock = sync.Mutex{}
 
 func IndexBlockTree(tree *parse.Tree) {
+	indexBlockTree(tree, false)
+}
+
+// ReplaceBlockTree replaces all derived block identities for an authenticated source.
+// Repair and rollback callers must observe failures instead of publishing partial success.
+func ReplaceBlockTree(tree *parse.Tree) error {
+	return indexBlockTree(tree, true)
+}
+
+func indexBlockTree(tree *parse.Tree, replace bool) error {
+	tree.HPath = CurrentParentHPath(tree)
 	var changedNodes []*ast.Node
 	ast.Walk(tree.Root, func(n *ast.Node, entering bool) ast.WalkStatus {
 		if !entering || !n.IsBlock() || "" == n.ID {
@@ -736,7 +688,7 @@ func IndexBlockTree(tree *parse.Tree) {
 	})
 
 	if 1 > len(changedNodes) {
-		return
+		return nil
 	}
 
 	indexBlockTreeLock.Lock()
@@ -745,23 +697,48 @@ func IndexBlockTree(tree *parse.Tree) {
 	// 加密笔记本用独立 blocktree db；非加密笔记本用全局 db（两者都可能为 nil——重建过程中）
 	if nil == db && getEncryptedBlockTreeDB(tree.Box) == nil {
 		logging.LogErrorf("database is nil")
-		return
+		return fmt.Errorf("block-tree database is unavailable")
 	}
 
 	tx, err := beginTxForBox(tree.Box)
 	if err != nil {
 		logging.LogErrorf("begin transaction failed: %s", err)
-		return
+		return err
 	}
 
+	if replace {
+		// 文档行与摘要的删除、重建处于同一事务，不向并发读取暴露短暂的缺失身份。
+		if _, err = tx.Exec("DELETE FROM blocktrees WHERE root_id = ?", tree.ID); err != nil {
+			tx.Rollback()
+			logging.LogErrorf("replace document block tree failed: %s", err)
+			return err
+		}
+	}
 	execInsertBlocktrees(tx, tree, changedNodes)
 
 	if err = tx.Commit(); err != nil {
 		logging.LogErrorf("commit transaction failed: %s", err)
 	}
+	return err
 }
 
 func UpsertBlockTree(tree *parse.Tree) {
+	upsertBlockTree(tree, true)
+}
+
+// UpsertBlockTreePending 供尚未落盘的编辑事务定位块；标题摘要仍保留已提交的源状态。
+func UpsertBlockTreePending(tree *parse.Tree) {
+	upsertBlockTree(tree, false)
+}
+
+func UpsertBlockTreePendingWithError(tree *parse.Tree) error {
+	return upsertBlockTree(tree, false)
+}
+
+func upsertBlockTree(tree *parse.Tree, publishMetadata bool) error {
+	tree.HPath = CurrentParentHPath(tree)
+	metadata, metadataErr := GetDocumentMetadata(tree.Box, tree.ID)
+	metadataChanged := metadataErr != nil || metadata.Revision != documentMetadataFromTree(tree).Revision
 	oldBts := map[string]*BlockTree{}
 	bts := GetBlockTreesByRootIDInBox(tree.ID, tree.Box)
 	for _, bt := range bts {
@@ -775,19 +752,25 @@ func UpsertBlockTree(tree *parse.Tree) {
 		}
 
 		if oldBt, found := oldBts[n.ID]; found {
-			if oldBt.Updated != n.IALAttr("updated") || oldBt.Type != TypeAbbr(n.Type.String()) || oldBt.Path != tree.Path || oldBt.BoxID != tree.Box || oldBt.HPath != tree.HPath {
+			if (n == tree.Root && metadataChanged) || oldBt.Updated != n.IALAttr("updated") || oldBt.Type != TypeAbbr(n.Type.String()) || oldBt.Path != tree.Path || oldBt.BoxID != tree.Box || oldBt.HPath != tree.HPath {
 				children := ChildBlockNodes(n) // 需要考虑子块，因为一些操作（比如移动块）后需要同时更新子块
 				changedNodes = append(changedNodes, children...)
+				if n.IsContainerBlock() && n.Type != ast.NodeDocument {
+					return ast.WalkSkipChildren
+				}
 			}
 		} else {
 			children := ChildBlockNodes(n)
 			changedNodes = append(changedNodes, children...)
+			if n.IsContainerBlock() && n.Type != ast.NodeDocument {
+				return ast.WalkSkipChildren
+			}
 		}
 		return ast.WalkContinue
 	})
 
 	if 1 > len(changedNodes) {
-		return
+		return nil
 	}
 
 	ids := bytes.Buffer{}
@@ -805,31 +788,48 @@ func UpsertBlockTree(tree *parse.Tree) {
 
 	if nil == db && getEncryptedBlockTreeDB(tree.Box) == nil {
 		logging.LogErrorf("database is nil")
-		return
+		return errors.New("block-tree database is unavailable")
 	}
 
 	tx, err := beginTxForBox(tree.Box)
 	if err != nil {
 		logging.LogErrorf("begin transaction failed: %s", err)
-		return
+		return err
 	}
 
-	sqlStmt := "DELETE FROM blocktrees WHERE id IN (" + ids.String() + ")"
+	// 文档行原地更新，避免未提交事务触发摘要删除。
+	sqlStmt := "DELETE FROM blocktrees WHERE type != 'd' AND id IN (" + ids.String() + ")"
 	_, err = tx.Exec(sqlStmt)
 	if err != nil {
 		tx.Rollback()
 		logging.LogErrorf("sql exec [%s] failed: %s", sqlStmt, err)
-		return
+		return err
 	}
 
-	execInsertBlocktrees(tx, tree, changedNodes)
+	execInsertBlocktreesWithMetadata(tx, tree, changedNodes, publishMetadata)
 
 	if err = tx.Commit(); err != nil {
 		logging.LogErrorf("commit transaction failed: %s", err)
 	}
+	return err
 }
 
 func execInsertBlocktrees(tx *sql.Tx, tree *parse.Tree, changedNodes []*ast.Node) {
+	execInsertBlocktreesWithMetadata(tx, tree, changedNodes, true)
+}
+
+// 既有文档按 ID 定位；初始化索引时不能为每个待插入文档扫描此前所有文档行。
+const documentBlockTreeUpdateQuery = `UPDATE blocktrees INDEXED BY idx_blocktrees_id SET root_id=?, parent_id=?, path=?, hpath=?, updated=?
+	WHERE box_id=? AND id=? AND type='d'`
+
+func execInsertBlocktreesWithMetadata(tx *sql.Tx, tree *parse.Tree, changedNodes []*ast.Node, publishMetadata bool) {
+	if publishMetadata {
+		if err := upsertDocumentMetadata(tx, tree); err != nil {
+			tx.Rollback()
+			logging.LogErrorf("update document metadata failed: %s", err)
+			return
+		}
+	}
 	sqlStmt := "INSERT INTO blocktrees (id, root_id, parent_id, box_id, path, hpath, updated, type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
 	stmt, err := tx.Prepare(sqlStmt)
 	if err != nil {
@@ -853,6 +853,33 @@ func execInsertBlocktrees(tx *sql.Tx, tree *parse.Tree, changedNodes []*ast.Node
 		var parentID string
 		if nil != n.Parent {
 			parentID = n.Parent.ID
+		}
+		if n.Type == ast.NodeSuperBlock {
+			// 原地修正同一来源的嵌套文档行，避免删除触发器影响同 ID 的真实文档摘要。
+			result, updateErr := tx.Exec(`UPDATE blocktrees INDEXED BY idx_blocktrees_id
+				SET type='s', parent_id=?, hpath=?, updated=? WHERE box_id=? AND root_id=? AND path=?
+				AND id=? AND type='d' AND id!=root_id`, parentID, tree.HPath, n.IALAttr("updated"),
+				tree.Box, tree.ID, tree.Path, n.ID)
+			if updateErr != nil {
+				tx.Rollback()
+				logging.LogErrorf("repair nested document index failed: %s", updateErr)
+				return
+			}
+			if count, _ := result.RowsAffected(); count > 0 {
+				continue
+			}
+		}
+		if n.Type == ast.NodeDocument {
+			result, updateErr := tx.Exec(documentBlockTreeUpdateQuery, tree.ID, parentID, tree.Path, tree.HPath,
+				n.IALAttr("updated"), tree.Box, n.ID)
+			if updateErr != nil {
+				tx.Rollback()
+				logging.LogErrorf("update document blocktree failed: %s", updateErr)
+				return
+			}
+			if count, _ := result.RowsAffected(); count > 0 {
+				continue
+			}
 		}
 		if _, err = tx.Exec(sqlStmt, n.ID, tree.ID, parentID, tree.Box, tree.Path, tree.HPath, n.IALAttr("updated"), TypeAbbr(n.Type.String())); err != nil {
 			tx.Rollback()
@@ -906,10 +933,18 @@ func queryRow(query string, args ...any) *sql.Row {
 		return nil
 	}
 
-	if nil == db {
+	database := db
+	if nil == database {
 		return nil
 	}
-	return db.QueryRow(query, args...)
+	return database.QueryRow(query, args...)
+}
+
+func scanQueryRow(row *sql.Row, dest ...any) error {
+	if row == nil {
+		return errBlockTreeDBUnavailable
+	}
+	return row.Scan(dest...)
 }
 
 func query(query string, args ...any) (*sql.Rows, error) {
@@ -961,9 +996,10 @@ func OpenEncryptedBlockTreeDB(boxID string, dek []byte) (err error) {
 	}
 	dbPath := util.EncryptedBlockTreeDBPath(boxID)
 	blocktreeKey := util.DeriveSubKey(dek, "siyuan/sqlcipher/blocktree")
-	dsn := dbPath + "?_journal_mode=WAL&_synchronous=OFF&_mmap_size=4294967296&_secure_delete=OFF" +
-		"&_cache_size=-128000&_page_size=32768&_busy_timeout=7000&_ignore_check_constraints=ON" +
-		"&_temp_store=MEMORY&_case_sensitive_like=OFF&_key=x'" + hex.EncodeToString(blocktreeKey) + "'"
+	defer clear(blocktreeKey)
+	dsn := dbPath + "?_journal_mode=WAL&_synchronous=OFF&_secure_delete=OFF" +
+		util.SQLitePageCacheDSN() + "&_busy_timeout=7000&_ignore_check_constraints=ON" +
+		"&_case_sensitive_like=OFF&_key=x'" + hex.EncodeToString(blocktreeKey) + "'"
 	boxDB, err := sql.Open("sqlite3_extended", dsn)
 	if err != nil {
 		return err
@@ -971,6 +1007,10 @@ func OpenEncryptedBlockTreeDB(boxID string, dek []byte) (err error) {
 	boxDB.SetMaxOpenConns(7)
 	boxDB.SetMaxIdleConns(3)
 	boxDB.SetConnMaxLifetime(365 * 24 * time.Hour)
+	if err = util.CheckEncryptedIndexCompatibility(boxDB, "blocktree", 1); err != nil {
+		boxDB.Close()
+		return err
+	}
 	if err = initEncryptedBlockTreeTables(boxDB); err != nil {
 		boxDB.Close()
 		return err
@@ -1005,7 +1045,7 @@ func GetOpenedEncryptedBoxIDs() (ret []string) {
 func RemoveEncryptedBlockTreeDBFile(boxID string) {
 	CloseEncryptedBlockTreeDB(boxID)
 	dbPath := util.EncryptedBlockTreeDBPath(boxID)
-	for _, suffix := range []string{"", "-wal", "-shm"} {
+	for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
 		if err := os.Remove(dbPath + suffix); err != nil && !os.IsNotExist(err) {
 			logging.LogErrorf("remove encrypted blocktree db file [%s] failed: %s", dbPath+suffix, err)
 		}
@@ -1043,9 +1083,16 @@ func initEncryptedBlockTreeTables(boxDB *sql.DB) (err error) {
 			return
 		}
 	}
+	if err = ensureHPathIndexes(boxDB); err != nil {
+		return
+	}
+	if err = ensureBlockTreeTypeIndex(boxDB); err != nil {
+		return
+	}
 	if err = cleanupInvalidBlockTrees(boxDB); err != nil {
 		return
 	}
+	err = ensureDocumentMetadata(boxDB)
 	return
 }
 
@@ -1089,6 +1136,9 @@ func beginTxForBox(box string) (tx *sql.Tx, err error) {
 	if IsEncryptedBoxFn != nil && IsEncryptedBoxFn(box) {
 		return nil, errors.New("encrypted blocktree db not opened for box " + box)
 	}
+	if db == nil {
+		return nil, errBlockTreeDBUnavailable
+	}
 	return db.Begin()
 }
 
@@ -1131,9 +1181,10 @@ func GetBlockTreeInExactBox(id, boxID string) (ret *BlockTree) {
 
 	ret = &BlockTree{}
 	sqlStmt := "SELECT * FROM blocktrees WHERE id = ?"
-	err := queryRow(sqlStmt, id).Scan(&ret.ID, &ret.RootID, &ret.ParentID, &ret.BoxID, &ret.Path, &ret.HPath, &ret.Updated, &ret.Type)
+	err := scanQueryRow(queryRow(sqlStmt, id), &ret.ID, &ret.RootID, &ret.ParentID, &ret.BoxID, &ret.Path,
+		&ret.HPath, &ret.Updated, &ret.Type)
 	if err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
+		if !errors.Is(err, sql.ErrNoRows) && !errors.Is(err, errBlockTreeDBUnavailable) {
 			logging.LogErrorf("sql query [%s] failed: %v\n\t%s", sqlStmt, err, logging.ShortStack())
 		}
 		return nil

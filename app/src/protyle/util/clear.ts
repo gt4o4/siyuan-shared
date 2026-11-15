@@ -1,8 +1,10 @@
-import {updateHeader} from "../render/av/row";
+import {isTableLikeView} from "../render/av/viewType";
+import {updateAVSelectionStatus, updateHeader} from "../render/av/row";
 import {resetAVRowSelect} from "../render/av/virtualScroll";
 import {hasClosestByClassName} from "./hasClosest";
 import {Constants} from "../../constants";
 import {clearAVCellSelectionState, clearAVItemSelectionState} from "../render/av/selectionState";
+import {BLOCK_SELECTION_MODE_CLASS} from "../wysiwyg/blockSelection";
 
 const getAVElements = (element: Element) => {
     const elements: HTMLElement[] = [];
@@ -13,8 +15,33 @@ const getAVElements = (element: Element) => {
     return elements;
 };
 
+const clearViewState = (element: Element) => {
+    const attributes = ["data-view-fold-source", "data-view-fold-hidden-source", "data-view-fold",
+        "data-view-fold-default", "data-view-fold-hidden", "data-view-heading-owner", "data-view-heading-loaded",
+        "data-backlink-reference", "data-backlink-reference-list", "data-backlink-hide-reference",
+        "data-backlink-task-focus", "data-heading-empty"];
+    const elements = [element, ...Array.from(element.querySelectorAll(attributes.map(attribute => {
+        return `[${attribute}]`;
+    }).join(", ")))];
+    elements.forEach(item => {
+        const sourceFold = item.getAttribute("data-view-fold-source");
+        if (sourceFold !== null) {
+            item.toggleAttribute("fold", sourceFold === "1");
+        }
+        const sourceHidden = item.getAttribute("data-view-fold-hidden-source");
+        if (sourceHidden !== null) {
+            item.classList.toggle("fn__none", sourceHidden === "1");
+        }
+        attributes.forEach(attribute => item.removeAttribute(attribute));
+    });
+};
+
 export const clearBlockElement = (element: Element, keepRefcount = false) => {
-    element.classList.remove("protyle-wysiwyg--select", "protyle-wysiwyg--hl");
+    clearViewState(element);
+    element.classList.remove("protyle-wysiwyg--select", BLOCK_SELECTION_MODE_CLASS, "protyle-wysiwyg--hl");
+    element.querySelectorAll(`.${BLOCK_SELECTION_MODE_CLASS}`).forEach(item => {
+        item.classList.remove(BLOCK_SELECTION_MODE_CLASS);
+    });
     element.removeAttribute(Constants.CUSTOM_RIFF_DECKS);
     if (!keepRefcount) {
         element.removeAttribute("refcount");
@@ -23,7 +50,7 @@ export const clearBlockElement = (element: Element, keepRefcount = false) => {
     element.querySelector(".protyle-attr--av")?.remove();
     element.removeAttribute("custom-avs");
     element.getAttributeNames().forEach(attr => {
-        if (attr.startsWith("custom-sy-av-s-text-")) {
+        if (attr.startsWith(Constants.CUSTOM_SY_AV_STATIC_TEXT)) {
             element.removeAttribute(attr);
         }
     });
@@ -98,17 +125,16 @@ const resetAVBodySelect = (element: Element, type: "table" | "gallery" | "all") 
     const avElements = element.classList.contains("av") ? [element] : Array.from(element.querySelectorAll(".av"));
     avElements.forEach((avElement: HTMLElement) => {
         const avType = avElement.dataset.avType;
-        if ((type === "table" && avType !== "table") || (type === "gallery" && avType === "table")) {
+        if ((type === "table" && !isTableLikeView(avType)) || (type === "gallery" && isTableLikeView(avType))) {
             return;
         }
         avElement.querySelectorAll(".av__body").forEach((bodyElement: HTMLElement) => {
+            if (hasClosestByClassName(bodyElement, "av") !== avElement) {
+                return;
+            }
             resetAVRowSelect(bodyElement, []);
         });
-        const itemElement = avElement.querySelector(
-            ".av__row:not(.av__row--header):not(.av__row--footer):not(.av__row--util), .av__gallery-item") as HTMLElement;
-        if (itemElement) {
-            updateHeader(itemElement);
-        }
+        updateAVSelectionStatus(avElement);
     });
 };
 

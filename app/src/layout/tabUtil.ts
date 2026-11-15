@@ -25,6 +25,8 @@ import {Constants} from "../constants";
 import {fetchPost} from "../util/fetch";
 import {isWindow} from "../util/functions";
 import {Wnd} from "./Wnd";
+import {requestResponsiveDockLayout} from "./dock/responsive";
+import {cloneSearchConfig} from "../search/config";
 
 export const setTabPosition = (onlyPadding = false, onlyClear = false) => {
     const isWindowMode = isWindow();
@@ -57,6 +59,7 @@ export const setTabPosition = (onlyPadding = false, onlyClear = false) => {
         }
         const headerRect = headerElement.getBoundingClientRect();
         headerElement.style.paddingLeft = "";
+        headerElement.style.paddingRight = "";
         (headerElement.lastElementChild as HTMLElement).style.marginRight = "";
         headerElement.style.visibility = "";
         if (headerRect.top <= 0) {
@@ -74,8 +77,13 @@ export const setTabPosition = (onlyPadding = false, onlyClear = false) => {
             }
 
             if (isWindowMode) {
-                if (headerRect.right === centerRect.right) {
-                    (headerElement.lastElementChild as HTMLElement).style.marginRight = document.querySelector(".toolbar__window").clientWidth - 4 + "px";
+                const toolbarRect = document.querySelector(".toolbar__window")?.getBoundingClientRect();
+                if (toolbarRect && headerRect.right > toolbarRect.left) {
+                    headerElement.style.paddingRight = headerRect.right - toolbarRect.left + "px";
+                    if (headerElement.lastElementChild.getBoundingClientRect().right > toolbarRect.left + 0.5) {
+                        headerElement.style.paddingRight = "";
+                        headerElement.style.visibility = "hidden";
+                    }
                 }
             } else {
                 if (headerRect.right < toolbarDragRect.right && headerRect.right === centerRect.right) {
@@ -110,10 +118,13 @@ export const setTabPosition = (onlyPadding = false, onlyClear = false) => {
                 }
             }
             dragElement.parentElement.parentElement.style.minWidth = "56px";
-            dragElement.style.height = dragElement.parentElement.clientHeight + "px";
+            // 用 flex 拉伸撑满行高，跟随界面密度和覆盖层高度变化，避免写死像素后无法回缩。
+            dragElement.style.alignSelf = "stretch";
+            dragElement.style.height = "";
             (dragElement.style as CSSStyleDeclarationElectron).WebkitAppRegion = "drag";
         } else {
             dragElement.parentElement.parentElement.style.minWidth = "";
+            dragElement.style.alignSelf = "";
             dragElement.style.height = "";
             (dragElement.style as CSSStyleDeclarationElectron).WebkitAppRegion = "";
         }
@@ -192,11 +203,17 @@ export const switchTabByIndex = (index: number) => {
 };
 
 let resizeTimeout: number;
+let resizeSaveLayout = false;
 export const resizeTabs = (isSaveLayout = true) => {
+    resizeSaveLayout = resizeSaveLayout || isSaveLayout;
+    requestResponsiveDockLayout();
+    hideAllElements(["gutter"]);
     clearTimeout(resizeTimeout);
     //  .layout .fn__flex-shrink {width .15s cubic-bezier(0, 0, .2, 1) 0ms} 时需要再次计算 padding
     // PDF 避免分屏多次调用后，页码跳转到1 https://github.com/siyuan-note/siyuan/issues/5646
     resizeTimeout = window.setTimeout(() => {
+        const shouldSaveLayout = resizeSaveLayout;
+        resizeSaveLayout = false;
         const models = getAllModels();
         models.editor.forEach((item) => {
             if (item.editor && item.editor.protyle &&
@@ -229,7 +246,7 @@ export const resizeTabs = (isSaveLayout = true) => {
         });
         pdfResize();
         hideAllElements(["gutter"]);
-        if (isSaveLayout) {
+        if (shouldSaveLayout) {
             saveLayout();
         }
     }, 200);
@@ -413,7 +430,7 @@ export const copyTab = (app: App, tab: Tab) => {
                 model = new Search({
                     app,
                     tab: newTab,
-                    config: tab.model.config
+                    config: cloneSearchConfig(tab.model.config)
                 });
             } else if (tab.model instanceof Custom) {
                 const custom = tab.model as Custom;
@@ -455,47 +472,48 @@ const pushRootID = (rootIDs: string[], item: Tab) => {
     }
 };
 
-export const closeTabByType = (tab: Tab, type: "closeOthers" | "closeAll" | "other", tabs?: Tab[]) => {
-    const rootIDs: string[] = [];
+export const closeTabByType = async (tab: Tab, type: "closeOthers" | "closeAll" | "other", tabs?: Tab[]) => {
+    const wnd = tab.parent;
+    const closing: Promise<string[]>[] = [];
+    const focusRemainingTab = () => {
+        // A user may have switched tabs while title persistence was pending.
+        if (wnd.children.some(item => item.headElement?.classList.contains("item--focus"))) return;
+        const remaining = wnd.children.includes(tab) && tab.headElement ? tab :
+            [...wnd.children].reverse().find(item => item.headElement);
+        if (remaining) wnd.switchTab(remaining.headElement, true);
+    };
+    const close = async (item: Tab, animate: boolean) => {
+        const rootIDs: string[] = [];
+        pushRootID(rootIDs, item);
+        const closed = await item.parent.removeTab(item.id, true, animate);
+        if (closed) focusRemainingTab();
+        return closed ? rootIDs : [];
+    };
     if (type === "closeOthers") {
-        for (let index = 0; index < tab.parent.children.length; index++) {
-            const item = tab.parent.children[index];
+        // Closing may wait for title persistence or be blocked by an upload.
+        for (const item of [...tab.parent.children]) {
             if (item.id !== tab.id && item.headElement && !item.headElement.classList.contains("item--pin")) {
-                pushRootID(rootIDs, item);
-                item.parent.removeTab(item.id, true, false);
-                index--;
+                closing.push(close(item, false));
             }
         }
     } else if (type === "closeAll") {
-        for (let index = 0; index < tab.parent.children.length; index++) {
-            const item = tab.parent.children[index];
+        for (const item of [...tab.parent.children]) {
             if (item.headElement && !item.headElement.classList.contains("item--pin")) {
-                pushRootID(rootIDs, item);
-                item.parent.removeTab(item.id, true);
-                index--;
+                closing.push(close(item, true));
             }
         }
-    } else if (tabs.length > 0) {
-        for (let index = 0; index < tabs.length; index++) {
-            const item = tabs[index];
+    } else if (tabs?.length > 0) {
+        for (const item of [...tabs]) {
             if (item.headElement && !item.headElement.classList.contains("item--pin")) {
-                item.parent.removeTab(item.id);
+                closing.push(Promise.resolve(item.parent.removeTab(item.id)).then((): string[] => []));
             }
         }
     }
+    focusRemainingTab();
+    const rootIDs = (await Promise.all(closing)).flat();
     // 批量更新文档关闭时间
     if (rootIDs.length > 0) {
         fetchPost("/api/storage/batchUpdateRecentDocCloseTime", {rootIDs});
     }
-    if (tab.headElement?.parentElement && !tab.headElement.parentElement.querySelector(".item--focus")) {
-        tab.parent.switchTab(tab.headElement, true);
-    } else {
-        for (let index = tab.parent.children.length - 1; index >= 0; index--) {
-            const item = tab.parent.children[index];
-            if (item.headElement) {
-                tab.parent.switchTab(item.headElement, true);
-                break;
-            }
-        }
-    }
+    focusRemainingTab();
 };

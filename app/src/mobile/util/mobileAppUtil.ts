@@ -1,4 +1,5 @@
 import {hasClosestByAttribute, hasClosestByClassName} from "../../protyle/util/hasClosest";
+import {notifyMobileKeyboardChange} from "./mobileKeyboardChange";
 
 export let keyboardLockUntil = 0;
 
@@ -10,6 +11,7 @@ export const armKeyboardLock = () => {
 
 export const callMobileAppShowKeyboard = () => {
     armKeyboardLock();
+    notifyMobileKeyboardChange(true);
 
     if (window.JSAndroid && window.JSAndroid.showKeyboard) {
         window.JSAndroid.showKeyboard();
@@ -26,12 +28,14 @@ export const canInput = (element: Element) => {
     if ((
         element.tagName === "TEXTAREA" ||
         (element.tagName === "INPUT" && ["email", "number", "password", "search", "tel", "text", "url", "", null].includes(element.getAttribute("type")))
-    ) && element.getAttribute("readonly") !== "readonly") {
-        return element;
+    )) {
+        return !element.hasAttribute("readonly") && !element.hasAttribute("disabled") && element;
     }
     const wysiwygElement = hasClosestByClassName(element, "protyle-wysiwyg", true);
     if (wysiwygElement && wysiwygElement.getAttribute("data-readonly") === "false") {
-        return hasClosestByAttribute(element, "contenteditable", "true", true);
+        // 按最近的编辑边界判断，避免点击不可编辑的渲染区域时唤起键盘并恢复旧光标位置。
+        const editableElement = hasClosestByAttribute(element, "contenteditable", null, true);
+        return editableElement && ["true", "plaintext-only"].includes(editableElement.getAttribute("contenteditable")) && editableElement;
     }
     return false;
 };

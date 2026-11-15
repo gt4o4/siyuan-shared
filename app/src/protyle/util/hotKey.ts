@@ -1,8 +1,13 @@
-import {isMac, isNotCtrl, isOnlyMeta} from "./compatibility";
+import {matchShortcut} from "../../util/shortcut";
+import {isInIOS, isMac} from "./compatibility";
 import {Constants} from "../../constants";
+import {getKeymapBindings, IShortcutKeymap, visitKeymapItems} from "../../util/keymapBindings";
 
 // 是否匹配辅助键 ⌃⌥⇧⌘
-export const matchAuxiliaryHotKey = (hotKey: string, event: KeyboardEvent) => {
+export const matchAuxiliaryHotKey = (hotKey: string | IShortcutKeymap, event: KeyboardEvent): boolean => {
+    if (typeof hotKey !== "string") {
+        return getKeymapBindings(hotKey).some(key => matchAuxiliaryHotKey(key, event));
+    }
     if (hotKey.includes("⌃")) {
         if (!event.ctrlKey) {
             return false;
@@ -42,158 +47,15 @@ export const matchAuxiliaryHotKey = (hotKey: string, event: KeyboardEvent) => {
     return true;
 };
 
-export const matchHotKey = (hotKey: string, event: KeyboardEvent) => {
-    if (!hotKey) {
-        return false;
-    }
-
-    // https://github.com/siyuan-note/siyuan/issues/9770
-    if (hotKey.startsWith("⌃") && !isMac()) {
-        if (hotKey === "⌃D") {
-            // https://github.com/siyuan-note/siyuan/issues/9841
-            return false;
-        }
-        hotKey = hotKey.replace("⌘", "").replace("⌃", "⌘")
-            .replace("⌘⇧", "⇧⌘")
-            .replace("⌘⌥⇧", "⌥⇧⌘")
-            .replace("⌘⌥", "⌥⌘");
-    }
-
-    // []
-    if (hotKey.indexOf("⇧") === -1 && hotKey.indexOf("⌘") === -1 && hotKey.indexOf("⌥") === -1 && hotKey.indexOf("⌃") === -1) {
-        if (isNotCtrl(event) && !event.altKey && !event.shiftKey && hotKey === Constants.KEYCODELIST[event.keyCode]) {
-            return true;
-        }
-        return false;
-    }
-
-    // 将快捷键字符串拆分为 多个修饰键 + 一个主键，例如 ⌥⇧F10 → ["⌥", "⇧", "F10"]
-    const hotKeys: string[] = [];
-    let hotKeyIndex = 0;
-    while (hotKeyIndex < hotKey.length && "⌃⌥⇧⌘".includes(hotKey[hotKeyIndex])) {
-        hotKeys.push(hotKey[hotKeyIndex]);
-        hotKeyIndex++;
-    }
-    const mainKey = hotKey.slice(hotKeyIndex);
-    if (mainKey) {
-        hotKeys.push(mainKey);
-    }
-
-    // 是否匹配 ⇧[]
-    if (hotKey.startsWith("⇧") && hotKeys.length === 2) {
-        if (isNotCtrl(event) && !event.altKey && event.shiftKey && hotKeys[1] === Constants.KEYCODELIST[event.keyCode]) {
-            return true;
-        }
-        return false;
-    }
-
-    if (hotKey.startsWith("⌥")) {
-        let keyCode = hotKeys.length === 3 ? hotKeys[2] : hotKeys[1];
-        if (hotKeys.length === 4) {
-            keyCode = hotKeys[3];
-        }
-        const isMatchKey = keyCode === Constants.KEYCODELIST[event.keyCode];
-        // 是否匹配 ⌥[] / ⌥⌘[]
-        if (isMatchKey && event.altKey && !event.shiftKey && hotKeys.length < 4 &&
-            (hotKeys.length === 3 ? (isOnlyMeta(event) && hotKey.startsWith("⌥⌘")) : isNotCtrl(event))) {
-            return true;
-        }
-        // ⌥⇧⌘[]
-        if (isMatchKey && hotKey.startsWith("⌥⇧⌘") && hotKeys.length === 4 &&
-            event.altKey && event.shiftKey && isOnlyMeta(event)) {
-            return true;
-        }
-        // ⌥⇧[]
-        if (isMatchKey && hotKey.startsWith("⌥⇧") && hotKeys.length === 3 &&
-            event.altKey && event.shiftKey && isNotCtrl(event)) {
-            return true;
-        }
-        return false;
-    }
-
-    // 是否匹配 ⌃[] / ⌃⌘[] / ⌃⌥[] / ⌃⇧[]/ ⌃⌥⇧[]
-    if (hotKey.startsWith("⌃")) {
-        if (!isMac()) {
-            return false;
-        }
-        let keyCode = hotKeys.length === 3 ? hotKeys[2] : hotKeys[1];
-        if (hotKeys.length === 4) {
-            keyCode = hotKeys[3];
-        } else if (hotKeys.length === 5) {
-            keyCode = hotKeys[4];
-        }
-
-        const isMatchKey = keyCode === Constants.KEYCODELIST[event.keyCode];
-        // 是否匹配 ⌃[] / ⌃⌘[]
-        if (isMatchKey && event.ctrlKey && !event.altKey && !event.shiftKey && hotKeys.length < 4 &&
-            (hotKeys.length === 3 ? (event.metaKey && hotKey.startsWith("⌃⌘")) : !event.metaKey)) {
-            return true;
-        }
-        // ⌃⇧[]
-        if (isMatchKey && hotKey.startsWith("⌃⇧") && hotKeys.length === 3 &&
-            event.ctrlKey && !event.altKey && event.shiftKey && !event.metaKey) {
-            return true;
-        }
-        // ⌃⌥[]
-        if (isMatchKey && hotKey.startsWith("⌃⌥") && hotKeys.length === 3 &&
-            event.ctrlKey && event.altKey && !event.shiftKey && !event.metaKey) {
-            return true;
-        }
-        // ⌃⌥⇧[] / ⌃⌥⌘[] / ⌃⇧⌘[]
-        if (isMatchKey && hotKeys.length === 4 && event.ctrlKey &&
-            (
-                (hotKey.startsWith("⌃⌥⇧") && event.shiftKey && !event.metaKey && event.altKey) ||
-                (hotKey.startsWith("⌃⌥⌘") && !event.shiftKey && event.metaKey && event.altKey) ||
-                (hotKey.startsWith("⌃⇧⌘") && event.shiftKey && event.metaKey && !event.altKey)
-            )
-        ) {
-            return true;
-        }
-
-        // ⌃⌥⇧⌘[]
-        if (isMatchKey && hotKeys.length === 5 && event.ctrlKey && event.shiftKey && event.metaKey && event.altKey) {
-            return true;
-        }
-        return false;
-    }
-
-    // 是否匹配 ⇧⌘[] / ⌘[]
-    const hasShift = hotKeys.length > 2 && (hotKeys[0] === "⇧");
-    if (isOnlyMeta(event) && !event.altKey && ((!hasShift && !event.shiftKey) || (hasShift && event.shiftKey))) {
-        return (hasShift ? hotKeys[2] : hotKeys[1]) === Constants.KEYCODELIST[event.keyCode];
-    }
-    return false;
-};
+export const matchHotKey = (hotKey: string | IShortcutKeymap, event: KeyboardEvent): boolean =>
+    matchShortcut(hotKey, event, {mac: isMac(), ios: Boolean(isInIOS()), keyCodes: Constants.KEYCODELIST});
 
 export const isIncludesHotKey = (hotKey: string) => {
-    let isInclude = false;
-    Object.keys(window.siyuan.config.keymap).find(key => {
-        const item = window.siyuan.config.keymap[key as "editor"];
-        Object.keys(item).find(key2 => {
-            const item2 = item[key2 as "general"];
-            if (typeof item2.custom === "string") {
-                if (item2.custom === hotKey) {
-                    isInclude = true;
-                    return true;
-                }
-            } else {
-                Object.keys(item2).forEach(key3 => {
-                    const item3: Config.IKey = item2[key3];
-                    if (item3.custom === hotKey) {
-                        isInclude = true;
-                        return true;
-                    }
-                });
-                if (isInclude) {
-                    return true;
-                }
-            }
-        });
-
-        if (isInclude) {
-            return true;
+    let included = false;
+    visitKeymapItems(window.siyuan.config.keymap, item => {
+        if (getKeymapBindings(item).includes(hotKey)) {
+            included = true;
         }
     });
-
-    return isInclude;
+    return included;
 };

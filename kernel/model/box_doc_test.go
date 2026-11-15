@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
@@ -93,9 +81,9 @@ func TestFindUnindexedTreePathIgnoresTextMatch(t *testing.T) {
 	util.DataDir = filepath.Join(tempDir, "data")
 	util.BlockTreeDBPath = filepath.Join(tempDir, "blocktree.db")
 	Conf = NewAppConf()
-	Conf.FileTree = conf.NewFileTree()
+	Conf.FileTree.Store(conf.NewFileTree())
 	Conf.NotebookCrypto = conf.NewNotebookCrypto()
-	Conf.Sync = conf.NewSync()
+	Conf.Sync.Store(conf.NewSync())
 
 	box := &Box{ID: "20260716120010-abcdefg"}
 	boxConf := conf.NewBoxConf()
@@ -127,6 +115,17 @@ func TestFindUnindexedTreePathIgnoresTextMatch(t *testing.T) {
 
 	if matchedPath := findUnindexedTreePathInAllBoxes(targetID); "" != matchedPath {
 		t.Fatalf("text content was recognized as a block ID [path=%s]", matchedPath)
+	}
+	sortPath := filepath.Join(util.DataDir, box.ID, ".siyuan", "sort.json")
+	sortData := []byte(`{"` + targetID + `":1}`)
+	if err := os.WriteFile(sortPath, sortData, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if matchedPath := findUnindexedTreePathInAllBoxes(targetID); matchedPath != "" {
+		t.Fatalf("sort configuration was recognized as a document [path=%s]", matchedPath)
+	}
+	if got, err := os.ReadFile(sortPath); err != nil || string(got) != string(sortData) {
+		t.Fatalf("sort configuration changed during reindex fallback: %v", err)
 	}
 	paragraph.ID = targetID
 	if _, err := filesys.WriteTree(tree); nil != err {
@@ -175,5 +174,49 @@ func TestBoxDocSubFileCount(t *testing.T) {
 	publishAccess[0].Visible = true
 	if actual := BoxDocSubFileCountForPublish(boxID, publishAccess); actual != 1 {
 		t.Fatalf("unexpected visible published box document subfile count [%d]", actual)
+	}
+}
+
+// TestBoxDocSubFileCountForPublishAt 验证发布访问控制下指定文档的可见直接子文档数。
+func TestBoxDocSubFileCountForPublishAt(t *testing.T) {
+	originalDataDir := util.DataDir
+	util.DataDir = t.TempDir()
+	t.Cleanup(func() {
+		util.DataDir = originalDataDir
+	})
+
+	const (
+		boxID       = "20260716130000-abcdefg"
+		parentID    = "20260716130001-abcdefg"
+		publicID    = "20260716130002-abcdefg"
+		hiddenID    = "20260716130003-abcdefg"
+		forbiddenID = "20260716130004-abcdefg"
+	)
+	boxDir := filepath.Join(util.DataDir, boxID)
+	if err := os.MkdirAll(filepath.Join(boxDir, parentID), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeDoc := func(dir, id string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(boxDir, dir, id+".sy"), []byte(`{"Properties":{}}`), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeDoc(".", parentID)
+	writeDoc(parentID, publicID)
+	writeDoc(parentID, hiddenID)
+	writeDoc(parentID, forbiddenID)
+
+	parentPath := "/" + parentID + ".sy"
+	if actual := BoxDocSubFileCountForPublishAt(boxID, parentPath, PublishAccess{}); actual != 3 {
+		t.Fatalf("unexpected subfile count [%d]", actual)
+	}
+
+	publishAccess := PublishAccess{
+		{ID: hiddenID, Visible: false},
+		{ID: forbiddenID, Visible: false, Disable: true},
+	}
+	if actual := BoxDocSubFileCountForPublishAt(boxID, parentPath, publishAccess); actual != 1 {
+		t.Fatalf("unexpected published subfile count [%d]", actual)
 	}
 }

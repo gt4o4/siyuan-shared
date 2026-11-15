@@ -1,23 +1,13 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
 import (
+	"context"
 	gosql "database/sql"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -27,13 +17,31 @@ import (
 	"github.com/siyuan-note/siyuan/kernel/conf"
 	"github.com/siyuan-note/siyuan/kernel/search"
 	"github.com/siyuan-note/siyuan/kernel/sql"
+	"github.com/siyuan-note/siyuan/kernel/treenode"
 	"github.com/siyuan-note/siyuan/kernel/util"
 )
+
+func TestFullTextSearchRejectsCanceledRequest(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, method := range []int{0, 1, 2, 3} {
+		blocks, matched, roots, pages, docMode := FullTextSearchBlock(BlockSearchOptions{
+			Context: ctx, Query: "alpha beta", Method: method, GroupBy: 1, Page: 1, PageSize: 1,
+		})
+		if len(blocks) != 0 || matched != 0 || roots != 0 || pages != 0 || docMode {
+			t.Fatalf("method %d returned a canceled result: %v %d %d %d %t", method, blocks, matched, roots, pages, docMode)
+		}
+	}
+	blocks := []*sql.Block{{ID: "must-not-format"}}
+	if got := fromSQLBlocksContext(ctx, &blocks, "alpha", 36); len(got) != 0 {
+		t.Fatalf("canceled result formatting returned %v", got)
+	}
+}
 
 func TestFromSQLBlockMapsTimestamps(t *testing.T) {
 	previousConf := Conf
 	Conf = NewAppConf()
-	Conf.Search = conf.NewSearch()
+	Conf.Search.Store(conf.NewSearch())
 	t.Cleanup(func() {
 		Conf = previousConf
 	})
@@ -166,9 +174,15 @@ func TestBuildRootIDExclusionFilter(t *testing.T) {
 }
 
 func TestNormalizeBoxName(t *testing.T) {
-	name := "  notebook/name\x00  "
-	if normalized := normalizeBoxName(name); "notebookname" != normalized {
-		t.Fatalf("unexpected normalized notebook name: %q", normalized)
+	for name, expected := range map[string]string{
+		"  notebook/name\x00  ": "notebook/name",
+		"A／B/C/%2F":             "A／B/C/%2F",
+		"../Notebook/":          "../Notebook/",
+		"👩‍💻/Notes":             "👩‍💻/Notes",
+	} {
+		if normalized := normalizeBoxName(name); expected != normalized {
+			t.Fatalf("unexpected normalized notebook name: %q, want %q", normalized, expected)
+		}
 	}
 }
 
@@ -232,6 +246,8 @@ func TestBuildOrderByPrioritizesExactDocumentAndHeading(t *testing.T) {
 
 	orderBy := buildOrderBy("数学", 0, 0)
 	assertOrderBySequence(t, orderBy,
+		"name = '数学'",
+		"instr(',' || alias || ',', ',数学,') > 0",
 		"content = '数学' AND type = 'd'",
 		"content LIKE '%数学%' AND type = 'd'",
 		"content = '数学' AND type = 'h'",
@@ -258,7 +274,7 @@ func TestBuildOrderByPrioritizesCaseInsensitiveExactMatches(t *testing.T) {
 	orderBy := buildOrderBy("seo", 0, 0)
 	assertOrderBySequence(t, orderBy,
 		"name LIKE 'seo' ESCAPE '\\'",
-		"alias LIKE 'seo' ESCAPE '\\'",
+		"(',' || alias || ',') LIKE '%,seo,%' ESCAPE '\\'",
 		"content LIKE 'seo' ESCAPE '\\' AND type = 'd'",
 		"content LIKE '%seo%' AND type = 'd'",
 		"content LIKE 'seo' ESCAPE '\\' AND type = 'h'",
@@ -305,6 +321,32 @@ func TestBuildOrderByRanksCaseInsensitiveExactContentFirst(t *testing.T) {
 	}
 }
 
+func TestBuildOrderByRanksExactAliasSegmentFirst(t *testing.T) {
+	setSearchCaseSensitive(t, false)
+	testDB, err := gosql.Open("sqlite3_extended", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		testDB.Close()
+	})
+	if _, err = testDB.Exec("CREATE TABLE blocks (name TEXT, alias TEXT, content TEXT, type TEXT, sort INTEGER, updated TEXT)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = testDB.Exec("INSERT INTO blocks VALUES ('', '', '如何编写技术文档', 'd', 0, ''), ('', '技术文档,技术文档工程师', '技术写作', 'd', 1, '')"); err != nil {
+		t.Fatal(err)
+	}
+
+	row := testDB.QueryRow("SELECT content FROM blocks " + buildOrderBy("技术文档", 0, 0) + " LIMIT 1")
+	var content string
+	if err = row.Scan(&content); err != nil {
+		t.Fatal(err)
+	}
+	if "技术写作" != content {
+		t.Fatalf("完全命中的多值别名应排在文档标题包含命中之前：%q", content)
+	}
+}
+
 func TestBuildExactSearchOrderConditionEscapesKeyword(t *testing.T) {
 	setSearchCaseSensitive(t, true)
 	condition := buildExactSearchOrderCondition("content", "O'Reilly%_\\")
@@ -312,10 +354,83 @@ func TestBuildExactSearchOrderConditionEscapesKeyword(t *testing.T) {
 		t.Fatalf("区分大小写的完全命中条件错误：got %q, want %q", condition, expected)
 	}
 
-	Conf.Search.CaseSensitive = false
+	Conf.Search.Load().CaseSensitive = false
 	condition = buildExactSearchOrderCondition("content", "O'Reilly%_\\")
 	if expected := "content LIKE 'O''Reilly\\%\\_\\\\' ESCAPE '\\'"; expected != condition {
 		t.Fatalf("忽略大小写的完全命中条件错误：got %q, want %q", condition, expected)
+	}
+}
+
+func TestBuildKeywordSearchQueries(t *testing.T) {
+	tests := []struct {
+		name          string
+		query         string
+		expectedFTS   string
+		expectedHPath string
+	}{
+		{name: "单个空格", query: " ", expectedFTS: `" "`},
+		{name: "连续空格", query: "  ", expectedFTS: `"  "`},
+		{name: "制表符", query: "\t", expectedFTS: "\"\t\""},
+		{name: "全角空格", query: "\u3000", expectedFTS: "\"\u3000\""},
+		{name: "普通关键词", query: "Parent", expectedFTS: `"Parent"`, expectedHPath: "Parent"},
+		{name: "首尾空格", query: " Parent ", expectedFTS: `" Parent "`, expectedHPath: "Parent"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ftsQuery, hPathQuery := buildKeywordSearchQueries(test.query)
+			if test.expectedFTS != ftsQuery {
+				t.Fatalf("FTS 查询错误：got %q, want %q", ftsQuery, test.expectedFTS)
+			}
+			if test.expectedHPath != hPathQuery {
+				t.Fatalf("层级路径查询错误：got %q, want %q", hPathQuery, test.expectedHPath)
+			}
+		})
+	}
+}
+
+func TestBuildExactAliasSearchOrderCondition(t *testing.T) {
+	tests := []struct {
+		name          string
+		caseSensitive bool
+		alias         string
+		query         string
+		matched       bool
+	}{
+		{name: "single alias", caseSensitive: true, alias: "技术文档", query: "技术文档", matched: true},
+		{name: "first alias", caseSensitive: true, alias: "技术文档,技术写作", query: "技术文档", matched: true},
+		{name: "middle alias", caseSensitive: true, alias: "写作,技术文档,工程", query: "技术文档", matched: true},
+		{name: "last alias", caseSensitive: true, alias: "写作,技术文档", query: "技术文档", matched: true},
+		{name: "partial alias", caseSensitive: true, alias: "技术文档工程师", query: "技术文档", matched: false},
+		{name: "case sensitive mismatch", caseSensitive: true, alias: "SEO", query: "seo", matched: false},
+		{name: "case insensitive match", alias: "AS,SEO", query: "seo", matched: true},
+		{name: "escaped wildcard and backslash", alias: `other,100%_\\path,tail`, query: `100%_\\path`, matched: true},
+		{name: "escaped quote", alias: "other,O'Reilly,tail", query: "O'Reilly", matched: true},
+		{name: "comma query", alias: "foo,bar", query: "foo,bar", matched: false},
+		{name: "empty query", alias: "", query: "", matched: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setSearchCaseSensitive(t, test.caseSensitive)
+			testDB, err := gosql.Open("sqlite3_extended", ":memory:")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				testDB.Close()
+			})
+
+			condition := buildExactAliasSearchOrderCondition("alias", test.query)
+			row := testDB.QueryRow("SELECT CASE WHEN "+condition+" THEN 1 ELSE 0 END FROM (SELECT ? AS alias)", test.alias)
+			var matched int
+			if err = row.Scan(&matched); err != nil {
+				t.Fatal(err)
+			}
+			if test.matched != (1 == matched) {
+				t.Fatalf("别名完全命中状态错误：条件 %q，别名 %q，查询 %q，结果 %d", condition, test.alias, test.query, matched)
+			}
+		})
 	}
 }
 
@@ -330,7 +445,7 @@ func TestFTSAndHPathMatchesDeduplicateAndSort(t *testing.T) {
 	if countPlaceholder(cte) != len(args) {
 		t.Fatalf("候选查询占位符数量错误：%q，参数：%v", cte, args)
 	}
-	if len(args) != 1 || "Parent" != args[0] {
+	if len(args) != 2 || columnFilter()+":(\"Parent\")" != args[0] || "Parent" != args[1] {
 		t.Fatalf("路径搜索参数错误：%v", args)
 	}
 	assertOrderBySequence(t, cte,
@@ -360,6 +475,9 @@ func TestFTSAndHPathMatchesDeduplicateAndSort(t *testing.T) {
 		ids = append(ids, id)
 		sources = append(sources, source)
 	}
+	if err = rows.Err(); err != nil {
+		t.Fatal(err)
+	}
 	expectedIDs := []string{"20260729120000-parent1", "20260729120002-block01", "20260729120001-child01"}
 	if !slices.Equal(ids, expectedIDs) {
 		t.Fatalf("单关键词路径搜索排序错误：got %v, want %v", ids, expectedIDs)
@@ -376,13 +494,13 @@ func TestBuildHPathContainsCondition(t *testing.T) {
 		t.Fatalf("区分大小写的路径条件错误：%q，%q", condition, arg)
 	}
 
-	Conf.Search.CaseSensitive = false
+	Conf.Search.Load().CaseSensitive = false
 	condition, arg = buildHPathContainsCondition("Parent%_\\")
 	if "instr(search_normalize(hpath, 0, 1), ?) > 0" != condition || "parent%_\\" != arg {
 		t.Fatalf("忽略大小写的路径条件错误：%q，%q", condition, arg)
 	}
 
-	Conf.Search.SetHanSensitive(false)
+	Conf.Search.Load().SetHanSensitive(false)
 	condition, arg = buildHPathContainsCondition("詩經")
 	if "instr(search_normalize(hpath, 0, 0), ?) > 0" != condition || "诗经" != arg {
 		t.Fatalf("忽略繁简的路径条件错误：%q，%q", condition, arg)
@@ -425,9 +543,12 @@ func TestFromHPathSearchSQLBlockOnlyMarksHPath(t *testing.T) {
 func TestFromMixedHPathSearchSQLBlockMarksDirectContent(t *testing.T) {
 	setSearchCaseSensitive(t, true)
 	terms := "从这里" + search.TermSep + "会员"
-	contentTerms := matchedSearchTerms("会员特权", terms)
+	contentTerms, hPathTerms := partitionSearchTerms("会员特权", terms)
 	if "会员" != contentTerms {
 		t.Fatalf("文档自身直接命中的关键词错误：%q", contentTerms)
+	}
+	if "从这里" != hPathTerms {
+		t.Fatalf("路径补充命中的关键词错误：%q", hPathTerms)
 	}
 
 	sqlBlock := &sql.Block{
@@ -438,7 +559,7 @@ func TestFromMixedHPathSearchSQLBlockMarksDirectContent(t *testing.T) {
 		Content: "会员特权",
 		Type:    "d",
 	}
-	block := fromHPathSearchSQLBlockWithContentTerms(sqlBlock, terms, contentTerms, 36)
+	block := fromHPathSearchSQLBlockWithContentTerms(sqlBlock, hPathTerms, contentTerms, 36)
 	if "<mark>会员</mark>特权" != block.Content {
 		t.Fatalf("混合命中应高亮文档自身直接命中的关键词：%q", block.Content)
 	}
@@ -446,14 +567,72 @@ func TestFromMixedHPathSearchSQLBlockMarksDirectContent(t *testing.T) {
 		t.Fatalf("路径关键词不应扩展高亮到其他文档字段：%q", block.Name)
 	}
 	if !strings.Contains(block.HPath, "<mark>从这里</mark>") ||
-		!strings.Contains(block.HPath, "<mark>会员</mark>") {
-		t.Fatalf("混合命中应高亮全部路径关键词：%q", block.HPath)
+		strings.Contains(block.HPath, "<mark>会员</mark>") {
+		t.Fatalf("混合命中只应高亮路径补充的关键词：%q", block.HPath)
+	}
+}
+
+func TestFromFTSAndHPathMatchSQLBlockMarksMatchSource(t *testing.T) {
+	setSearchCaseSensitive(t, true)
+	sqlBlock := &sql.Block{
+		ID:      "20260905120000-direct1",
+		RootID:  "20260905120000-direct1",
+		HPath:   "/项目/工作总结",
+		Content: search.SearchMarkLeft + "工作总结" + search.SearchMarkRight,
+		Type:    "d",
+	}
+
+	directBlock := fromFTSAndHPathMatchSQLBlock(sqlBlock, 0, "工作总结", 36)
+	if "<mark>工作总结</mark>" != directBlock.Content {
+		t.Fatalf("FTS 直接命中应保留正文高亮：%q", directBlock.Content)
+	}
+	if strings.Contains(directBlock.HPath, "<mark>") {
+		t.Fatalf("FTS 直接命中不应重复高亮层级路径：%q", directBlock.HPath)
+	}
+
+	sqlBlock.Content = "其他内容"
+	hPathBlock := fromFTSAndHPathMatchSQLBlock(sqlBlock, 1, "工作总结", 36)
+	if strings.Contains(hPathBlock.Content, "<mark>") {
+		t.Fatalf("路径命中不应高亮正文：%q", hPathBlock.Content)
+	}
+	if !strings.Contains(hPathBlock.HPath, "<mark>工作总结</mark>") {
+		t.Fatalf("路径命中应高亮层级路径：%q", hPathBlock.HPath)
+	}
+}
+
+func TestTrimDocumentTitleHPath(t *testing.T) {
+	for _, test := range []struct{ path, title, want string }{
+		{"Notebook/A/B", "A/B", "Notebook/"},
+		{"Notebook/Parent//A//B/", "A//B/", "Notebook/Parent//"},
+		{"Notebook/<mark>Parent/A</mark>/B", "A/B", "Notebook/<mark>Parent/</mark>"},
+		{"Notebook/<mark>Parent</mark>/A/<mark>B</mark>", "A/B", "Notebook/<mark>Parent</mark>/"},
+		{"Notebook/Parent/A&amp;B/&lt;C&gt;", "A&B/<C>", "Notebook/Parent/"},
+	} {
+		if got := trimDocumentTitleHPath(test.path, test.title); got != test.want {
+			t.Errorf("%q with %q: got %q, want %q", test.path, test.title, got, test.want)
+		}
 	}
 }
 
 func TestFilterSelfHPathPreservesHighlight(t *testing.T) {
 	setSearchCaseSensitive(t, true)
+	previousPath := util.BlockTreeDBPath
+	util.BlockTreeDBPath = filepath.Join(t.TempDir(), "blocktree.db")
+	treenode.InitBlockTree(true)
+	t.Cleanup(func() {
+		treenode.CloseDatabase()
+		util.BlockTreeDBPath = previousPath
+	})
+	const boxID = "20260731120000-hpath00"
+	for id, title := range map[string]string{
+		"20260731120000-hpath01": "会员特权",
+		"20260731120001-hpath02": "会员特权",
+		"20260731120002-hpath03": "会员/特权",
+	} {
+		treenode.UpsertBlockTree(treenode.NewTree(boxID, "/"+id+".sy", "/"+title, title))
+	}
 	multipleKeywords := fromHPathSearchSQLBlock(&sql.Block{
+		Box:     boxID,
 		ID:      "20260731120000-hpath01",
 		RootID:  "20260731120000-hpath01",
 		HPath:   "/思源笔记用户指南/请/从这里开始/会员特权",
@@ -461,6 +640,7 @@ func TestFilterSelfHPathPreservesHighlight(t *testing.T) {
 		Type:    "d",
 	}, "从这里"+search.TermSep+"会员", 36)
 	singleKeyword := fromHPathSearchSQLBlock(&sql.Block{
+		Box:     boxID,
 		ID:      "20260731120001-hpath02",
 		RootID:  "20260731120001-hpath02",
 		HPath:   "/会员特权",
@@ -474,6 +654,10 @@ func TestFilterSelfHPathPreservesHighlight(t *testing.T) {
 			Type:  "NodeParagraph",
 			HPath: "/思源笔记用户指南/<mark>会员</mark>特权",
 		},
+		fromHPathSearchSQLBlock(&sql.Block{
+			Box: boxID, ID: "20260731120002-hpath03", RootID: "20260731120002-hpath03",
+			HPath: "/用户指南/会员/特权", Content: "会员/特权", Type: "d",
+		}, "会员", 36),
 	}
 
 	filterSelfHPath(blocks)
@@ -487,6 +671,9 @@ func TestFilterSelfHPathPreservesHighlight(t *testing.T) {
 	if expected := "/思源笔记用户指南/<mark>会员</mark>特权"; expected != blocks[2].HPath {
 		t.Fatalf("非文档块路径不应变化：got %q, want %q", blocks[2].HPath, expected)
 	}
+	if expected := "/用户指南/"; expected != blocks[3].HPath {
+		t.Fatalf("标题中的斜杠不应成为父路径：got %q, want %q", blocks[3].HPath, expected)
+	}
 }
 
 func TestBuildHPathSearchOrderBy(t *testing.T) {
@@ -494,6 +681,7 @@ func TestBuildHPathSearchOrderBy(t *testing.T) {
 	assertOrderBySequence(t, buildHPathSearchOrderBy("Parent", 0),
 		"matches.match_source ASC",
 		"CASE",
+		"instr(',' || b.alias || ',', ',Parent,') > 0",
 		"matches.path_level",
 		"b.sort ASC",
 		"b.updated DESC",
@@ -564,7 +752,7 @@ func TestBuildDocumentMatchOrderBy(t *testing.T) {
 
 func TestDocumentSearchFinalOrderPrioritizesDirectMatches(t *testing.T) {
 	setSearchCaseSensitive(t, true)
-	testDB := newSearchHPathTestDB(t)
+	testDB := newDocumentSearchTestDB(t)
 	insertSearchHPathTestBlock(t, testDB, "path-only", "path-only", "/从这里开始/会员特权/资源文件图床", "资源文件图床", "d")
 	insertSearchHPathTestBlock(t, testDB, "direct", "direct", "/从这里开始/会员特权", "会员特权", "d")
 	if _, err := testDB.Exec("UPDATE blocks SET created = '20260731120002' WHERE id = 'path-only'"); err != nil {
@@ -590,6 +778,9 @@ func TestDocumentSearchFinalOrderPrioritizesDirectMatches(t *testing.T) {
 			ids = append(ids, id)
 			sources = append(sources, source)
 			scores = append(scores, score)
+		}
+		if err = rows.Err(); err != nil {
+			t.Fatal(err)
 		}
 		if err = rows.Close(); err != nil {
 			t.Fatal(err)
@@ -699,7 +890,7 @@ func TestDocumentSearchFieldMatchesMultipleHPathLevels(t *testing.T) {
 		t.Fatalf("关闭路径搜索后只能命中正文文档：%d", count)
 	}
 
-	Conf.Search.SetHanSensitive(false)
+	Conf.Search.Load().SetHanSensitive(false)
 	insertSearchHPathTestBlock(t, testDB, "20260729121004-child02", "20260729121004-child02", "/詩經/Child", "Child", "d")
 	hPathField = "MAX(CASE WHEN type = 'd' THEN " + normalizedHPathSearchField("hpath") + " ELSE '' END)"
 	filter = buildSearchDocumentLikeFilterWithHPath("GROUP_CONCAT("+contentField+")", hPathField, []string{"诗经", "Child"})
@@ -711,7 +902,7 @@ func TestDocumentSearchFieldMatchesMultipleHPathLevels(t *testing.T) {
 	}
 }
 
-func newSearchHPathTestDB(t *testing.T) *gosql.DB {
+func newSearchHPathTestDB(t testing.TB) *gosql.DB {
 	t.Helper()
 	testDB, err := gosql.Open("sqlite3_extended", ":memory:")
 	if err != nil {
@@ -736,12 +927,12 @@ func insertSearchHPathTestBlock(t *testing.T, testDB *gosql.DB, id, rootID, hPat
 	}
 }
 
-func setSearchCaseSensitive(t *testing.T, caseSensitive bool) {
+func setSearchCaseSensitive(t testing.TB, caseSensitive bool) {
 	t.Helper()
 	previousConf := Conf
 	Conf = NewAppConf()
-	Conf.Search = conf.NewSearch()
-	Conf.Search.CaseSensitive = caseSensitive
+	Conf.Search.Store(conf.NewSearch())
+	Conf.Search.Load().CaseSensitive = caseSensitive
 	t.Cleanup(func() {
 		Conf = previousConf
 	})

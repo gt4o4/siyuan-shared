@@ -2,7 +2,10 @@ export const isThemeFrontendSupported = (
     frontends: string[] | null | undefined,
     frontend: string,
 ) => {
-    if (!frontends?.length || frontends.includes("all")) {
+    if (!frontends?.length) {
+        return !["mobile", "browser-mobile"].includes(frontend);
+    }
+    if (frontends.includes("all")) {
         return true;
     }
     return frontends.includes(frontend);
@@ -19,7 +22,12 @@ export const getCurrentThemeName = (appearance: Config.IAppearance) => {
 };
 
 export const isCurrentThemeSupported = (appearance: Config.IAppearance, frontend: string) => {
-    return isThemeFrontendSupported(getCurrentAppearanceTheme(appearance)?.frontends, frontend);
+    const name = getCurrentThemeName(appearance);
+    if (name === "daylight" || name === "midnight") {
+        return true;
+    }
+    const theme = getCurrentAppearanceTheme(appearance);
+    return !!theme && isThemeFrontendSupported(theme.frontends, frontend);
 };
 
 export const shouldUnloadThemeScript = (

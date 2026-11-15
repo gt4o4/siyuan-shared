@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
@@ -21,6 +9,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -28,9 +18,13 @@ import (
 
 	"github.com/88250/gulu"
 	"github.com/88250/lute/ast"
+	"github.com/88250/lute/render"
 	"github.com/siyuan-note/filelock"
 	"github.com/siyuan-note/logging"
+	"github.com/siyuan-note/siyuan/kernel/av"
 	"github.com/siyuan-note/siyuan/kernel/cache"
+	"github.com/siyuan-note/siyuan/kernel/documentaddressing"
+	"github.com/siyuan-note/siyuan/kernel/filesys"
 	"github.com/siyuan-note/siyuan/kernel/sql"
 	"github.com/siyuan-note/siyuan/kernel/task"
 	"github.com/siyuan-note/siyuan/kernel/treenode"
@@ -62,6 +56,8 @@ func CreateBox(name string) (id string, err error) {
 }
 
 func createBox(name string, initializeBoxDoc bool) (id string, err error) {
+	confFileTreeSnapshot := Conf.LoadFileTree()
+
 	name = normalizeBoxName(name)
 	if 512 < utf8.RuneCountInString(name) {
 		// 限制笔记本名和文档名最大长度为 `512` https://github.com/siyuan-note/siyuan/issues/6299
@@ -77,6 +73,7 @@ func createBox(name string, initializeBoxDoc bool) (id string, err error) {
 	for i, b := range boxes {
 		c := b.GetConf()
 		c.Sort = i + 1
+		b.Sort = c.Sort
 		if err := b.SaveConf(c); err != nil {
 			logging.LogErrorf("save box conf [%s] failed: %s", b.ID, err)
 		}
@@ -92,11 +89,17 @@ func createBox(name string, initializeBoxDoc bool) (id string, err error) {
 	box := &Box{ID: id, Name: name}
 	boxConf := box.GetConf()
 	boxConf.Name = name
+	boxConf.Sort = newBoxSort(boxes, nil != confFileTreeSnapshot.CreateDocAtTop && *confFileTreeSnapshot.CreateDocAtTop)
 	if err := box.SaveConf(boxConf); err != nil {
 		logging.LogErrorf("save box conf [%s] failed: %s", id, err)
 	}
 	if initializeBoxDoc {
-		if _, err = ensureBoxDoc0(id); err != nil {
+		_, err = ensureBoxDoc0(id)
+		if err == nil {
+			// 新笔记本的源摘要已补齐，后续挂载重建会在排队时撤销就绪状态。
+			err = treenode.SetDocumentMetadataState(id, "ready")
+		}
+		if err != nil {
 			treenode.RemoveBlockTreesByBoxID(id)
 			sql.DeleteBoxQueue(id)
 			if removeErr := filelock.Remove(boxLocalPath); nil != removeErr {
@@ -108,6 +111,26 @@ func createBox(name string, initializeBoxDoc bool) (id string, err error) {
 	IncSync()
 	logging.LogInfof("created box [%s]", id)
 	return
+}
+
+func newBoxSort(boxes []*Box, atTop bool) int {
+	if 1 > len(boxes) {
+		return 0
+	}
+
+	minSort, maxSort := boxes[0].Sort, boxes[0].Sort
+	for _, box := range boxes[1:] {
+		if box.Sort < minSort {
+			minSort = box.Sort
+		}
+		if maxSort < box.Sort {
+			maxSort = box.Sort
+		}
+	}
+	if atTop {
+		return minSort - 1
+	}
+	return maxSort + 1
 }
 
 func RenameBox(boxID, name string) (err error) {
@@ -123,15 +146,35 @@ func RenameBox(boxID, name string) (err error) {
 		return
 	}
 
+	if box.Exist(boxDocPath(boxID)) {
+		current, readErr := GetDocTitle(boxID, boxID)
+		if readErr != nil {
+			return readErr
+		}
+		if current.Source != nil {
+			summary := current.Text
+			if summary == "" {
+				summary = Conf.Language(16)
+			}
+			if summary != name {
+				return &TxErr{code: TxErrCodePushMsg, msg: Conf.Language(446), cause: treenode.ErrRichDocumentTitleWrite}
+			}
+			return nil
+		}
+		paragraph := &ast.Node{Type: ast.NodeParagraph}
+		paragraph.AppendChild(&ast.Node{Type: ast.NodeText, Tokens: []byte(name)})
+		source, sourceErr := render.NewDocumentTitle(paragraph)
+		if sourceErr != nil {
+			return sourceErr
+		}
+		return PerformTxSync(&Transaction{DoOperations: []*Operation{{Action: "setDocTitle", ID: boxID,
+			Data: map[string]any{"source": source, "expectedRevision": current.Revision}}}})
+	}
 	boxConf := box.GetConf()
 	boxConf.Name = name
 	box.Name = name
 	if err = box.SaveConf(boxConf); err != nil {
 		logging.LogErrorf("save box conf [%s] failed: %s", boxID, err)
-		return
-	}
-	if err = renameBoxDoc(boxID, name); err != nil {
-		logging.LogErrorf("rename box document [box=%s] failed: %s", boxID, err)
 		return
 	}
 	IncSync()
@@ -140,9 +183,9 @@ func RenameBox(boxID, name string) (err error) {
 }
 
 func normalizeBoxName(name string) string {
-	name = normalizeDocTitle(name)
+	name = normalizeTitleText(name)
 	if "" == name {
-		name = normalizeDocTitle(Conf.language(105))
+		name = normalizeTitleText(Conf.language(105))
 	}
 	return name
 }
@@ -159,14 +202,71 @@ func isEncryptedBoxMounted(boxID string) bool {
 }
 
 // removeBoxDir 重试删除刚完成读写的笔记本目录，避免 Windows 延迟释放句柄导致瞬时失败。
+// Go 的 os.RemoveAll 在 Windows 上遇到"目录非空"（并发写入或句柄占用）不会重试，
+// 因此这里在每次重试前主动清空残留内容，并在最终失败时返回残留条目供定位。
 func removeBoxDir(p string) (err error) {
-	for i := 0; i < 5; i++ {
-		if err = filelock.RemoveWithoutFatal(p); nil == err {
+	for i := range 5 {
+		err = filelock.RemoveWithoutFatal(p)
+		if nil == err {
 			return
 		}
-		if i < 4 {
-			time.Sleep(100 * time.Millisecond)
+
+		// 目录确实已不存在才算删除成功；无法访问（权限、IO 错误）时不能误判为已删除，
+		// 否则调用方会继续清理数据库与运行态，留下"索引清空但目录还在"的笔记本。
+		if _, statErr := os.Stat(p); nil != statErr && os.IsNotExist(statErr) {
+			return nil
 		}
+
+		// 收集残留条目：具体信息可帮助用户定位是哪些文件被占用。
+		// 目录条目同样要收集——它们同样会让 "目录非空" 反复出现。
+		var residual []string
+		if walkErr := filepath.Walk(p, func(path string, info os.FileInfo, walkErr error) error {
+			if nil != walkErr {
+				return nil
+			}
+			if path != p {
+				if rel, relErr := filepath.Rel(p, path); nil == relErr {
+					residual = append(residual, rel)
+				}
+			}
+			return nil
+		}); nil != walkErr {
+			logging.LogWarnf("list residual entries of [%s] failed: %s", p, walkErr)
+		}
+		hasResidual := 0 < len(residual)
+
+		lastAttempt := 4 == i
+		// 先清空残留内容（深路径优先），下一轮重试再删除目录本身，避免 RemoveAll 再次卡在"目录非空"
+		sort.Sort(sort.Reverse(sort.StringSlice(residual)))
+		for _, rel := range residual {
+			if removeErr := filelock.RemoveWithoutFatal(filepath.Join(p, rel)); nil != removeErr {
+				logging.LogWarnf("remove residual entry [%s] failed: %s", rel, removeErr)
+			}
+		}
+
+		if lastAttempt {
+			if hasResidual {
+				err = fmt.Errorf(Conf.Language(387), p, strings.Join(describeResidualEntries(residual), ", "))
+			} else {
+				err = fmt.Errorf(Conf.Language(387), p, err.Error())
+			}
+			return
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
+	return
+}
+
+// describeResidualEntries 返回仍然存在的残留条目描述（含目录），最多 3 项。
+func describeResidualEntries(entries []string) (ret []string) {
+	sort.Strings(entries)
+	for _, entry := range entries {
+		if 3 == len(ret) {
+			ret = append(ret, "...")
+			break
+		}
+		ret = append(ret, entry)
 	}
 	return
 }
@@ -187,6 +287,12 @@ func RemoveBox(boxID string) (err error) {
 	if !ast.IsNodeIDPattern(boxID) {
 		return errors.New("invalid notebook ID")
 	}
+	localPath := filepath.Join(util.DataDir, boxID)
+	_, statErr := os.Lstat(localPath)
+	localExists := !os.IsNotExist(statErr)
+	if statErr != nil && localExists {
+		return statErr
+	}
 	if _, loaded := boxLock.LoadOrStore(boxID, true); loaded {
 		err = errors.New(Conf.language(239))
 		return
@@ -205,8 +311,8 @@ func RemoveBox(boxID string) (err error) {
 		return fmt.Errorf("query database-bound blocks in notebook [%s] failed: %w", boxID, err)
 	}
 	isUserGuide := IsUserGuide(boxID)
-	localPath := filepath.Join(util.DataDir, boxID)
-	if !filelock.IsExist(localPath) {
+	if !localExists {
+		removeHPathRefreshBox(boxID)
 		forgetRuntimeNormalBox(boxID)
 		removeMasterPasswordMigrationBox(boxID)
 		return
@@ -217,6 +323,21 @@ func RemoveBox(boxID string) (err error) {
 
 	// 删目录前固定加密状态，确保后续历史、资源和索引清理始终使用同一个安全边界。
 	isEncrypted := IsEncryptedBox(boxID)
+	boundDeletion := &Transaction{}
+	defer func() { boundDeletion.finishAttributeViewMutation(err != nil) }()
+	var before, after map[string]*av.AttributeView
+	if !isEncrypted {
+		// 普通数据库跨笔记本共享，删除目录前校验全部关联，避免删除成功后留下失效绑定。
+		before, after, err = boundDeletion.prepareDeletedBoundAttributeViewBlocks(deletedAttrViewBlockIDs, "")
+		if err != nil {
+			return
+		}
+	}
+	if !isUserGuide {
+		if err = EnsureAssetPrefixLocal(localPath); err != nil {
+			return
+		}
+	}
 	if isEncrypted {
 		// 加密索引先持有生命周期租约再获取索引锁，因此删除也必须先结束生命周期，保持锁顺序一致。
 		unmount0(boxID)
@@ -226,6 +347,9 @@ func RemoveBox(boxID string) (err error) {
 	defer databaseIndexDataLock.Unlock()
 	createDocLock.Lock()
 	defer createDocLock.Unlock()
+	if err = recoverSortConfAppend(filepath.Join(util.DataDir, boxID, ".siyuan", "sort.json")); err != nil {
+		return
+	}
 	if !isEncrypted {
 		unmount0(boxID)
 	}
@@ -248,10 +372,35 @@ func RemoveBox(boxID string) (err error) {
 			logging.LogErrorf("gen sync history failed: %s", err)
 			return
 		}
+		if !isEncrypted {
+			pages, walkErr := pagedPathsWithError(localPath, 32)
+			if walkErr != nil {
+				return walkErr
+			}
+			for _, paths := range pages {
+				for _, filename := range paths {
+					tree, loadErr := loadTree(filename, util.NewLute())
+					if errors.Is(loadErr, treenode.ErrSpecTooNew) || errors.Is(loadErr, documentaddressing.ErrInvalidTitle) {
+						if err = backupUnsupportedNotebookAttributeViews(historyDir); err != nil {
+							return err
+						}
+						continue
+					}
+					if loadErr != nil {
+						return loadErr
+					}
+					if err = backupBoundAttributeViewHistory(tree, historyDir); err != nil {
+						return err
+					}
+				}
+			}
+		}
 
 		// 加密笔记本的 assets 不提升到全局 data/assets，避免密文污染全局或被全局索引
 		if !isEncrypted {
-			copyBoxAssetsToDataAssets(boxID)
+			if err = copyBoxAssetsToDataAssets(boxID); err != nil {
+				return
+			}
 		}
 	}
 
@@ -265,11 +414,17 @@ func RemoveBox(boxID string) (err error) {
 		RevokeManagedEncryptedExportsForBox(boxID)
 	}
 
+	if !isEncrypted {
+		if err = boundDeletion.saveAttributeViewFieldChanges(&attributeViewFieldsSnapshot{}, before, after); err != nil {
+			return
+		}
+	}
 	if err = removeBoxDir(localPath); err != nil {
 		return
 	}
-	// 目录删除成功后再清理，避免删除失败时提前移除数据库条目。
-	flushDeletedAttributeViewBlocks(deletedAttrViewBlockIDs)
+	boundDeletion.finishAttributeViewMutation(false)
+	removeHPathRefreshBox(boxID)
+	maintainPinnedDocs(nil, boxID, "")
 	// 加密笔记本删除时清理其独立加密 db 文件（含 WAL/SHM），避免残留
 	if isEncrypted {
 		sql.RemoveEncryptedDBFile(boxID)
@@ -350,7 +505,7 @@ func unmount0(boxID string) {
 		lockBoxWithPreparation(boxID, func() {
 			boxConf := box.GetConf()
 			boxConf.Closed = true
-			if err := box.SaveConf(boxConf); err != nil {
+			if err := box.SaveConfAndSync(boxConf); err != nil {
 				logging.LogErrorf("save box conf [%s] failed: %s", box.ID, err)
 			}
 			GenerateFileHistoryForBox(box)
@@ -360,7 +515,7 @@ func unmount0(boxID string) {
 
 	boxConf := box.GetConf()
 	boxConf.Closed = true
-	if err := box.SaveConf(boxConf); err != nil {
+	if err := box.SaveConfAndSync(boxConf); err != nil {
 		logging.LogErrorf("save box conf [%s] failed: %s", box.ID, err)
 	}
 	box.Unindex()
@@ -378,6 +533,11 @@ func Mount(boxID string) (alreadyMount bool, err error) {
 }
 
 func mountBox(boxID string) (alreadyMount bool, err error) {
+	if err = checkMountDocumentAddressing(boxID); err != nil {
+		return
+	}
+	confFileTreeSnapshot := Conf.LoadFileTree()
+
 	if _, loaded := boxLock.LoadOrStore(boxID, true); loaded {
 		err = errors.New(Conf.language(239))
 		return
@@ -407,13 +567,13 @@ func mountBox(boxID string) (alreadyMount bool, err error) {
 		}
 
 		boxes, _ := ListNotebooks()
-		var sort int
-		if len(boxes) > 0 {
-			sort = boxes[0].Sort - 1
-		}
+		sort := newBoxSort(boxes, nil != confFileTreeSnapshot.CreateDocAtTop && *confFileTreeSnapshot.CreateDocAtTop)
 
 		p := filepath.Join(util.WorkingDir, "guide", boxID)
 		if err = filelock.Copy(p, localPath); err != nil {
+			return
+		}
+		if err = filesys.CheckDocumentAddressing(boxID); err != nil {
 			return
 		}
 
@@ -434,7 +594,7 @@ func mountBox(boxID string) (alreadyMount bool, err error) {
 			boxConf := box.GetConf()
 			boxConf.Closed = true
 			boxConf.Sort = sort
-			box.SaveConf(boxConf)
+			box.SaveConfAndSync(boxConf)
 		}
 
 		task.AppendAsyncTaskWithDelay(task.PushMsg, 3*time.Second, util.PushErrMsg, Conf.Language(244), 7000)
@@ -451,6 +611,7 @@ func mountBox(boxID string) (alreadyMount bool, err error) {
 
 	for _, box := range Conf.GetOpenedBoxes() {
 		if box.ID == boxID {
+			clearClosedBoxNotification(boxID)
 			return true, nil
 		}
 	}
@@ -465,7 +626,7 @@ func mountBox(boxID string) (alreadyMount bool, err error) {
 	box := &Box{ID: boxID}
 	boxConf := box.GetConf()
 	boxConf.Closed = false
-	if err := box.SaveConf(boxConf); err != nil {
+	if err := box.SaveConfAndSync(boxConf); err != nil {
 		logging.LogErrorf("save box conf [%s] failed: %s", boxID, err)
 	}
 	if boxConf.Encrypted {
@@ -477,10 +638,14 @@ func mountBox(boxID string) (alreadyMount bool, err error) {
 	}
 
 	// 缓存根一级的文档树展开
-	files, _, _ := ListDocTree(box.ID, "/", util.SortModeUnassigned, false, false, Conf.FileTree.MaxListCount)
+	ListDocTree(box.ID, "/", util.SortModeUnassigned, false, false, confFileTreeSnapshot.MaxListCount)
 	box = Conf.Box(boxID)
-	if 0 < len(files) || (nil != box && box.Exist(boxDocPath(box.ID))) {
+	// 空笔记本也须完成索引初始化，否则结构化创建接口会一直等待元数据就绪。
+	if nil != box {
 		box.Index()
+	}
+	if Conf.Box(boxID) != nil {
+		clearClosedBoxNotification(boxID)
 	}
 
 	if reMountGuide {
@@ -489,18 +654,30 @@ func mountBox(boxID string) (alreadyMount bool, err error) {
 	return false, nil
 }
 
+var userGuideIDs = []string{"20210808180117-6v0mkxr", "20210808180117-czj9bvb", "20211226090932-5lcq56f", "20240530133126-axarxgx"}
+
+func checkMountDocumentAddressing(boxID string) error {
+	if err := filesys.CheckDocumentAddressing(boxID); err != nil {
+		return err
+	}
+	if IsUserGuide(boxID) {
+		source := filepath.Join(util.WorkingDir, "guide", boxID)
+		if _, err := os.Stat(source); err == nil {
+			return checkDocumentAddressingCopy(source, boxID)
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
 func IsUserGuide(boxID string) bool {
-	return "20210808180117-czj9bvb" == boxID || "20210808180117-6v0mkxr" == boxID || "20211226090932-5lcq56f" == boxID || "20240530133126-axarxgx" == boxID
+	return slices.Contains(userGuideIDs, boxID)
 }
 
 func getUserGuideAVJSONFiles(boxID string) (ret []string, err error) {
 	guideAVDirPath := filepath.Join(util.WorkingDir, "guide", boxID, "storage", "av")
-	if !filelock.IsExist(guideAVDirPath) {
-		logging.LogErrorf("guide av dir [%s] not exist", guideAVDirPath)
-		return
-	}
-
-	avEntries, err := os.ReadDir(guideAVDirPath)
+	avEntries, err := readUserGuideDirectory(guideAVDirPath)
 	if nil != err {
 		logging.LogErrorf("read guide av dir [%s] failed: %s", guideAVDirPath, err)
 		return
@@ -516,9 +693,9 @@ func getUserGuideAVJSONFiles(boxID string) (ret []string, err error) {
 	return
 }
 
-func getAllUserGuideAVJSONFiles() (ret []string) {
+func getAllUserGuideAVJSONFiles() (ret []string, err error) {
 	guideDirPath := filepath.Join(util.WorkingDir, "guide")
-	guideEntries, err := os.ReadDir(guideDirPath)
+	guideEntries, err := readUserGuideDirectory(guideDirPath)
 	if nil != err {
 		return
 	}
@@ -531,9 +708,23 @@ func getAllUserGuideAVJSONFiles() (ret []string) {
 
 		avFiles, err := getUserGuideAVJSONFiles(boxID)
 		if nil != err {
-			continue
+			return nil, err
 		}
 		ret = append(ret, avFiles...)
 	}
 	return
+}
+
+func readUserGuideDirectory(dir string) ([]os.DirEntry, error) {
+	info, err := os.Stat(dir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("user guide path is not a directory: %s", dir)
+	}
+	return os.ReadDir(dir)
 }

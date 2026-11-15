@@ -1,10 +1,10 @@
 .b3-button {
   cursor: pointer;
-  color: var(--b3-theme-on-primary);
-  border-radius: var(--b3-border-radius);
+  color: var(--b3-theme-on-primary, ButtonText);
+  border-radius: var(--b3-border-radius, 4px);
   line-height: 20px;
   padding: 4px 8px;
-  background-color: var(--b3-theme-primary);
+  background-color: var(--b3-theme-primary, ButtonFace);
   white-space: nowrap;
   display: inline-flex;
   align-items: center;
@@ -19,6 +19,10 @@
     width: 16px;
     margin-right: 4px;
     flex-shrink: 0;
+  }
+
+  .b3-loading {
+    color: var(--b3-loading-color, inherit);
   }
 
   &:hover,
@@ -49,8 +53,29 @@
     }
   }
 
+  &--progress-text {
+    position: relative;
+
+    &::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      width: var(--b3-progress, 0%);
+      border-radius: inherit;
+      background-color: var(--b3-theme-on-primary);
+      opacity: .2;
+      pointer-events: none;
+    }
+  }
+
   &--mid {
     padding: 2px 8px;
+  }
+
+  &--wrap {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: max(20px, 1.4em);
   }
 
   &--big {
@@ -58,6 +83,12 @@
     background: var(--b3-theme-secondary);
     color: var(--b3-theme-on-secondary);
     padding: 24px 16px;
+    font-size: 16px;
+  }
+
+  &--touch {
+    min-height: 48px;
+    padding: 12px 16px;
     font-size: 16px;
   }
 
@@ -77,7 +108,8 @@
     }
   }
 
-  &--cancel {
+  &--cancel,
+  &--secondary {
     color: var(--b3-theme-on-surface);
     background-color: transparent;
 
@@ -93,10 +125,15 @@
     }
   }
 
+  &--secondary {
+    background-color: var(--b3-theme-surface-lighter);
+  }
+
   &--outline {
-    color: var(--b3-theme-primary);
+    color: var(--b3-theme-primary, ButtonText);
     box-shadow: inset 0 0 0 .6px var(--b3-theme-primary);
     background-color: transparent;
+    text-decoration: none;
 
     &:hover,
     &:focus {
@@ -180,5 +217,10 @@
   &:disabled {
     opacity: .38;
     cursor: not-allowed;
+
+    &[aria-busy="true"] {
+      opacity: 1;
+      cursor: progress;
+    }
   }
 }

@@ -1,9 +1,42 @@
+import {getSemanticMarkerPrefixLengthForNode} from "../util/inlineElementMarker";
+
 const getNextBlockSibling = (element: Element) => {
     let nextElement = element.nextElementSibling;
     while (nextElement && !nextElement.hasAttribute("data-node-id")) {
         nextElement = nextElement.nextElementSibling;
     }
     return nextElement;
+};
+
+const NATIVE_COMPOSITION_EDITABLE_TYPES = new Set([
+    "NodeParagraph",
+    "NodeHeading",
+    "NodeCodeBlock",
+    "NodeTable",
+]);
+
+const NATIVE_COMPOSITION_SNAPSHOT_TYPES = new Set([
+    ...NATIVE_COMPOSITION_EDITABLE_TYPES,
+    "NodeList",
+    "NodeListItem",
+    "NodeBlockquote",
+    "NodeCallout",
+    "NodeSuperBlock",
+    "NodeAttributeView",
+    "NodeAudio",
+    "NodeBlockQueryEmbed",
+    "NodeCustomBlock",
+    "NodeHTMLBlock",
+    "NodeIFrame",
+    "NodeMathBlock",
+    "NodeThematicBreak",
+    "NodeVideo",
+    "NodeWidget",
+]);
+
+export const isNativeCrossBlockCompositionSupported = (rangeTypes: string[], snapshotTypes: string[]) => {
+    return rangeTypes.length >= 2 && rangeTypes.every(type => NATIVE_COMPOSITION_EDITABLE_TYPES.has(type)) &&
+        snapshotTypes.every(type => NATIVE_COMPOSITION_SNAPSHOT_TYPES.has(type));
 };
 
 const getListItemElement = (element: HTMLElement, editorElement: HTMLElement) => {
@@ -38,6 +71,19 @@ export interface ICrossBlockSiblingListItemMergeContext {
     trailingEndBlockElements: HTMLElement[];
     trailingEndListItemElements: HTMLElement[];
 }
+
+export const getCrossBlockEndAction = (startType: string, endType: string, endFullySelected: boolean,
+                                       endFolded: boolean): "merge" | "delete" | undefined => {
+    if (endFolded) {
+        return;
+    }
+    if (["NodeParagraph", "NodeHeading"].includes(startType) && startType === endType) {
+        return "merge";
+    }
+    if (["NodeParagraph", "NodeHeading"].includes(endType) && endFullySelected) {
+        return "delete";
+    }
+};
 
 export const getCrossBlockSiblingListItemMergeContext = (editorElement: HTMLElement,
                                                           startElement: HTMLElement,
@@ -122,9 +168,10 @@ ICrossBlockNestedListMergeContext | undefined => {
         let hasText = false;
         let textNode = walker.nextNode();
         while (textNode) {
-            if (textNode.textContent.replace(/[\s\u200b]/g, "") !== "") {
+            const markerPrefixLength = getSemanticMarkerPrefixLengthForNode(textNode);
+            if (textNode.textContent.substring(markerPrefixLength).replace(/[\s\u200b]/g, "") !== "") {
                 hasText = true;
-                if (selectedRange.comparePoint(textNode, 0) !== 0 ||
+                if (selectedRange.comparePoint(textNode, markerPrefixLength) !== 0 ||
                     selectedRange.comparePoint(textNode, textNode.textContent.length) !== 0) {
                     return false;
                 }

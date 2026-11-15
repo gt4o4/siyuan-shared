@@ -1,10 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package agent
 
@@ -20,20 +16,139 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sashabaranov/go-openai"
 	kernelConf "github.com/siyuan-note/siyuan/kernel/conf"
 	kernelModel "github.com/siyuan-note/siyuan/kernel/model"
+	"github.com/siyuan-note/siyuan/kernel/util"
 )
+
+func TestResponsesTokenBudgetIncludesOpaqueOutput(t *testing.T) {
+	messages := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleSystem, Content: "instructions"},
+		{Role: openai.ChatMessageRoleAssistant, Content: "visible"},
+	}
+	checkpointMessages := []AgentMessage{{
+		Role:                 "assistant",
+		Content:              "visible",
+		ResponseOutput:       []json.RawMessage{json.RawMessage(`{"type":"reasoning"}`)},
+		ResponseOutputTokens: 1000,
+	}}
+	chatTokens := estimateProtocolRequestTokens(
+		"test-model", "openai", messages, checkpointMessages, nil, nil)
+	responseTokens := estimateProtocolRequestTokens(
+		"test-model", "openai-responses", messages, checkpointMessages, nil, nil)
+	if responseTokens < chatTokens+900 {
+		t.Fatalf("Responses output was omitted from the token budget: chat=%d responses=%d", chatTokens, responseTokens)
+	}
+
+	compaction := &runtimeCompaction{
+		Protocol:             "openai-responses",
+		ResponseOutput:       []json.RawMessage{json.RawMessage(`{"type":"compaction"}`)},
+		ResponseOutputTokens: 600,
+	}
+	compactedTokens := estimateProtocolRequestTokens(
+		"test-model", "openai-responses", messages[:1], nil, compaction, nil)
+	baseTokens := estimateChatRequestTokens("test-model", messages[:1], nil)
+	if compactedTokens < baseTokens+600 {
+		t.Fatalf("opaque compaction was omitted from the token budget: base=%d compacted=%d", baseTokens, compactedTokens)
+	}
+}
+
+func TestResponsesCompactionPreservesOpaqueOutput(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses/compact" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode request: %s", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		for _, unsupported := range []string{"store", "include", "tools", "reasoning"} {
+			if _, exists := payload[unsupported]; exists {
+				t.Errorf("compaction request contains unsupported field %s: %#v", unsupported, payload)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, "{\"id\":\"cmp_1\",\"object\":\"response.compaction\","+
+			"\"output\":[{\"type\":\"compaction\",\"encrypted_content\":\"opaque\"}],"+
+			"\"usage\":{\"input_tokens\":20,\"output_tokens\":4,\"total_tokens\":24}}")
+	}))
+	defer server.Close()
+
+	request := openai.ChatCompletionRequest{
+		Model:    "test-model",
+		Messages: []openai.ChatCompletionMessage{{Role: openai.ChatMessageRoleSystem, Content: "instructions"}},
+	}
+	output, promptTokens, completionTokens, err := createResponseCompaction(
+		context.Background(), newTestOpenAIClient(server.URL), request,
+		[]any{openai.ResponseInputMessage{Type: "message", Role: "user", Content: "history"}},
+		0, time.Second, make(chan AgentEvent, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if promptTokens != 20 || completionTokens != 4 {
+		t.Fatalf("unexpected compaction usage: %d/%d", promptTokens, completionTokens)
+	}
+	data, err := json.Marshal(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "\"encrypted_content\":\"opaque\"") {
+		t.Fatalf("opaque compaction output was lost: %s", data)
+	}
+
+	entries := []SessionEntry{
+		{ID: "user-1", Type: "user", Content: "old"},
+		{ID: "assistant-1", Type: "assistant", Content: "old answer"},
+		{ID: "user-2", Type: "user", Content: "continue"},
+	}
+	digest, err := compactionDigest(entries[:2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	compaction := &runtimeCompaction{
+		Version: compactionVersion, Protocol: util.OpenAIProtocolResponses,
+		ResponseOutput: output, ResponseOutputTokens: 4,
+		CoveredEntryCount: 2, NextEntryID: entries[2].ID, CoveredDigest: digest,
+	}
+	if !validRuntimeCompaction(entries, compaction) || compaction.ResponseOutputTokens != 4 {
+		t.Fatalf("response compaction is invalid: %#v, err=%v", compaction, err)
+	}
+	input := checkpointMessagesToOpenAIResponseInput(
+		entriesToAgentMessages(entries[2:]), "English", nil, compaction, false)
+	data, err = json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "\"encrypted_content\":\"opaque\"") ||
+		!strings.Contains(string(data), "\"content\":\"continue\"") {
+		t.Fatalf("compacted response input is incomplete: %s", data)
+	}
+}
 
 func setupCompactionAgentTest(t *testing.T) {
 	t.Helper()
 	useTestDataDir(t)
 	originalConf := kernelModel.Conf
 	kernelModel.Conf = kernelModel.NewAppConf()
-	kernelModel.Conf.AI = kernelConf.NewAI()
-	kernelModel.Conf.AI.MCP = nil
-	kernelModel.Conf.AI.Agent.MaxCompletionTokens = 512
-	kernelModel.Conf.Variables = kernelConf.NewVariables()
+	kernelModel.Conf.AI.Store(kernelConf.NewAI())
+	kernelModel.Conf.AI.Load().MCP = nil
+	kernelModel.Conf.AI.Load().Agent.MaxCompletionTokens = 512
+	kernelModel.Conf.Variables.Store(kernelConf.NewVariables())
 	t.Cleanup(func() { kernelModel.Conf = originalConf })
+}
+
+func currentCapabilitiesForTest(t *testing.T) *capabilitySet {
+	t.Helper()
+	capabilities, err := buildCapabilitySet(nil, capabilityAccessContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return capabilities
 }
 
 func compactionTestContextLimit(t *testing.T, fullTokens, compactedBaseTokens int) int {
@@ -90,7 +205,7 @@ func compactionTestEntries() []SessionEntry {
 
 func TestRuntimeCompactionValidationUsesModelContextProjection(t *testing.T) {
 	entries := compactionTestEntries()
-	compaction, err := newRuntimeCompaction(entries, 3, "Task and tool result retained")
+	compaction, err := newRuntimeProtocolSummaryCompaction(entries, 3, "Task and tool result retained", util.OpenAIProtocolChatCompletions)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,8 +261,9 @@ func TestCreateCompactionSummaryDoesNotSendTools(t *testing.T) {
 	}))
 	defer server.Close()
 
-	summary, promptTokens, completionTokens, err := createCompactionSummary(
-		context.Background(), newTestOpenAIClient(server.URL), "test-model", "history", 512, 0,
+	summary, promptTokens, completionTokens, err := createProtocolCompactionSummary(
+		context.Background(), newTestOpenAIClient(server.URL), util.OpenAIProtocolChatCompletions,
+		"test-model", "history", 512, 0,
 		time.Second, time.Second, make(chan AgentEvent, 1))
 	if err != nil {
 		t.Fatal(err)
@@ -174,8 +290,9 @@ func TestCreateCompactionSummaryPreservesProviderError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, _, _, err := createCompactionSummary(
-		context.Background(), newTestOpenAIClient(server.URL), "test-model", "history", 512, 0,
+	_, _, _, err := createProtocolCompactionSummary(
+		context.Background(), newTestOpenAIClient(server.URL), util.OpenAIProtocolChatCompletions,
+		"test-model", "history", 512, 0,
 		time.Second, time.Second, make(chan AgentEvent, 1))
 	if err == nil {
 		t.Fatal("summary request unexpectedly succeeded")
@@ -198,7 +315,7 @@ func TestRuntimeCompactionPersistsBesideActiveTurn(t *testing.T) {
 		"updatedAt": int64(1),
 		"entries":   entries,
 	}
-	if _, err := SaveSession(marshalSession(t, session)); err != nil {
+	if _, _, err := SaveSessionState(marshalSession(t, session)); err != nil {
 		t.Fatal(err)
 	}
 	turn := &agentRuntimeTurn{
@@ -212,11 +329,11 @@ func TestRuntimeCompactionPersistsBesideActiveTurn(t *testing.T) {
 	if err := beginRuntimeTurn(testSessionID, turn); err != nil {
 		t.Fatal(err)
 	}
-	compaction, err := newRuntimeCompaction(entries, 3, "Persisted summary")
+	compaction, err := newRuntimeProtocolSummaryCompaction(entries, 3, "Persisted summary", util.OpenAIProtocolChatCompletions)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := saveRuntimeCompaction(testSessionID, compaction); err != nil {
+	if err := saveRuntimeCompaction(testSessionID, turn.TurnID, compaction); err != nil {
 		t.Fatal(err)
 	}
 	runtime, err := loadRuntimeState(testSessionID)
@@ -226,6 +343,15 @@ func TestRuntimeCompactionPersistsBesideActiveTurn(t *testing.T) {
 	if runtime.ActiveTurn == nil || runtime.ActiveTurn.TurnID != turn.TurnID ||
 		!validRuntimeCompaction(entries, runtime.Compaction) {
 		t.Fatalf("runtime compaction did not persist beside the active turn: %#v", runtime)
+	}
+	lateCompaction := cloneRuntimeCompaction(compaction)
+	lateCompaction.Summary = "Late summary must not be persisted"
+	if err = saveRuntimeCompaction(testSessionID, "another-turn", lateCompaction); err == nil {
+		t.Fatal("compaction from another turn was accepted")
+	}
+	runtime, err = loadRuntimeState(testSessionID)
+	if err != nil || runtime.Compaction.Summary != compaction.Summary {
+		t.Fatalf("late compaction replaced the active turn state: %#v, err=%v", runtime, err)
 	}
 }
 
@@ -244,16 +370,16 @@ func TestAgentChatCompactsBeforeSendingOversizedContext(t *testing.T) {
 		"updatedAt": int64(1),
 		"entries":   entries,
 	}
-	if _, err := SaveSession(marshalSession(t, session)); err != nil {
+	if _, _, err := SaveSessionState(marshalSession(t, session)); err != nil {
 		t.Fatal(err)
 	}
 
 	checkpoint := entriesToAgentMessages(entries)
-	requestTools := convertMCPToolsToOpenAI()
+	requestTools := currentCapabilitiesForTest(t).definitions
 	fullTokens := estimateChatRequestTokens(
-		"test-model", checkpointMessagesToOpenAI(checkpoint, "English", nil), requestTools)
+		"test-model", checkpointMessagesToOpenAIWithSummary(checkpoint, "English", nil, nil), requestTools)
 	recentTokens := estimateChatRequestTokens(
-		"test-model", checkpointMessagesToOpenAI(entriesToAgentMessages(entries[2:]), "English", nil), requestTools)
+		"test-model", checkpointMessagesToOpenAIWithSummary(entriesToAgentMessages(entries[2:]), "English", nil, nil), requestTools)
 	contextLimit := compactionTestContextLimit(t, fullTokens, recentTokens)
 	if fullTokens <= contextInputBudget(contextLimit, 512) {
 		t.Fatalf("test context does not require compaction: full=%d, budget=%d", fullTokens,
@@ -278,12 +404,20 @@ func TestAgentChatCompactsBeforeSendingOversizedContext(t *testing.T) {
 	defer server.Close()
 
 	events := AgentChat(
-		context.Background(), newTestOpenAIClient(server.URL), "test-model", "", contextLimit, testSessionID,
+		context.Background(), newTestOpenAIClient(server.URL), "openai", "test-model", "", contextLimit, testSessionID,
 		"user-2", 1, "start the current task", nil, "English", nil, EditorContext{}, nil, false,
 		time.Second, 0, "", time.Second, time.Second,
 	)
 	doneSeen := false
+	compactionRoundID := ""
+	modelRoundID := ""
 	for event := range events {
+		if event.Type == "thinking" && event.Reasoning == "analyzing" {
+			modelRoundID = event.RoundID
+		}
+		if event.Type == "thinking" && event.Reasoning == "compacting context" {
+			compactionRoundID = event.RoundID
+		}
 		if event.Type == "error" {
 			t.Fatalf("agent returned an error after proactive compaction: %s", event.Error)
 		}
@@ -294,11 +428,14 @@ func TestAgentChatCompactsBeforeSendingOversizedContext(t *testing.T) {
 	if requestCount.Load() != 2 || !doneSeen {
 		t.Fatalf("unexpected compaction request flow: requests=%d, done=%v", requestCount.Load(), doneSeen)
 	}
+	if compactionRoundID == "" || compactionRoundID != modelRoundID {
+		t.Fatalf("context compaction round %q does not match model round %q", compactionRoundID, modelRoundID)
+	}
 	runtime, err := loadRuntimeState(testSessionID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runtime.Compaction == nil || runtime.Compaction.CoveredEntryCount != 2 ||
+	if runtime.Compaction == nil || runtime.Compaction.CoveredMessageCount != 2 ||
 		!validRuntimeCompaction(entries, runtime.Compaction) {
 		t.Fatalf("proactive compaction was not persisted: %#v", runtime.Compaction)
 	}
@@ -335,18 +472,18 @@ func TestAgentChatRegenerateCompactionUsesTruncatedEditedHistory(t *testing.T) {
 		"updatedAt": int64(1),
 		"entries":   entries,
 	}
-	if _, err := SaveSession(marshalSession(t, session)); err != nil {
+	if _, _, err := SaveSessionState(marshalSession(t, session)); err != nil {
 		t.Fatal(err)
 	}
 
 	regenerateCheckpoint := entriesToAgentMessages(entries[:2])
 	regenerateCheckpoint = append(regenerateCheckpoint,
 		newAgentUserMessage(editedTarget, "user-2", nil, EditorContext{}))
-	requestTools := convertMCPToolsToOpenAI()
+	requestTools := currentCapabilitiesForTest(t).definitions
 	fullTokens := estimateChatRequestTokens(
-		"test-model", checkpointMessagesToOpenAI(regenerateCheckpoint, "English", nil), requestTools)
+		"test-model", checkpointMessagesToOpenAIWithSummary(regenerateCheckpoint, "English", nil, nil), requestTools)
 	recentTokens := estimateChatRequestTokens(
-		"test-model", checkpointMessagesToOpenAI(regenerateCheckpoint[2:], "English", nil), requestTools)
+		"test-model", checkpointMessagesToOpenAIWithSummary(regenerateCheckpoint[2:], "English", nil, nil), requestTools)
 	contextLimit := compactionTestContextLimit(t, fullTokens, recentTokens)
 
 	var requestCount atomic.Int32
@@ -373,7 +510,7 @@ func TestAgentChatRegenerateCompactionUsesTruncatedEditedHistory(t *testing.T) {
 	defer server.Close()
 
 	events := AgentChat(
-		context.Background(), newTestOpenAIClient(server.URL), "test-model", "", contextLimit, testSessionID,
+		context.Background(), newTestOpenAIClient(server.URL), "openai", "test-model", "", contextLimit, testSessionID,
 		"user-2", 1, editedTarget, new(editedBlockHTML), "English", nil, EditorContext{}, nil, true,
 		time.Second, 0, "", time.Second, time.Second,
 	)
@@ -419,7 +556,7 @@ func TestAgentChatRetriesOverflowAfterProactiveCompaction(t *testing.T) {
 	setupCompactionAgentTest(t)
 	entries := []SessionEntry{
 		{ID: "user-1", Type: "user", Content: "first completed task"},
-		{ID: "assistant-1", Type: "assistant", Content: strings.Repeat("first result ", 6000)},
+		{ID: "assistant-1", Type: "assistant", Content: strings.Repeat("first result ", 12000)},
 		{ID: "user-2", Type: "user", Content: "second completed task"},
 		{ID: "assistant-2", Type: "assistant", Content: strings.Repeat("second result ", 6000)},
 		{ID: "user-3", Type: "user", Content: "current task"},
@@ -431,16 +568,22 @@ func TestAgentChatRetriesOverflowAfterProactiveCompaction(t *testing.T) {
 		"updatedAt": int64(1),
 		"entries":   entries,
 	}
-	if _, err := SaveSession(marshalSession(t, session)); err != nil {
+	if _, _, err := SaveSessionState(marshalSession(t, session)); err != nil {
 		t.Fatal(err)
 	}
 
-	requestTools := convertMCPToolsToOpenAI()
+	capabilities := currentCapabilitiesForTest(t)
+	requestTools := capabilities.definitions
 	fullTokens := estimateChatRequestTokens(
-		"test-model", checkpointMessagesToOpenAI(entriesToAgentMessages(entries), "English", nil), requestTools)
+		"test-model", checkpointMessagesToOpenAIWithSummary(entriesToAgentMessages(entries), "English", capabilities, nil), requestTools)
 	afterFirstTokens := estimateChatRequestTokens(
-		"test-model", checkpointMessagesToOpenAI(entriesToAgentMessages(entries[2:]), "English", nil), requestTools)
+		"test-model", checkpointMessagesToOpenAIWithSummary(entriesToAgentMessages(entries[2:]), "English", capabilities, nil), requestTools)
 	contextLimit := compactionTestContextLimit(t, fullTokens, afterFirstTokens)
+	// 首次压缩须在目标预算内保留第二轮历史，供服务端报溢出后继续压缩。
+	targetBudget := contextInputBudget(contextLimit, 512) * 3 / 4
+	if afterFirstTokens+compactionSummaryOverhead+compactionSummaryMinTokens > targetBudget {
+		t.Fatalf("test context cannot retain the second turn after proactive compaction: base=%d, target=%d", afterFirstTokens, targetBudget)
+	}
 
 	var requestCount atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -453,6 +596,10 @@ func TestAgentChatRetriesOverflowAfterProactiveCompaction(t *testing.T) {
 		case 1:
 			writeCompactionSummaryStream(t, w, "The first task is complete", 90, 8)
 		case 2:
+			runtime, err := loadRuntimeState(testSessionID)
+			if err != nil || runtime == nil || runtime.Compaction == nil || runtime.Compaction.CoveredMessageCount != 2 {
+				t.Errorf("proactive compaction must cover only the first completed turn: runtime=%+v, err=%v", runtime, err)
+			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = fmt.Fprint(w,
@@ -471,7 +618,7 @@ func TestAgentChatRetriesOverflowAfterProactiveCompaction(t *testing.T) {
 	defer server.Close()
 
 	events := AgentChat(
-		context.Background(), newTestOpenAIClient(server.URL), "test-model", "", contextLimit, testSessionID,
+		context.Background(), newTestOpenAIClient(server.URL), "openai", "test-model", "", contextLimit, testSessionID,
 		"user-3", 1, "current task", nil, "English", nil, EditorContext{}, nil, false,
 		time.Second, 0, "", time.Second, time.Second,
 	)
@@ -491,7 +638,7 @@ func TestAgentChatRetriesOverflowAfterProactiveCompaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runtime.Compaction == nil || runtime.Compaction.CoveredEntryCount != 4 {
+	if runtime.Compaction == nil || runtime.Compaction.CoveredMessageCount != 4 {
 		t.Fatalf("overflow fallback did not extend the compaction boundary: %#v", runtime.Compaction)
 	}
 }

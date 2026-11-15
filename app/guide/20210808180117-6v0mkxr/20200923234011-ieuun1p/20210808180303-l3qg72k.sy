@@ -7,7 +7,7 @@
 		"id": "20210808180303-l3qg72k",
 		"title": "Advanced search",
 		"type": "doc",
-		"updated": "20260803171606"
+		"updated": "20261026182843"
 	},
 	"Children": [
 		{
@@ -16,7 +16,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20260613193423-e3tpcuq",
-				"updated": "20260613193423"
+				"updated": "20261024161058"
 			},
 			"Children": [
 				{
@@ -30,12 +30,181 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20260613193423-ahdqtz9",
-				"updated": "20260613193423"
+				"updated": "20261024161058"
 			},
 			"Children": [
 				{
 					"Type": "NodeText",
-					"Data": "Global search supports query syntax for advanced search, including AND/OR/NOT logic, type filtering, and field filtering. It also offers advanced features such as direct database table queries, index exclusion, and search exclusion, covering everything from simple keywords to complex conditions. The following sub-documents introduce each of these features in detail."
+					"Data": "Global search finds content blocks in your workspace using keywords, query syntax, regular expressions, or SQL. Semantic search is also available after configuring a semantic index. Open search, choose a method, then enter your keywords or query. This chapter explains the available controls and how to configure indexing and search scope."
+				}
+			]
+		},
+		{
+			"ID": "20261009182324-t1r641c",
+			"Type": "NodeHeading",
+			"Properties": {
+				"id": "20261009182324-t1r641c",
+				"updated": "20261026182843"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "Controls by search method"
+				}
+			],
+			"HeadingLevel": 2
+		},
+		{
+			"ID": "20261009182324-1ulhib3",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261009182324-1ulhib3",
+				"updated": "20261026182843"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "Keyword and query syntax searches support block-type, notebook and document-path filters, including child documents, as well as sorting, grouping and replacement. Content-order sorting is available only when grouping by document. An exact block ID follows the same notebook, document-path, block-type, subtype and ignore filters. Multi-keyword searches in keyword mode match %, _ and backslashes literally. Grouping by document organizes only the current page and keeps the pagination unit of the selected search method; with block-based pagination, matches from one document can span several pages."
+				}
+			]
+		},
+		{
+			"ID": "20261009182324-49vls9t",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261009182324-49vls9t",
+				"updated": "20261009182324"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "Regular expression search supports the same filters, grouping and replacement, plus type, creation-time and update-time sorting. Relevance sorting is unavailable; content-order sorting applies only within document groups."
+				}
+			]
+		},
+		{
+			"ID": "20261009182324-5ryxgkw",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261009182324-5ryxgkw",
+				"updated": "20261009182324"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "SQL search uses the filters and result order written in the SQL statement. The panel's block-type and path filters, including the current-document scope and child-document option, do not apply. Replacement is unavailable. Grouping by document remains available; in grouped results, type, creation-time, update-time and content-order sorting remain available, but relevance sorting does not apply."
+				}
+			]
+		},
+		{
+			"ID": "20261010113646-apg2y00",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261010113646-apg2y00",
+				"updated": "20261010113646"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "Desktop and mobile SQL search support pasted multiline statements and preserve comments. In SQL mode, press "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "Enter"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " to insert a newline. Keep the newline after a -- line comment so that the following statement is not treated as a comment. The search window requires complete block columns, such as SELECT b.* FROM blocks b; use the agent's sql.query for projections or aggregates."
+				}
+			]
+		},
+		{
+			"ID": "20261009182324-seagl6e",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261009182324-seagl6e",
+				"updated": "20261009182324"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "Semantic search supports block-type, notebook and document-path filters, including child documents. Results follow semantic relevance; panel sorting, grouping and replacement are unavailable."
+				}
+			]
+		},
+		{
+			"ID": "20261009182324-87b7poz",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261009182324-87b7poz",
+				"updated": "20261009182324"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "Controls that do not apply to the selected method are disabled with an explanatory tooltip. SQL and semantic search hide the replacement row while keeping its text and expanded state, which are restored when returning to a method that supports replacement. Saving and resetting query conditions remain available."
+				}
+			]
+		},
+		{
+			"ID": "20260929000700-l9atr7g",
+			"Type": "NodeHeading",
+			"Properties": {
+				"id": "20260929000700-l9atr7g",
+				"updated": "20261024164212"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "Mind map search"
+				}
+			],
+			"HeadingLevel": 2
+		},
+		{
+			"ID": "20260929000700-fx8kb8s",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20260929000700-fx8kb8s",
+				"updated": "20261024164212"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "In "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "Settings"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " - "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "Search"
+				},
+				{
+					"Type": "NodeText",
+					"Data": ", enable Mind map block to find a whole mind map by its node text in block reference and embed suggestions. In global search, select Mind map block in Search type. Mind map item block can be enabled separately to find individual branches."
+				}
+			]
+		},
+		{
+			"ID": "20261024164212-hffoeea",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261024164212-hffoeea",
+				"updated": "20261024164212"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "Mind map block is enabled by default; Mind map item block is disabled by default. Older search configurations inherit these options from the global search settings, while explicit choices are preserved."
 				}
 			]
 		},
@@ -45,7 +214,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20260613193423-4fjlvrg",
-				"updated": "20260803171606"
+				"updated": "20261024163013"
 			},
 			"Children": [
 				{
@@ -59,7 +228,7 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20260613193423-qw5e4r0",
-				"updated": "20260803171606"
+				"updated": "20261024163013"
 			},
 			"Children": [
 				{
@@ -73,7 +242,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​ - "
+					"Data": " - "
 				},
 				{
 					"Type": "NodeTextMark",
@@ -82,7 +251,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​ - "
+					"Data": " - "
 				},
 				{
 					"Type": "NodeTextMark",
@@ -91,7 +260,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​. Disabled by default, meaning searching "
+					"Data": ". Disabled by default, meaning searching "
 				},
 				{
 					"Type": "NodeTextMark",
@@ -119,7 +288,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20260613193423-1oey891",
-				"updated": "20260803171606"
+				"updated": "20261024163013"
 			},
 			"Children": [
 				{
@@ -133,7 +302,7 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20260613193423-f3tgfru",
-				"updated": "20260803171606"
+				"updated": "20261024163013"
 			},
 			"Children": [
 				{
@@ -147,7 +316,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​ - "
+					"Data": " - "
 				},
 				{
 					"Type": "NodeTextMark",
@@ -156,7 +325,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​ - "
+					"Data": " - "
 				},
 				{
 					"Type": "NodeTextMark",
@@ -165,7 +334,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​. Enabled by default, meaning searching \"经济\" will not match \"經濟\". When disabled, searching \"经济\" matches both \"经济\" and \"經濟\". After toggling this option, you must wait for index rebuilding to complete before it takes effect."
+					"Data": ". Enabled by default, meaning searching \"经济\" will not match \"經濟\". When disabled, searching \"经济\" matches both \"经济\" and \"經濟\". After toggling this option, you must wait for index rebuilding to complete before it takes effect."
 				}
 			]
 		},
@@ -175,7 +344,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20260613193423-ws0z1u9",
-				"updated": "20260613193423"
+				"updated": "20261024163828"
 			},
 			"Children": [
 				{
@@ -204,7 +373,7 @@
 			"ListData": {},
 			"Properties": {
 				"id": "20260613193423-6o0q64d",
-				"updated": "20260613193423"
+				"updated": "20261010225402"
 			},
 			"Children": [
 				{
@@ -216,7 +385,7 @@
 					},
 					"Properties": {
 						"id": "20260613193423-3lwdirc",
-						"updated": "20260613193423"
+						"updated": "20260809232000"
 					},
 					"Children": [
 						{
@@ -224,7 +393,7 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20260613193423-8b9pf9i",
-								"updated": "20260613193423"
+								"updated": "20260809232000"
 							},
 							"Children": [
 								{
@@ -238,8 +407,17 @@
 								},
 								{
 									"Type": "NodeTextMark",
-									"TextMarkType": "code",
-									"TextMarkTextContent": "Ctrl+P"
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "Ctrl"
+								},
+								{
+									"Type": "NodeText",
+									"Data": "+"
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "P"
 								},
 								{
 									"Type": "NodeText",
@@ -391,7 +569,7 @@
 					},
 					"Properties": {
 						"id": "20260613193423-9tqsg45",
-						"updated": "20260613193423"
+						"updated": "20261010225402"
 					},
 					"Children": [
 						{
@@ -399,7 +577,7 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20260613193423-0whdff2",
-								"updated": "20260613193423"
+								"updated": "20261010225402"
 							},
 							"Children": [
 								{
@@ -413,12 +591,25 @@
 								},
 								{
 									"Type": "NodeTextMark",
-									"TextMarkType": "code",
-									"TextMarkTextContent": "Ctrl+Z"
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "Ctrl"
+								},
+								{
+									"Type": "NodeText",
+									"Data": "+"
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "Z"
 								},
 								{
 									"Type": "NodeText",
 									"Data": "​ undo is not supported after replacement. The system automatically generates file history before execution; use data history rollback to restore if needed"
+								},
+								{
+									"Type": "NodeText",
+									"Data": ". Ordinary and encrypted documents preserve edits made during replacement. If a document changes or is deleted before saving, replacement stops with an error and preserves the current document; documents already saved keep their replacement results. Finish editing before retrying"
 								}
 							]
 						}
@@ -448,7 +639,7 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20240508004303-cfhkbkf",
-				"updated": "20240508004303"
+				"updated": "20261024163828"
 			},
 			"Children": [
 				{
@@ -456,7 +647,7 @@
 					"TextMarkType": "block-ref",
 					"TextMarkBlockRefID": "20201222100339-i5hzcph",
 					"TextMarkBlockRefSubtype": "d",
-					"TextMarkTextContent": "Database table"
+					"TextMarkTextContent": "SQL index tables"
 				}
 			]
 		},

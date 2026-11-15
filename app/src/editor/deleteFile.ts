@@ -1,11 +1,12 @@
+import type {BlockQueryRequestInput} from "../types/api";
 import {fetchPost, fetchSyncPost} from "../util/fetch";
 import {getDisplayName, getNotebookName, isEncryptedBox} from "../util/pathName";
-import {confirmDialog} from "../dialog/confirmDialog";
-import {hasTopClosestByTag} from "../protyle/util/hasClosest";
-import {showMessage} from "../dialog/message";
-import {escapeHtml} from "../util/escape";
+import {mobileConfirmDialog as confirmDialog} from "../dialog/mobileConfirmDialog";
+import {escapeHtml, escapeHtmlTextAndAttr} from "../util/escape";
 import {Constants} from "../constants";
 import {checkBlockRef, getBlockRefWarningHTML} from "../util/checkBlockRef";
+import {getDocTreeDeleteItems} from "../menus/navigationSelection";
+import {getDocTreeItem} from "../layout/dock/docTree/rowData";
 
 export const deleteFile = async (notebookId: string, pathString: string) => {
     const hasRef = await checkBlockRef({
@@ -22,7 +23,7 @@ export const deleteFile = async (notebookId: string, pathString: string) => {
         });
         return;
     }
-    const docInfoParam: IObject = {
+    const docInfoParam: BlockQueryRequestInput = {
         id: getDisplayName(pathString, true, true)
     };
     if (isEncryptedBox(notebookId)) {
@@ -52,13 +53,47 @@ export const deleteFile = async (notebookId: string, pathString: string) => {
     }, undefined, true);
 };
 
-export const deleteFiles = async (liElements: Element[]) => {
-    if (liElements.length === 1) {
-        const itemTopULElement = hasTopClosestByTag(liElements[0], "UL");
-        if (itemTopULElement) {
-            const itemNotebookId = itemTopULElement.getAttribute("data-url");
-            if (liElements[0].getAttribute("data-type") === "navigation-file") {
-                deleteFile(itemNotebookId, liElements[0].getAttribute("data-path"));
+export const deleteNotebooks = async (notebookIds: string[]) => {
+    const uniqueNotebookIds = Array.from(new Set(notebookIds));
+    const refResults = await Promise.all(uniqueNotebookIds.map((notebook) => checkBlockRef({
+        scope: "notebook",
+        notebook,
+    })));
+    if (refResults.some((result) => result === undefined)) {
+        return;
+    }
+    const notebookNames = uniqueNotebookIds.map((notebook) => escapeHtml(getNotebookName(notebook)))
+        .join(", ");
+    let tip = `${window.siyuan.languages.confirmDeleteTip.replace("${x}", notebookNames)}
+<div class="fn__hr"></div>
+<div class="ft__smaller ft__on-surface">${window.siyuan.languages.rollbackTip.replace("${x}", window.siyuan.config.editor.historyRetentionDays)}</div>`;
+    if (refResults.some((result) => result)) {
+        tip += getBlockRefWarningHTML();
+    }
+    confirmDialog(window.siyuan.languages.deleteOpConfirm, tip, async () => {
+        for (const notebook of uniqueNotebookIds) {
+            await fetchPost("/api/notebook/removeNotebook", {notebook});
+        }
+    }, undefined, true);
+};
+
+export const deleteFiles = (liElements: Element[]) => deleteDocTreeItems(liElements.flatMap(element => {
+    const item = getDocTreeItem(element);
+    return item ? [item] : [];
+}));
+
+export const deleteDocTreeItems = async (selected: readonly {
+    id: string, notebookId: string, path: string, kind: string, name: string,
+}[]) => {
+    const items = getDocTreeDeleteItems(selected);
+    if (items.some(item => item.kind === "document" && item.id === item.notebookId)) {
+        return;
+    }
+    if (items.length === 1) {
+        const itemNotebookId = items[0].notebookId;
+        if (itemNotebookId) {
+            if (items[0].kind === "document") {
+                deleteFile(itemNotebookId, items[0].path);
             } else {
                 const isHelpNotebook = Object.values(Constants.HELP_PATH).includes(itemNotebookId);
                 if (isHelpNotebook) {
@@ -74,7 +109,7 @@ export const deleteFiles = async (liElements: Element[]) => {
                 if (hasRef === undefined) {
                     return;
                 }
-                let tip = `${window.siyuan.languages.confirmDeleteTip.replace("${x}", Lute.EscapeHTMLStr(getNotebookName(itemNotebookId)))}
+                let tip = `${window.siyuan.languages.confirmDeleteTip.replace("${x}", escapeHtmlTextAndAttr(getNotebookName(itemNotebookId)))}
 <div class="fn__hr"></div>
 <div class="ft__smaller ft__on-surface">${window.siyuan.languages.rollbackTip.replace("${x}", window.siyuan.config.editor.historyRetentionDays)}</div>`;
                 if (hasRef) {
@@ -89,15 +124,50 @@ export const deleteFiles = async (liElements: Element[]) => {
             }
         }
     } else {
-        const paths: string[] = [];
-        liElements.forEach(item => {
-            const dataPath = item.getAttribute("data-path");
-            if (dataPath !== "/") {
-                paths.push(item.getAttribute("data-path"));
-            }
-        });
+        const notebookIds = Array.from(new Set(items.filter(item => item.kind === "notebook").map(item => item.notebookId)));
+        const paths = Array.from(new Set(items.filter(item => item.kind === "document").map(item => item.path)));
+        if (notebookIds.length > 0 && paths.length === 0) {
+            deleteNotebooks(notebookIds);
+            return;
+        }
         if (paths.length === 0) {
-            showMessage(window.siyuan.languages.notBatchRemove);
+            return;
+        }
+        if (notebookIds.length > 0) {
+            const refResults = await Promise.all([
+                checkBlockRef({
+                    scope: "documents",
+                    paths,
+                }),
+                ...notebookIds.map((notebook) => checkBlockRef({
+                    scope: "notebook",
+                    notebook,
+                })),
+            ]);
+            if (refResults.some((result) => result === undefined)) {
+                return;
+            }
+            const itemNames = items.map((item) => {
+                if (item.name) {
+                    return escapeHtml(item.name);
+                }
+                if (item.kind === "notebook") {
+                    return escapeHtml(getNotebookName(item.notebookId));
+                }
+                return escapeHtml(getDisplayName(item.path, true, true));
+            }).filter(Boolean).join(", ");
+            let tip = `${window.siyuan.languages.confirmDeleteTip.replace("${x}", itemNames)}
+<div class="fn__hr"></div>
+<div class="ft__smaller ft__on-surface">${window.siyuan.languages.rollbackTip.replace("${x}", window.siyuan.config.editor.historyRetentionDays)}</div>`;
+            if (refResults.some((result) => result)) {
+                tip += getBlockRefWarningHTML();
+            }
+            confirmDialog(window.siyuan.languages.deleteOpConfirm, tip, async () => {
+                await fetchPost("/api/filetree/removeDocs", {paths});
+                for (const notebook of notebookIds) {
+                    await fetchPost("/api/notebook/removeNotebook", {notebook});
+                }
+            }, undefined, true);
             return;
         }
         const hasRef = await checkBlockRef({

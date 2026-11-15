@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
@@ -89,5 +77,31 @@ func TestCleanRenderDocumentHidesFoldedHeadingChildren(t *testing.T) {
 	}
 	if nil != nodes[0].FirstChild.Next {
 		t.Fatal("document render should omit folded heading children")
+	}
+}
+
+func TestPrepareHeadingChildrenDOMNodesDoesNotMutateSource(t *testing.T) {
+	heading := &ast.Node{Type: ast.NodeHeading, HeadingLevel: 1, ID: "heading"}
+	child := &ast.Node{Type: ast.NodeParagraph, ID: "child"}
+	treenode.SetSelfFolded(heading, true)
+	treenode.SetSelfFolded(child, true)
+	child.SetIALAttr("parent-heading", "original-parent")
+
+	kept := prepareHeadingChildrenDOMNodes(heading, []*ast.Node{child}, false)
+	if 2 != len(kept) || "1" != kept[0].IALAttr("fold") || "1" != kept[1].IALAttr("fold") {
+		t.Fatal("rendered clones should preserve explicit fold attributes")
+	}
+	if "heading" != kept[1].IALAttr("parent-heading") {
+		t.Fatalf("rendered child has unexpected parent heading: %q", kept[1].IALAttr("parent-heading"))
+	}
+
+	removed := prepareHeadingChildrenDOMNodes(heading, []*ast.Node{child}, true)
+	if 2 != len(removed) || "" != removed[0].IALAttr("fold") || "" != removed[1].IALAttr("fold") ||
+		"" != removed[1].IALAttr("parent-heading") {
+		t.Fatal("rendered clones should remove fold and parent-heading attributes")
+	}
+	if "1" != heading.IALAttr("fold") || "1" != child.IALAttr("fold") ||
+		"original-parent" != child.IALAttr("parent-heading") {
+		t.Fatal("heading children rendering mutated the source AST")
 	}
 }

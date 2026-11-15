@@ -1,3 +1,7 @@
+import {applyLuteMarkdownSyntax} from "./luteMarkdownSyntax";
+import {protectLuteInlineElementBoundaries} from "../util/inlineElementBoundary";
+import {protectLuteTableVirtualization} from "../util/tableVirtualizationDOM";
+
 // Lute 配置全部读取全局 window.siyuan.config / window.siyuan.emojis，跨编辑器一致，
 // 因此所有 Protyle 编辑器共用同一个 Lute 实例，将内存与初始化开销从 O(编辑器数) 降为 O(1)。
 // AgentChat 不复用此共享单例，而是通过 getAgentLute 构建独立实例，使渲染不受编辑器设置影响。
@@ -58,6 +62,7 @@ export const getAgentLute = (options: ILuteOptions): Lute => {
     lute.SetKramdownIAL(true);
     lute.SetSuperBlock(true);
     lute.SetCallout(true);
+    lute.SetTabs(true);
     // 行内语法全部启用，不随编辑器设置变化。
     lute.SetInlineAsterisk(true);
     lute.SetInlineUnderscore(true);
@@ -76,10 +81,10 @@ export const getAgentLute = (options: ILuteOptions): Lute => {
     lute.SetBlockRef(true);
     lute.SetUnorderedListMarker("-");
     lute.SetDataTask(true);
-    lute.SetExportNormalizeTaskListMarker(true);
+    lute.SetExportNormalizeTaskListMarker(false);
     lute.SetArbitraryTaskListItemMarker(true);
     lute.SetEnsureListItemParagraph(true);
-    return lute;
+    return protectLuteTableVirtualization(protectLuteInlineElementBoundaries(lute));
 };
 
 /**
@@ -112,15 +117,9 @@ const setLute = (options: ILuteOptions) => {
     lute.SetTag(true);
     lute.SetSuperBlock(true);
     lute.SetCallout(true);
-    lute.SetInlineAsterisk(window.siyuan.config.editor.markdown.inlineAsterisk);
-    lute.SetInlineUnderscore(window.siyuan.config.editor.markdown.inlineUnderscore);
-    lute.SetSup(window.siyuan.config.editor.markdown.inlineSup);
-    lute.SetSub(window.siyuan.config.editor.markdown.inlineSub);
-    lute.SetTag(window.siyuan.config.editor.markdown.inlineTag);
-    lute.SetInlineMath(window.siyuan.config.editor.markdown.inlineMath);
-    lute.SetGFMStrikethrough1(false);
-    lute.SetGFMStrikethrough(window.siyuan.config.editor.markdown.inlineStrikethrough);
-    lute.SetMark(window.siyuan.config.editor.markdown.inlineMark);
+    lute.SetTabs(true);
+    lute.SetCustomBlock(true);
+    applyLuteMarkdownSyntax(lute, window.siyuan.config.editor.markdown);
     lute.SetSpin(true);
     lute.SetProtyleWYSIWYG(true);
     if (options.lazyLoadImage) {
@@ -136,8 +135,8 @@ const setLute = (options: ILuteOptions) => {
     }
     lute.SetUnorderedListMarker("-");
     lute.SetDataTask(true);
-    lute.SetExportNormalizeTaskListMarker(true);
+    lute.SetExportNormalizeTaskListMarker(false);
     lute.SetArbitraryTaskListItemMarker(true);
     lute.SetEnsureListItemParagraph(true); // 空列表项下创建子列表前补一个空段落
-    return lute;
+    return protectLuteTableVirtualization(protectLuteInlineElementBoundaries(lute));
 };

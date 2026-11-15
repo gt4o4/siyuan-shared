@@ -1,18 +1,47 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package av
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/88250/lute/ast"
 )
+
+func TestNewItemTemplateOpenAfterCreate(t *testing.T) {
+	for _, target := range []NewItemTargetType{NewItemTargetDetached, NewItemTargetDocument} {
+		for _, preference := range []*bool{nil, new(false), new(true)} {
+			view := &AttributeView{Spec: CurrentSpec, ID: ast.NewNodeID()}
+			template := &NewItemTemplate{ID: ast.NewNodeID(), Name: "Entry", TargetType: target, OpenAfterCreate: preference, OpenInCurrentTab: true}
+			if err := view.SetNewItemTemplates(&NewItemTemplatesConfig{Templates: []*NewItemTemplate{template}}); err != nil {
+				t.Fatal(err)
+			}
+			stored := view.NewItemTemplates[0]
+			if !stored.OpenInCurrentTab {
+				t.Fatal("current pane preference lost")
+			}
+			if preference != nil && (stored.OpenAfterCreate == preference || stored.OpenAfterCreate == nil || *stored.OpenAfterCreate != *preference) {
+				t.Fatalf("opening preference was lost or not cloned: %+v", stored)
+			}
+			raw, err := json.Marshal(stored)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]json.RawMessage
+			if err = json.Unmarshal(raw, &fields); err != nil || (fields["openAfterCreate"] != nil) != (preference != nil) {
+				t.Fatalf("opening preference presence changed: %s %v", raw, err)
+			}
+			var restored NewItemTemplate
+			if err = json.Unmarshal(raw, &restored); err != nil || (restored.OpenAfterCreate == nil) != (preference == nil) ||
+				preference != nil && *restored.OpenAfterCreate != *preference {
+				t.Fatalf("opening preference did not round-trip: %s %v", raw, err)
+			}
+		}
+	}
+}
 
 func TestSetNewItemTemplates(t *testing.T) {
 	attrView := &AttributeView{Spec: CurrentSpec, ID: ast.NewNodeID()}
@@ -123,7 +152,7 @@ func TestEmptyNewItemTemplatesUseVirtualDefault(t *testing.T) {
 	}
 }
 
-func TestDetachedNewItemTemplateDropsIcon(t *testing.T) {
+func TestDetachedNewItemTemplatePreservesIcon(t *testing.T) {
 	attrView := &AttributeView{Spec: CurrentSpec, ID: ast.NewNodeID()}
 	config := &NewItemTemplatesConfig{Templates: []*NewItemTemplate{{
 		ID: ast.NewNodeID(), Name: "Detached", Icon: "1f4c4", TargetType: NewItemTargetDetached, HideInFileTree: true,
@@ -131,8 +160,8 @@ func TestDetachedNewItemTemplateDropsIcon(t *testing.T) {
 	if err := attrView.SetNewItemTemplates(config); nil != err {
 		t.Fatalf("set detached new item template failed: %s", err)
 	}
-	if "" != attrView.NewItemTemplates[0].Icon {
-		t.Fatalf("detached template icon should be empty: %q", attrView.NewItemTemplates[0].Icon)
+	if "1f4c4" != attrView.NewItemTemplates[0].Icon {
+		t.Fatalf("detached template icon was not preserved: %q", attrView.NewItemTemplates[0].Icon)
 	}
 	if attrView.NewItemTemplates[0].HideInFileTree {
 		t.Fatal("detached template should not preserve the file tree visibility setting")

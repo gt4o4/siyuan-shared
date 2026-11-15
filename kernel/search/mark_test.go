@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package search
 
@@ -23,10 +11,10 @@ import (
 )
 
 func TestMarkTextMatchesRawText(t *testing.T) {
-	old := util.SearchHanSensitive
-	util.SearchHanSensitive = true
+	old := util.SearchHanSensitive.Load()
+	util.SearchHanSensitive.Store(true)
 	t.Cleanup(func() {
-		util.SearchHanSensitive = old
+		util.SearchHanSensitive.Store(old)
 	})
 
 	tests := []struct {
@@ -85,10 +73,10 @@ func TestMarkTextMatchesRawText(t *testing.T) {
 }
 
 func TestEncloseHighlightingRaw(t *testing.T) {
-	old := util.SearchHanSensitive
-	util.SearchHanSensitive = true
+	old := util.SearchHanSensitive.Load()
+	util.SearchHanSensitive.Store(true)
 	t.Cleanup(func() {
-		util.SearchHanSensitive = old
+		util.SearchHanSensitive.Store(old)
 	})
 
 	start := GetMarkSpanStart(VirtualBlockRefDataType)
@@ -179,10 +167,10 @@ func TestEncloseHighlightingRaw(t *testing.T) {
 }
 
 func TestEncloseHighlightingRawHanInsensitive(t *testing.T) {
-	old := util.SearchHanSensitive
-	util.SearchHanSensitive = false
+	old := util.SearchHanSensitive.Load()
+	util.SearchHanSensitive.Store(false)
 	t.Cleanup(func() {
-		util.SearchHanSensitive = old
+		util.SearchHanSensitive.Store(old)
 	})
 
 	got, matched := EncloseHighlightingRaw("詩經研究", []string{"诗经"}, "<mark>", "</mark>", false, false)

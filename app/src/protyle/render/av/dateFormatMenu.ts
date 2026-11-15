@@ -1,7 +1,7 @@
 import {Menu} from "../../../plugin/Menu";
 import {transaction} from "../../wysiwyg/transaction";
 import {Constants} from "../../../constants";
-import {getAllEditor, getAllModels} from "../../../layout/getAll";
+import {getAllEditor} from "../../../layout/getAll";
 import {formatDateDisplay, getLabelByDateFormat} from "./dateFormat";
 
 const refreshDatabaseAttributePanels = (protyle: IProtyle, avID: string) => {
@@ -11,13 +11,14 @@ const refreshDatabaseAttributePanels = (protyle: IProtyle, avID: string) => {
             editor.protyle.databaseAttributePanel.refresh();
         }
     });
-    /// #if !MOBILE
-    getAllModels().custom.forEach((model) => {
-        if (model.type === "siyuan-database-row" && model.data.avID === avID) {
-            model.update?.();
-        }
-    });
-    /// #endif
+};
+
+export const setDateFieldFormat = (protyle: IProtyle, avID: string, colId: string,
+                                   type: "date" | "created" | "updated", format: TAVDateFormat, oldFormat: TAVDateFormat) => {
+    transaction(protyle, [{action: "setAttrViewColDateFormat", id: colId, avID, format, type}],
+        [{action: "setAttrViewColDateFormat", id: colId, avID, format: oldFormat, type}], {
+            callback: () => refreshDatabaseAttributePanels(protyle, avID),
+        });
 };
 
 export const formatDate = (options: {
@@ -37,21 +38,7 @@ export const formatDate = (options: {
             label: getLabelByDateFormat(format),
             accelerator: format === "full" ? formatDateDisplay(Date.now(), format) : undefined,
             click() {
-                transaction(options.protyle, [{
-                    action: "setAttrViewColDateFormat",
-                    id: options.colId,
-                    avID: options.avID,
-                    format,
-                    type: options.type,
-                }], [{
-                    action: "setAttrViewColDateFormat",
-                    id: options.colId,
-                    avID: options.avID,
-                    format: options.oldFormat,
-                    type: options.type,
-                }], {
-                    callback: () => refreshDatabaseAttributePanels(options.protyle, options.avID),
-                });
+                setDateFieldFormat(options.protyle, options.avID, options.colId, options.type, format, options.oldFormat);
                 options.avPanelElement.remove();
             }
         });

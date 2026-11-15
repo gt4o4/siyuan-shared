@@ -1,22 +1,82 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package av
 
 import "testing"
+
+func TestValueNormalizeBlockRefSubtype(t *testing.T) {
+	const avID = "20260814000000-avtest1"
+	staticAttr := NodeAttrViewStaticText + "-" + avID
+	tests := []struct {
+		name            string
+		value           *Value
+		attrs           map[string]string
+		expectedSubtype BlockRefSubtype
+		expectedContent string
+		expectedChanged bool
+	}{
+		{
+			name: "Legacy dynamic",
+			value: &Value{Type: KeyTypeBlock, Block: &ValueBlock{
+				ID: "20260814000001-dynamic", Content: "Dynamic",
+			}},
+			expectedSubtype: BlockRefSubtypeDynamic,
+			expectedContent: "Dynamic",
+			expectedChanged: true,
+		},
+		{
+			name: "Legacy static",
+			value: &Value{Type: KeyTypeBlock, Block: &ValueBlock{
+				ID: "20260814000002-static1", Content: "Old",
+			}},
+			attrs:           map[string]string{staticAttr: "Static"},
+			expectedSubtype: BlockRefSubtypeStatic,
+			expectedContent: "Static",
+			expectedChanged: true,
+		},
+		{
+			name: "Persisted dynamic is authoritative",
+			value: &Value{Type: KeyTypeBlock, Block: &ValueBlock{
+				ID: "20260814000003-current", Content: "Dynamic", RefSubtype: BlockRefSubtypeDynamic,
+			}},
+			attrs:           map[string]string{staticAttr: "Stale"},
+			expectedSubtype: BlockRefSubtypeDynamic,
+			expectedContent: "Dynamic",
+			expectedChanged: false,
+		},
+		{
+			name: "Invalid subtype",
+			value: &Value{Type: KeyTypeBlock, Block: &ValueBlock{
+				ID: "20260814000004-invalid", Content: "Dynamic", RefSubtype: BlockRefSubtype("invalid"),
+			}},
+			expectedSubtype: BlockRefSubtypeDynamic,
+			expectedContent: "Dynamic",
+			expectedChanged: true,
+		},
+		{
+			name: "Detached",
+			value: &Value{Type: KeyTypeBlock, IsDetached: true, Block: &ValueBlock{
+				Content: "Detached", RefSubtype: BlockRefSubtypeStatic,
+			}},
+			expectedContent: "Detached",
+			expectedChanged: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			changed := test.value.NormalizeBlockRefSubtype(avID, test.attrs)
+			if test.expectedChanged != changed {
+				t.Fatalf("unexpected changed state: %v", changed)
+			}
+			if test.expectedSubtype != test.value.Block.RefSubtype || test.expectedContent != test.value.Block.Content {
+				t.Fatalf("unexpected normalized block value: %+v", test.value.Block)
+			}
+		})
+	}
+}
 
 func TestValueRollupCalcUniqueValues(t *testing.T) {
 	t.Run("Text", func(t *testing.T) {
@@ -106,7 +166,7 @@ func TestValueRollupBuildContentsFiltersEligibleItems(t *testing.T) {
 	}
 	rollup := &ValueRollup{}
 
-	rollup.BuildContents(keyValues, destKey, relationValue, &RollupCalc{Operator: CalcOperatorCountAll},
+	rollup.BuildContents(&AttributeView{KeyValues: keyValues}, destKey, relationValue, &RollupCalc{Operator: CalcOperatorCountAll},
 		&RollupRenderContext{EligibleItemIDs: map[string]bool{"item-b": true, "item-c": true}})
 
 	if 1 != len(rollup.Contents) || nil == rollup.Contents[0].Number {
@@ -114,5 +174,64 @@ func TestValueRollupBuildContentsFiltersEligibleItems(t *testing.T) {
 	}
 	if 2 != rollup.Contents[0].Number.Content {
 		t.Fatalf("expected 2 eligible items, got %v", rollup.Contents[0].Number.Content)
+	}
+}
+
+func TestValueRollupBuildContentsPreservesBlockRefSubtype(t *testing.T) {
+	destKey := &Key{ID: "target", Type: KeyTypeBlock}
+	keyValues := []*KeyValues{{
+		Key: destKey,
+		Values: []*Value{{
+			BlockID: "item-a",
+			Type:    KeyTypeBlock,
+			Block:   &ValueBlock{ID: "block-a", Content: "A", RefSubtype: BlockRefSubtypeDynamic},
+		}},
+	}}
+	relationValue := &Value{Type: KeyTypeRelation, Relation: &ValueRelation{BlockIDs: []string{"item-a"}}}
+	rollup := &ValueRollup{}
+
+	rollup.BuildContents(&AttributeView{KeyValues: keyValues}, destKey, relationValue, nil, nil)
+
+	if 1 != len(rollup.Contents) || nil == rollup.Contents[0].Block ||
+		BlockRefSubtypeDynamic != rollup.Contents[0].Block.RefSubtype {
+		t.Fatalf("rollup did not preserve the block reference subtype: %+v", rollup.Contents)
+	}
+}
+
+func TestValueRollupBuildContentsResolvesTargetCustomColor(t *testing.T) {
+	destKey := &Key{ID: "select", Type: KeyTypeSelect}
+	destView := &AttributeView{
+		KeyValues: []*KeyValues{{
+			Key: destKey,
+			Values: []*Value{{
+				BlockID: "item-a",
+				Type:    KeyTypeSelect,
+				MSelect: []*ValueSelect{{Content: "Target", Color: "15"}},
+			}},
+		}},
+	}
+	palette := []*AttributeViewCustomColor{
+		testAttributeViewCustomColor(15, "#010203", "#040506", "#070809", "#0a0b0c"),
+	}
+	old := LoadWorkspacePalette
+	t.Cleanup(func() { LoadWorkspacePalette = old })
+	LoadWorkspacePalette = func() ([]*AttributeViewCustomColor, []string) {
+		return palette, DefaultAttributeViewColorOrder(palette)
+	}
+
+	relationValue := &Value{Type: KeyTypeRelation, Relation: &ValueRelation{BlockIDs: []string{"item-a"}}}
+	rollup := &ValueRollup{}
+
+	rollup.BuildContents(destView, destKey, relationValue, nil, nil)
+	if 1 != len(rollup.Contents) || 1 != len(rollup.Contents[0].MSelect) {
+		t.Fatalf("unexpected rollup contents: %+v", rollup.Contents)
+	}
+	selection := rollup.Contents[0].MSelect[0]
+	if nil == selection.ResolvedColor || "#010203" != selection.ResolvedColor.Light.Color ||
+		"#0a0b0c" != selection.ResolvedColor.Dark.BackgroundColor {
+		t.Fatalf("rollup did not resolve the target database color: %+v", selection)
+	}
+	if nil != destView.KeyValues[0].Values[0].MSelect[0].ResolvedColor {
+		t.Fatal("rollup resolution mutated the persisted target value")
 	}
 }

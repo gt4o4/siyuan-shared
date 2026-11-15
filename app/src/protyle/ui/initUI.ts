@@ -1,17 +1,14 @@
 import {setEditMode} from "../util/setEditMode";
+import {isTabGutterBridge} from "../gutter/tabs";
+import {isContainerGutterBridge} from "../gutter/container";
+import {bindGutterHover, cancelGutterHover, renderGutterOnHover} from "../gutter/hover";
 import {scrollEvent} from "../scroll/event";
 import {isMobile} from "../../util/functions";
 import {Constants} from "../../constants";
-import {isMac} from "../util/compatibility";
-import {setInlineStyle} from "../../util/assets";
-import {fetchPost} from "../../util/fetch";
-import {lineNumberRender} from "../render/highlightRender";
-import {hideMessage, showMessage} from "../../dialog/message";
-import {genUUID} from "../../util/genID";
-import {getContenteditableElement, getEmbedChildOperationContext, getLastBlock} from "../wysiwyg/getBlock";
+import {getContenteditableElement, getEmbedGutterOperationContext, getLastBlock} from "../wysiwyg/getBlock";
 import {genEmptyElement, genHeadingElement} from "../../block/util";
 import {transaction} from "../wysiwyg/transaction";
-import {focusByRange} from "../util/selection";
+import {focusByRange} from "../util/selectionOffsets";
 /// #if !MOBILE
 import {moveResize} from "../../dialog/moveResize";
 /// #endif
@@ -24,8 +21,9 @@ import {
 } from "../util/hasClosest";
 import {hideElements} from "./hideElements";
 import {AVAttributePanel} from "../render/av/attributePanel";
-import {getEditorHorizontalPadding} from "./padding";
+import {BACKLINK_EDITOR_PADDING, getEditorHorizontalPadding} from "./padding";
 import {callMobileAppShowKeyboard} from "../../mobile/util/mobileAppUtil";
+import {sanitizeKernelHTML} from "../../util/hostCapabilities";
 
 const focusMobileAppEditor = (element: HTMLElement) => {
     if (window.JSAndroid?.showKeyboard || window.JSHarmony?.showKeyboard) {
@@ -37,6 +35,18 @@ const focusMobileAppEditor = (element: HTMLElement) => {
 export const initUI = (protyle: IProtyle) => {
     protyle.contentElement = document.createElement("div");
     protyle.contentElement.className = "protyle-content";
+    if (window.siyuan.config.editor.fullWidth) {
+        protyle.contentElement.dataset.fullwidth = "true";
+        protyle.preview.element.dataset.fullwidth = "true";
+    }
+    if (!isMobile() && CSS.supports("container-type", "inline-size") &&
+        CSS.supports("width", "1cqi") && !protyle.options.action.includes(Constants.CB_GET_HISTORY) &&
+        !protyle.options.backlinkData) {
+        protyle.contentElement.dataset.paddingMode = "responsive";
+        if (protyle.options.preview.actions.includes("desktop")) {
+            protyle.preview.element.dataset.paddingMode = "responsive";
+        }
+    }
 
     if (protyle.options.render.background || protyle.options.render.title) {
         protyle.contentElement.innerHTML = '<div class="protyle-top"></div>';
@@ -107,51 +117,6 @@ export const initUI = (protyle: IProtyle) => {
     setEditMode(protyle, protyle.options.mode);
     document.execCommand("DefaultParagraphSeparator", false, "p");
 
-    let wheelTimeout: number;
-    const wheelId = genUUID();
-    const isMacOS = isMac();
-    protyle.contentElement.addEventListener("mousewheel", (event: WheelEvent) => {
-        if (!window.siyuan.config.editor.fontSizeScrollZoom || (isMacOS && !event.metaKey) || (!isMacOS && !event.ctrlKey) || event.deltaX !== 0) {
-            return;
-        }
-        event.stopPropagation();
-        if (event.deltaY < 0) {
-            if (window.siyuan.config.editor.fontSize < 72) {
-                window.siyuan.config.editor.fontSize++;
-            } else {
-                return;
-            }
-        } else if (event.deltaY > 0) {
-            if (window.siyuan.config.editor.fontSize > 9) {
-                window.siyuan.config.editor.fontSize--;
-            } else {
-                return;
-            }
-        }
-        setInlineStyle();
-        clearTimeout(wheelTimeout);
-        showMessage(`${window.siyuan.languages.fontSize} ${window.siyuan.config.editor.fontSize}px<span class="fn__space"></span>
-<button class="b3-button b3-button--white">${window.siyuan.languages.reset} 16px</button>`, undefined, undefined, wheelId);
-        wheelTimeout = window.setTimeout(() => {
-            fetchPost("/api/setting/setEditor", window.siyuan.config.editor, (response) => {
-                window.siyuan.config.editor = response.data;
-            });
-            protyle.wysiwyg.element.querySelectorAll(".code-block .protyle-linenumber__rows").forEach((block: HTMLElement) => {
-                lineNumberRender(block.parentElement);
-            });
-            document.querySelector(`#message [data-id="${wheelId}"] button`)?.addEventListener("click", () => {
-                window.siyuan.config.editor.fontSize = 16;
-                setInlineStyle();
-                fetchPost("/api/setting/setEditor", window.siyuan.config.editor, (response) => {
-                    window.siyuan.config.editor = response.data;
-                });
-                hideMessage(wheelId);
-                protyle.wysiwyg.element.querySelectorAll(".code-block .protyle-linenumber__rows").forEach((block: HTMLElement) => {
-                    lineNumberRender(block.parentElement);
-                });
-            });
-        }, Constants.TIMEOUT_LOAD);
-    }, {passive: true});
     protyle.contentElement.addEventListener("mousedown", (event: MouseEvent & { target: HTMLElement }) => {
         if (event.button !== 0 || !event.shiftKey) {
             return;
@@ -196,6 +161,12 @@ export const initUI = (protyle: IProtyle) => {
             }
         }
         const lastElement = protyle.wysiwyg.element.lastElementChild;
+        const backlinkElement = protyle.wysiwyg.element.nextElementSibling;
+        if (backlinkElement?.classList.contains("sy__backlink--bottom") &&
+            backlinkElement.getClientRects().length > 0 &&
+            event.clientY >= backlinkElement.getBoundingClientRect().top) {
+            return;
+        }
         const lastRect = lastElement.getBoundingClientRect();
         const range = document.createRange();
         if (event.y > lastRect.bottom) {
@@ -243,6 +214,7 @@ export const initUI = (protyle: IProtyle) => {
         }
     });
     let overAttr = false;
+    bindGutterHover(protyle, isMobile());
     protyle.element.addEventListener(isMobile() ? "pointerover" : "mouseover", (event: PointerEvent & {
         target: HTMLElement
     }) => {
@@ -253,6 +225,7 @@ export const initUI = (protyle: IProtyle) => {
         if (isMobile() && event.pointerType !== "mouse") {
             return;
         }
+        cancelGutterHover(protyle.gutter?.element);
         if (hasClosestByClassName(event.target, "protyle-db-attr")) {
             return;
         }
@@ -274,10 +247,24 @@ export const initUI = (protyle: IProtyle) => {
             overAttr = false;
         }
 
-        const nodeElement = hasClosestBlock(event.target);
+        if (protyle.gutter && isTabGutterBridge(protyle.wysiwyg.element, protyle.gutter.element,
+            event.target, event.clientX, event.clientY)) {
+            return;
+        }
+        const tabsHeader = hasClosestByClassName(event.target, "tabs-header");
+        const nodeElement = tabsHeader ? hasClosestBlock(tabsHeader.parentElement) : hasClosestBlock(event.target);
+        if (!tabsHeader && nodeElement && nodeElement.getAttribute("data-type") === "NodeTabItem" &&
+            nodeElement.parentElement.classList.contains("tabs")) {
+            hideElements(["gutter"], protyle);
+            return;
+        }
         if (protyle.options.render.gutter && nodeElement) {
             if (!protyle.wysiwyg.element.contains(nodeElement)) {
                 hideElements(["gutter"], protyle);
+                return;
+            }
+            if (isContainerGutterBridge(protyle.gutter.element, nodeElement, event.target,
+                event.clientX, event.clientY, button => protyle.gutter.getNodeElement(protyle, button))) {
                 return;
             }
             if (nodeElement && (nodeElement.classList.contains("list") || nodeElement.classList.contains("li"))) {
@@ -286,11 +273,11 @@ export const initUI = (protyle: IProtyle) => {
             }
             const embedElement = isInEmbedBlock(nodeElement);
             if (embedElement) {
-                protyle.gutter.render(protyle,
-                    getEmbedChildOperationContext(nodeElement) ? nodeElement : embedElement, event.target);
+                renderGutterOnHover(protyle,
+                    getEmbedGutterOperationContext(nodeElement) ? nodeElement : embedElement, event.target);
                 return;
             }
-            protyle.gutter.render(protyle, nodeElement, event.target);
+            renderGutterOnHover(protyle, nodeElement, event.target);
             return;
         }
 
@@ -298,29 +285,51 @@ export const initUI = (protyle: IProtyle) => {
         const buttonElement = hasClosestByTag(event.target, "BUTTON");
         if (buttonElement && buttonElement.parentElement.classList.contains("protyle-gutters")) {
             const type = buttonElement.getAttribute("data-type");
-            if (type === "fold" || type === "NodeAttributeViewRow") {
+            if (buttonElement.classList.contains("protyle-gutters__line") ||
+                buttonElement.classList.contains("protyle-gutters__plus")) {
+                return;
+            }
+            const targetButtonElement = type === "fold" ?
+                buttonElement.previousElementSibling || buttonElement.nextElementSibling : buttonElement;
+            if (!targetButtonElement) {
+                hideElements(["gutter"], protyle);
+                return;
+            }
+            const gutterNodeElement = protyle.gutter.getNodeElement(protyle, targetButtonElement);
+            if (!gutterNodeElement) {
+                hideElements(["gutter"], protyle);
+                return;
+            }
+            if (type === "fold") {
                 Array.from(protyle.wysiwyg.element.querySelectorAll(".protyle-wysiwyg--hl, .av__row--hl")).forEach(item => {
                     item.classList.remove("protyle-wysiwyg--hl", "av__row--hl");
                 });
                 return;
             }
-            const gutterNodeElement = protyle.gutter.getNodeElement(protyle, buttonElement);
-            if (gutterNodeElement) {
-                const bodyQueryClass = (buttonElement.dataset.groupId && buttonElement.dataset.groupId !== "undefined") ? `.av__body[data-group-id="${buttonElement.dataset.groupId}"] ` : "";
-                const rowItem = gutterNodeElement.querySelector(bodyQueryClass + `.av__row[data-id="${buttonElement.dataset.rowId}"]`);
-                Array.from(protyle.wysiwyg.element.querySelectorAll(".protyle-wysiwyg--hl, .av__row--hl")).forEach(hlItem => {
-                    if (gutterNodeElement !== hlItem) {
-                        hlItem.classList.remove("protyle-wysiwyg--hl");
-                    }
-                    if (rowItem && rowItem !== hlItem) {
-                        rowItem.classList.remove("av__row--hl");
-                    }
+            const bodyQueryClass = (buttonElement.dataset.groupId && buttonElement.dataset.groupId !== "undefined") ? `.av__body[data-group-id="${buttonElement.dataset.groupId}"] ` : "";
+            const rowItem = gutterNodeElement.querySelector(bodyQueryClass + `.av__row[data-id="${buttonElement.dataset.rowId}"]`);
+            if ((type === "NodeAttributeViewRow" || type === "NodeAttributeViewRowMenu") && !rowItem) {
+                hideElements(["gutter"], protyle);
+                return;
+            }
+            if (type === "NodeAttributeViewRow") {
+                Array.from(protyle.wysiwyg.element.querySelectorAll(".protyle-wysiwyg--hl, .av__row--hl")).forEach(item => {
+                    item.classList.remove("protyle-wysiwyg--hl", "av__row--hl");
                 });
-                if (type === "NodeAttributeViewRowMenu") {
-                    rowItem.classList.add("av__row--hl");
-                } else {
-                    gutterNodeElement.classList.add("protyle-wysiwyg--hl");
+                return;
+            }
+            Array.from(protyle.wysiwyg.element.querySelectorAll(".protyle-wysiwyg--hl, .av__row--hl")).forEach(hlItem => {
+                if (gutterNodeElement !== hlItem) {
+                    hlItem.classList.remove("protyle-wysiwyg--hl");
                 }
+                if (rowItem && rowItem !== hlItem) {
+                    rowItem.classList.remove("av__row--hl");
+                }
+            });
+            if (type === "NodeAttributeViewRowMenu") {
+                rowItem.classList.add("av__row--hl");
+            } else {
+                gutterNodeElement.classList.add("protyle-wysiwyg--hl");
             }
             event.preventDefault();
             return;
@@ -347,8 +356,8 @@ export const addLoading = (protyle: IProtyle, msg?: string) => {
     setTimeout(() => {
         if (protyle.element.getAttribute("data-loading") !== "finished") {
             protyle.element.insertAdjacentHTML("beforeend", `<div style="background-color: var(--b3-theme-background);flex-direction: column;" class="fn__loading wysiwygLoading">
-    <img width="48px" src="/stage/loading-pure.svg">
-    <div style="color: var(--b3-theme-on-surface);margin-top: 8px;">${msg || ""}</div>
+    <span class="b3-loading b3-loading--large" aria-hidden="true"></span>
+    <div style="color: var(--b3-theme-on-surface);margin-top: 8px;">${sanitizeKernelHTML(msg || "")}</div>
 </div>`);
         }
     }, Constants.TIMEOUT_LOAD);
@@ -370,32 +379,70 @@ export const setPadding = (protyle: IProtyle) => {
     }
     const padding = getPadding(protyle);
     protyle.preview.updatePadding(padding);
-    const paddingLeft = protyle.options.backlinkData ? 24 : padding.left;
-    const paddingRight = protyle.options.backlinkData ? 16 : padding.right;
+    const responsivePadding = protyle.contentElement.dataset.paddingMode === "responsive";
+    let paddingLeft = protyle.options.backlinkData ? 24 : padding.left;
+    let paddingRight = protyle.options.backlinkData ? 16 : padding.right;
+    if (protyle.element.classList.contains("protyle--page-scroll")) {
+        paddingRight = Math.max(paddingRight, parseFloat(getComputedStyle(protyle.element)
+            .getPropertyValue("--b3-protyle-page-scroll-gutter")) || 0);
+    }
     const backlinkBottomElement = protyle.contentElement.querySelector(".sy__backlink--bottom") as HTMLElement;
     const backlinkBottomVisible = backlinkBottomElement &&
         !backlinkBottomElement.classList.contains("fn__none") &&
         !backlinkBottomElement.classList.contains("sy__backlink--pending");
     const backlinkBottomGap = 128;
 
-    if (protyle.options.backlinkData) {
-        protyle.wysiwyg.element.style.padding = `4px ${paddingRight}px 4px ${paddingLeft}px`;
+    if (responsivePadding) {
+        const paddingBottom = backlinkBottomVisible && protyle.options.typewriterMode ? backlinkBottomGap : padding.bottom;
+        protyle.wysiwyg.element.style.padding = "";
+        protyle.wysiwyg.element.style.paddingTop = `${padding.top}px`;
+        protyle.wysiwyg.element.style.paddingBottom = `${paddingBottom}px`;
+        const wysiwygStyle = getComputedStyle(protyle.wysiwyg.element);
+        paddingLeft = parseFloat(wysiwygStyle.paddingLeft);
+        paddingRight = parseFloat(wysiwygStyle.paddingRight);
+    } else if (protyle.options.backlinkData) {
+        protyle.wysiwyg.element.style.padding = BACKLINK_EDITOR_PADDING;
     } else {
         const paddingBottom = backlinkBottomVisible && protyle.options.typewriterMode ? backlinkBottomGap : padding.bottom;
         protyle.wysiwyg.element.style.padding = `${padding.top}px ${paddingRight}px ${paddingBottom}px ${paddingLeft}px`;
     }
     if (protyle.options.render.background) {
-        protyle.background.element.querySelector(".protyle-background__ia").setAttribute("style", `margin-left:${paddingLeft}px;margin-right:${paddingRight}px`);
+        const backgroundIAElement = protyle.background.element.querySelector<HTMLElement>(".protyle-background__ia");
+        if (responsivePadding) {
+            backgroundIAElement.style.margin = "";
+        } else {
+            backgroundIAElement.style.marginLeft = `${paddingLeft}px`;
+            backgroundIAElement.style.marginRight = `${paddingRight}px`;
+        }
     }
     if (protyle.options.render.title) {
         // pc 端 文档名 attr 过长和添加标签等按钮重合
-        protyle.title.element.style.margin = `16px ${paddingRight}px 0 ${paddingLeft}px`;
+        if (protyle.element.classList.contains("document-title-dialog")) {
+            protyle.title.element.style.margin = "";
+        } else if (responsivePadding) {
+            protyle.title.element.style.margin = "";
+            protyle.title.element.style.marginTop = "16px";
+        } else {
+            protyle.title.element.style.margin = `16px ${paddingRight}px 0 ${paddingLeft}px`;
+        }
     }
     if (protyle.databaseAttributePanel) {
-        protyle.databaseAttributePanel.element.style.margin = `8px ${paddingRight}px 8px ${paddingLeft}px`;
+        if (responsivePadding) {
+            protyle.databaseAttributePanel.element.style.margin = "";
+            protyle.databaseAttributePanel.element.style.marginTop = "8px";
+            protyle.databaseAttributePanel.element.style.marginBottom = "8px";
+        } else {
+            protyle.databaseAttributePanel.element.style.margin = `8px ${paddingRight}px 8px ${paddingLeft}px`;
+        }
     }
     if (backlinkBottomElement) {
-        backlinkBottomElement.style.padding = `0 ${paddingRight}px 16px ${paddingLeft}px`;
+        if (responsivePadding) {
+            backlinkBottomElement.style.padding = "";
+            backlinkBottomElement.style.paddingTop = "0";
+            backlinkBottomElement.style.paddingBottom = "16px";
+        } else {
+            backlinkBottomElement.style.padding = `0 ${paddingRight}px 16px ${paddingLeft}px`;
+        }
         backlinkBottomElement.style.marginBottom = backlinkBottomVisible && protyle.options.typewriterMode ?
             `${Math.max(padding.bottom - backlinkBottomGap, 0)}px` : "";
     }

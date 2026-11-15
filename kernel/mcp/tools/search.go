@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package tools
 
@@ -25,20 +13,20 @@ import (
 
 var SearchTool = &Tool{
 	Name:        "search",
-	Description: "Search. Actions: fulltext(query, page=1, pageSize=20, notebook?, path?, type?, subtype?, method?, orderBy?, groupBy?), semantic(query, page=1, pageSize=20, notebook?, path?, type?, subtype?) — semantic needs AI embedding configured; asset(query, page=1, pageSize=32, ext?, method?, orderBy?) — full-text search inside asset file contents (PDF/Word/Excel/txt etc.), returns matched snippets with <mark> tags; getasset(path) — get the full indexed content of one asset file by its path (e.g. 'assets/foo.pdf').",
+	Description: "Search. Actions: fulltext(query, page=1, pageSize=32, notebook?, path?, type?, subtype?, method?, orderBy?, groupBy?), semantic(query, page=1, pageSize=32, notebook?, path?, type?, subtype?) — semantic needs AI embedding configured; asset(query, page=1, pageSize=32, ext?, method?, orderBy?) — full-text search inside asset file contents (PDF/Word/Excel/txt etc.), returns matched snippets with <mark> tags; getasset(path) — get the full indexed content of one asset file by its path (e.g. 'assets/foo.pdf').",
 	InputSchema: ToolSchema{
 		Type: "object",
 		Properties: map[string]Property{
 			"action":   {Type: "string", Description: "Operation: fulltext, semantic, asset, or getasset", Enum: []string{"fulltext", "semantic", "asset", "getasset"}},
 			"query":    {Type: "string", Description: "Search keywords (required for fulltext/semantic/asset)"},
 			"page":     {Type: "number", Description: "Page number (default 1)"},
-			"pageSize": {Type: "number", Description: "Results per page (default 20 for fulltext/semantic, 32 for asset)"},
+			"pageSize": {Type: "number", Description: "Results per page (default 32 for fulltext, semantic and asset; values below 1 also use 32)"},
 			"notebook": {Type: "string", Description: "Comma-separated notebook IDs to filter (optional, fulltext/semantic only)"},
 			"path":     {Type: "string", Description: "Comma-separated path prefixes to filter (optional, fulltext/semantic only); for getasset, a single asset file path like 'assets/foo.pdf'"},
 			"type":     {Type: "string", Description: "Comma-separated block types to filter, e.g. 'document,heading,paragraph' (optional, fulltext/semantic only)"},
-			"subtype":  {Type: "string", Description: "Comma-separated block subtypes to filter, e.g. 'o,u,t' (optional, fulltext/semantic only)"},
+			"subtype":  {Type: "string", Description: "Comma-separated block subtypes to filter, e.g. 'h1,list:o,listItem:t' (heading: h1-h6; list/listItem: o=ordered, u=unordered, t=task) (optional, fulltext/semantic only)"},
 			"ext":      {Type: "string", Description: "Comma-separated asset file extensions to filter, e.g. 'pdf,docx,xlsx' (optional, asset only)"},
-			"method":   {Type: "number", Description: "Search method: fulltext/asset 0=keyword 1=query-syntax 2=sql 3=regex (default 0)"},
+			"method":   {Type: "number", Description: "Search method: fulltext/asset 0=keyword 1=query-syntax 2=sql 3=regex (default 0). fulltext method=2 delegates query to the sql tool and returns SQL rows, with the same read-only checks and default 100-row limit. Use SQL LIMIT/OFFSET for pagination; page, pageSize, path, type, subtype, orderBy and groupBy are ignored. notebook only selects an encrypted notebook database (exactly one notebook required when encrypted); filter ordinary notebooks in SQL"},
 			"orderBy":  {Type: "number", Description: "Sort order — fulltext: 0=type 1=created-asc 2=created-desc 3=updated-asc 4=updated-desc 5=content 6=relevance-asc 7=relevance-desc; asset: 0=relevance-desc 1=relevance-asc 2=updated-asc 3=updated-desc (default 0)"},
 			"groupBy":  {Type: "number", Description: "Group by (fulltext only): 0=none 1=document (default 0)"},
 		},
@@ -129,13 +117,38 @@ func fulltextSearch(args map[string]any) (CallToolResult, error) {
 				IsError: true,
 			}, nil
 		}
-		blocks, matchedCount, matchedRootCount, pageCount, docMode = model.FullTextSearchBlockInBox(
-			query, notebooks, paths, types, subtypes, method, orderBy, groupBy, page, pageSize, encryptedNotebook,
-		)
+	}
+	if method == 2 {
+		// SQL 模式复用通用行查询，笔记本读锁覆盖校验和查询过程。
+		return sqlQuery(map[string]any{"stmt": query, "notebook": encryptedNotebook})
+	}
+	if encryptedNotebook != "" {
+		blocks, matchedCount, matchedRootCount, pageCount, docMode = model.FullTextSearchBlock(model.BlockSearchOptions{
+			Query:    query,
+			Boxes:    notebooks,
+			Paths:    paths,
+			Types:    types,
+			SubTypes: subtypes,
+			Method:   method,
+			OrderBy:  orderBy,
+			GroupBy:  groupBy,
+			Page:     page,
+			PageSize: pageSize,
+			BoxID:    encryptedNotebook,
+		})
 	} else {
-		blocks, matchedCount, matchedRootCount, pageCount, docMode = model.FullTextSearchBlock(
-			query, notebooks, paths, types, subtypes, method, orderBy, groupBy, page, pageSize,
-		)
+		blocks, matchedCount, matchedRootCount, pageCount, docMode = model.FullTextSearchBlock(model.BlockSearchOptions{
+			Query:    query,
+			Boxes:    notebooks,
+			Paths:    paths,
+			Types:    types,
+			SubTypes: subtypes,
+			Method:   method,
+			OrderBy:  orderBy,
+			GroupBy:  groupBy,
+			Page:     page,
+			PageSize: pageSize,
+		})
 	}
 
 	if matchedCount == 0 {
@@ -143,19 +156,17 @@ func fulltextSearch(args map[string]any) (CallToolResult, error) {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Found %d results (page %d/%d):\n\n", matchedCount, page, pageCount))
+	fmt.Fprintf(&sb, "Found %d results (page %d/%d):\n\n", matchedCount, page, pageCount)
 	for _, b := range blocks {
 		content := b.Markdown
 		if content == "" {
 			content = b.Content
 		}
-		if len(content) > 200 {
-			content = content[:200] + "..."
-		}
-		sb.WriteString(fmt.Sprintf("- [%s] %s\n  %s\n  id: %s\n\n", b.HPath, b.Type, content, b.ID))
+		content = truncateText(content, 200)
+		fmt.Fprintf(&sb, "- [%s] %s\n  %s\n  id: %s\n\n", b.HPath, b.Type, content, b.ID)
 	}
 	if docMode {
-		sb.WriteString(fmt.Sprintf("(grouped by document, %d documents matched)\n", matchedRootCount))
+		fmt.Fprintf(&sb, "(grouped by document, %d documents matched)\n", matchedRootCount)
 	}
 	return CallToolResult{
 		Content: []ContentItem{{Type: "text", Text: sb.String()}},
@@ -191,7 +202,7 @@ func semanticSearch(args map[string]any) (CallToolResult, error) {
 	subtypes := parseStringSet(args["subtype"])
 
 	blocks, matchedCount, matchedRootCount, pageCount := model.SemanticSearchBlock(
-		query, notebooks, paths, types, subtypes, page, pageSize,
+		query, notebooks, paths, types, subtypes, page, pageSize, nil, nil,
 	)
 
 	if matchedCount == 0 {
@@ -199,19 +210,17 @@ func semanticSearch(args map[string]any) (CallToolResult, error) {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Found %d semantic results (page %d/%d):\n\n", matchedCount, page, pageCount))
+	fmt.Fprintf(&sb, "Found %d semantic results (page %d/%d):\n\n", matchedCount, page, pageCount)
 	for _, b := range blocks {
 		content := b.Markdown
 		if content == "" {
 			content = b.Content
 		}
-		if len(content) > 200 {
-			content = content[:200] + "..."
-		}
-		sb.WriteString(fmt.Sprintf("- [%s] %s\n  %s\n  id: %s\n\n", b.HPath, b.Type, content, b.ID))
+		content = truncateText(content, 200)
+		fmt.Fprintf(&sb, "- [%s] %s\n  %s\n  id: %s\n\n", b.HPath, b.Type, content, b.ID)
 	}
 	if matchedRootCount > 0 {
-		sb.WriteString(fmt.Sprintf("(%d documents matched)\n", matchedRootCount))
+		fmt.Fprintf(&sb, "(%d documents matched)\n", matchedRootCount)
 	}
 	return CallToolResult{
 		Content: []ContentItem{{Type: "text", Text: sb.String()}},
@@ -261,17 +270,15 @@ func assetSearch(args map[string]any) (CallToolResult, error) {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Found %d asset matches (page %d/%d):\n\n", matchedAssetCount, page, pageCount))
+	fmt.Fprintf(&sb, "Found %d asset matches (page %d/%d):\n\n", matchedAssetCount, page, pageCount)
 	for _, a := range assetContents {
 		content := a.Content
-		if len(content) > 200 {
-			content = content[:200] + "..."
-		}
-		sb.WriteString(fmt.Sprintf("- [%s] %s\n", a.Ext, a.Name))
-		sb.WriteString(fmt.Sprintf("  path: %s\n", a.Path))
-		sb.WriteString(fmt.Sprintf("  size: %s\n", a.HSize))
-		sb.WriteString(fmt.Sprintf("  content: %s\n", content))
-		sb.WriteString(fmt.Sprintf("  id: %s\n\n", a.ID))
+		content = truncateText(content, 200)
+		fmt.Fprintf(&sb, "- [%s] %s\n", a.Ext, a.Name)
+		fmt.Fprintf(&sb, "  path: %s\n", a.Path)
+		fmt.Fprintf(&sb, "  size: %s\n", a.HSize)
+		fmt.Fprintf(&sb, "  content: %s\n", content)
+		fmt.Fprintf(&sb, "  id: %s\n\n", a.ID)
 	}
 	return CallToolResult{
 		Content: []ContentItem{{Type: "text", Text: sb.String()}},
@@ -293,11 +300,11 @@ func getAssetHandler(args map[string]any) (CallToolResult, error) {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Asset: %s\n", a.Name))
-	sb.WriteString(fmt.Sprintf("Ext: %s\n", a.Ext))
-	sb.WriteString(fmt.Sprintf("Path: %s\n", a.Path))
-	sb.WriteString(fmt.Sprintf("Size: %s\n", a.HSize))
-	sb.WriteString(fmt.Sprintf("ID: %s\n", a.ID))
+	fmt.Fprintf(&sb, "Asset: %s\n", a.Name)
+	fmt.Fprintf(&sb, "Ext: %s\n", a.Ext)
+	fmt.Fprintf(&sb, "Path: %s\n", a.Path)
+	fmt.Fprintf(&sb, "Size: %s\n", a.HSize)
+	fmt.Fprintf(&sb, "ID: %s\n", a.ID)
 	sb.WriteString("\nContent:\n")
 	sb.WriteString(a.Content)
 	return CallToolResult{

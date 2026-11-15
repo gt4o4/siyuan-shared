@@ -2,25 +2,29 @@ import {Constants} from "../constants";
 import {ipcRenderer, webFrame} from "electron";
 import {fetchPost} from "../util/fetch";
 import {adjustLayout, getInstanceById, JSONToCenter} from "../layout/util";
-import {resizeTabs, setTabPosition} from "../layout/tabUtil";
+import {newCenterEmptyTab, resizeTabs, setTabPosition} from "../layout/tabUtil";
 import {initStatus} from "../layout/status";
 import {appearanceConfigApi} from "../config/tabs/appearanceRuntime";
-import {initAssets, setInlineStyle} from "../util/assets";
+import {enqueueAppearanceUpdate, initAssets, setInlineStyle} from "../util/assets";
 import {renderSnippet} from "../config/util/snippets";
 import {getSearch} from "../util/functions";
-import {initWindow} from "../boot/onGetConfig";
+import {initDesktopHost, initWindow} from "../boot/onGetConfig";
 import type {App} from "../index";
 import {afterLayoutReady} from "../plugin/loader";
 import {Tab} from "../layout/Tab";
-import {initWindowOpenOverride} from "../protyle/util/compatibility";
+import {applyPlatformClasses, initWindowOpenOverride} from "../protyle/util/compatibility";
 /// #if !BROWSER
 import {initNativeDialogOverride} from "../protyle/util/compatibility";
 /// #endif
 import {initWindowEvent} from "../boot/globalEvent/event";
-import {getAllEditor} from "../layout/getAll";
+import {getAllEditor, getAllWnds} from "../layout/getAll";
+import {activateWindowWorkspace, getWindowWorkspaceLayout} from "./workspace";
+import {Wnd} from "../layout/Wnd";
 
 
-export const init = (app: App) => {
+export const init = async (app: App) => {
+    applyPlatformClasses();
+    await initDesktopHost();
     webFrame.setZoomFactor(window.siyuan.storage[Constants.LOCAL_ZOOM]);
     const position = Constants.SIZE_ZOOM.find((item) => item.zoom === window.siyuan.storage[Constants.LOCAL_ZOOM]).position;
     ipcRenderer.send(Constants.SIYUAN_CMD, {
@@ -33,13 +37,19 @@ export const init = (app: App) => {
         fetchPost("/api/system/getEmojiConf", {}, response => {
             window.siyuan.emojis = response.data as IEmoji[];
 
+            const workspaceLayout = getWindowWorkspaceLayout();
             const layout = JSON.parse(sessionStorage.getItem("layout") || "{}");
+            if (!layout.layout && workspaceLayout) {
+                layout.layout = workspaceLayout;
+            }
             if (layout.layout) {
                 JSONToCenter(app, layout.layout);
                 window.siyuan.layout.centerLayout = window.siyuan.layout.layout;
             } else {
-                const tabsJSON = JSON.parse(getSearch("json"));
-                tabsJSON[tabsJSON.length - 1].active = true;
+                const tabsJSON = JSON.parse(getSearch("json") || "[]");
+                if (tabsJSON.length) {
+                    tabsJSON[tabsJSON.length - 1].active = true;
+                }
                 JSONToCenter(app, {
                     direction: "lr",
                     resize: "lr",
@@ -54,32 +64,43 @@ export const init = (app: App) => {
                 window.siyuan.layout.centerLayout = window.siyuan.layout.layout;
                 adjustLayout(window.siyuan.layout.centerLayout);
             }
+            const wnds: Wnd[] = [];
+            getAllWnds(window.siyuan.layout.centerLayout, wnds);
+            if (!wnds.length) {
+                const wnd = new Wnd(app);
+                window.siyuan.layout.centerLayout.addWnd(wnd);
+                wnds.push(wnd);
+            }
+            wnds.filter(wnd => !wnd.children.length).forEach(wnd => {
+                wnd.addTab(newCenterEmptyTab(app), false, false);
+            });
             afterLayout(app);
-            // 等待 dock 面板动画结束
-            setTimeout(() => {
-                setTabPosition();
-            }, Constants.TIMEOUT_TRANSITION);
+            activateWindowWorkspace();
             resolve();
         });
     });
     initStatus(true);
-    initWindow(app);
+    const windowReady = initWindow(app);
     initWindowOpenOverride(app);
     /// #if !BROWSER
     initNativeDialogOverride();
     /// #endif
     appearanceConfigApi.apply(window.siyuan.config.appearance);
-    initAssets();
-    setInlineStyle();
-    renderSnippet();
+    initAssets(true);
+    await enqueueAppearanceUpdate(async () => {
+        await setInlineStyle();
+    });
+    const snippetReady = renderSnippet(Constants.TIMEOUT_SNIPPET_LOAD);
     let resizeTimeout = 0;
     window.addEventListener("resize", () => {
         window.clearTimeout(resizeTimeout);
         resizeTimeout = window.setTimeout(() => {
             adjustLayout(window.siyuan.layout.centerLayout);
             resizeTabs();
+            setTabPosition(true);
             window.siyuan.menus.menu.resetPosition();
-            if (getSelection().rangeCount > 0) {
+            if (window.siyuan.menus.menu.element.classList.contains("fn__none") &&
+                getSelection().rangeCount > 0) {
                 const range = getSelection().getRangeAt(0);
                 getAllEditor().forEach(item => {
                     if (item.protyle.wysiwyg.element.contains(range.startContainer)) {
@@ -92,7 +113,7 @@ export const init = (app: App) => {
             });
         }, Constants.TIMEOUT_RESIZE);
     });
-    return layoutReady;
+    await Promise.all([layoutReady, windowReady, snippetReady]);
 };
 
 const afterLayout = (app: App) => {

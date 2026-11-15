@@ -1,31 +1,17 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package cmd
 
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
-	"path/filepath"
-	"strings"
 	"text/tabwriter"
 
 	"github.com/siyuan-note/siyuan/kernel/model"
-	"github.com/siyuan-note/siyuan/kernel/util"
 
 	"github.com/spf13/cobra"
 )
@@ -54,16 +40,27 @@ var templateSearchCmd = &cobra.Command{
 				fmt.Println("No templates found.")
 				return nil
 			}
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "NAME\tPATH")
-			for _, r := range results {
-				fmt.Fprintf(w, "%s\t%s\n", r.Content, r.Path)
-			}
-			w.Flush()
-			fmt.Printf("\n%d template(s)\n", len(results))
+			return writeTemplateSearchResults(os.Stdout, results)
 		}
 		return nil
 	},
+}
+
+func writeTemplateSearchResults(output io.Writer, results []*model.TemplateSearchResult) error {
+	w := tabwriter.NewWriter(output, 0, 0, 2, ' ', 0)
+	if _, err := fmt.Fprintln(w, "NAME\tRELATIVE_PATH\tPATH"); err != nil {
+		return err
+	}
+	for _, result := range results {
+		if _, err := fmt.Fprintf(w, "%s\t%s\t%s\n", result.Content, result.RelativePath, result.Path); err != nil {
+			return err
+		}
+	}
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintf(output, "\n%d template(s)\n", len(results))
+	return err
 }
 
 var templateGetCmd = &cobra.Command{
@@ -71,11 +68,7 @@ var templateGetCmd = &cobra.Command{
 	Short: "Read template content",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		p, _ := cmd.Flags().GetString("path")
-		abs, err := resolveTemplateAbs(p)
-		if err != nil {
-			return err
-		}
-		data, err := os.ReadFile(abs)
+		data, err := model.ReadTemplateFile(p)
 		if err != nil {
 			return err
 		}
@@ -89,7 +82,7 @@ var templateRemoveCmd = &cobra.Command{
 	Short: "Remove a template",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		p, _ := cmd.Flags().GetString("path")
-		abs, err := resolveTemplateAbs(p)
+		abs, err := model.ResolveTemplatePath(p)
 		if err != nil {
 			return err
 		}
@@ -114,7 +107,7 @@ var templateRenderCmd = &cobra.Command{
 		if id == "" {
 			return fmt.Errorf("--id is required")
 		}
-		abs, err := resolveTemplateAbs(p)
+		abs, err := model.ResolveTemplatePath(p)
 		if err != nil {
 			return err
 		}
@@ -183,25 +176,6 @@ var templateCreateCmd = &cobra.Command{
 		fmt.Printf("%s.md\n", name)
 		return nil
 	},
-}
-
-// resolveTemplateAbs 把模板路径解析为 data/templates 下的绝对路径，拒绝越界。
-// 接受绝对路径或相对 data/templates 的相对路径。
-func resolveTemplateAbs(p string) (string, error) {
-	if p == "" {
-		return "", fmt.Errorf("--path is required")
-	}
-	abs := p
-	if !filepath.IsAbs(abs) {
-		abs = filepath.Join(util.DataDir, "templates", p)
-	}
-	abs = filepath.Clean(abs)
-	templatesBase := filepath.Clean(filepath.Join(util.DataDir, "templates"))
-	rel, err := filepath.Rel(templatesBase, abs)
-	if err != nil || strings.HasPrefix(rel, "..") || rel == ".." {
-		return "", fmt.Errorf("path escapes templates dir: %s", p)
-	}
-	return abs, nil
 }
 
 func init() {

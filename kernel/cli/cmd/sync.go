@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package cmd
 
@@ -31,7 +19,7 @@ var syncCmd = &cobra.Command{
 	Use:   "sync",
 	Short: "Sync data with cloud",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if model.Conf.Sync.Mode == 3 {
+		if model.Conf.Sync.Load().Mode == 3 {
 			return fmt.Errorf("full-manual mode requires 'push' or 'pull' subcommand")
 		}
 
@@ -40,7 +28,9 @@ var syncCmd = &cobra.Command{
 			return nil
 		}
 
-		model.SyncData(true)
+		if err := model.SyncData(true); err != nil {
+			return err
+		}
 		fmt.Println("ok")
 		return nil
 	},
@@ -55,7 +45,9 @@ var syncPushCmd = &cobra.Command{
 			return nil
 		}
 
-		model.SyncDataUpload()
+		if err := model.SyncDataUpload(); err != nil {
+			return err
+		}
 		fmt.Println("ok")
 		return nil
 	},
@@ -70,7 +62,9 @@ var syncPullCmd = &cobra.Command{
 			return nil
 		}
 
-		model.SyncDataDownload()
+		if err := model.SyncDataDownload(); err != nil {
+			return err
+		}
 		fmt.Println("ok")
 		return nil
 	},
@@ -80,7 +74,7 @@ var syncStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show sync status",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		s := model.Conf.Sync
+		s := model.Conf.Sync.Load()
 		switch outputFormat {
 		case "json":
 			data, _ := json.MarshalIndent(map[string]any{

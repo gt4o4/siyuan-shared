@@ -1,30 +1,28 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package av
 
 import (
+	"fmt"
+	"slices"
 	"time"
 
+	"github.com/88250/lute"
 	"github.com/88250/lute/ast"
+	"github.com/88250/lute/parse"
 	"github.com/siyuan-note/logging"
 	"github.com/siyuan-note/siyuan/kernel/util"
 )
 
-const CurrentSpec = 7
+const (
+	CurrentSpec   = 14
+	PlainTextSpec = 8
+	RichTextSpec  = 9
+	// 单一 WGS84 位置使用独立版本，防止其他格式的内核重写坐标含义。
+	LocationSpec = 13
+)
 
 const MaxFilterNestingDepth = 3
 
@@ -40,13 +38,116 @@ func UpgradeSpec(av *AttributeView) {
 	upgradeSpec5(av)
 	upgradeSpec6(av)
 	upgradeSpec7(av)
+	upgradeSpec8(av)
+	upgradeSpec9(av)
+	upgradeSpec10(av)
+	if av.Spec < LocationSpec && av.HasLocation() {
+		av.Spec = LocationSpec
+	}
+	if av.HasSubItems() && av.Spec < SubItemsSpec {
+		av.Spec = SubItemsSpec
+	}
+}
+
+// upgradeSpec10 仅为包含列表或日历配置的数据库升级，保留其他数据库的旧版兼容性。
+func upgradeSpec10(av *AttributeView) {
+	if 10 <= av.Spec {
+		return
+	}
+	var needsUpgrade func(*View) bool
+	needsUpgrade = func(view *View) bool {
+		if nil == view {
+			return false
+		}
+		if nil != view.List || nil != view.Calendar {
+			return true
+		}
+		return slices.ContainsFunc(view.Groups, needsUpgrade)
+	}
+	if slices.ContainsFunc(av.Views, needsUpgrade) {
+		av.Spec = 10
+		return
+	}
 }
 
 func CheckSpec(av *AttributeView) (err error) {
+	if av.HasSubItems() && av.Spec < SubItemsSpec {
+		return fmt.Errorf("database sub-items require format %d", SubItemsSpec)
+	}
 	if CurrentSpec < av.Spec {
 		logging.LogErrorf("attribute view [%s] spec [%d] is newer than current [%d]", av.ID, av.Spec, CurrentSpec)
 		err = ErrSpecTooNew
 		return
+	}
+	if av.Spec < LocationSpec && av.HasLocation() {
+		return ErrLocationSpecMismatch
+	}
+	if av.Spec < RichTextSpec && av.HasRichText() {
+		logging.LogErrorf("attribute view [%s] rich text requires spec [%d], current is [%d]", av.ID, RichTextSpec, av.Spec)
+		err = ErrRichTextSpecMismatch
+		return
+	}
+	return
+}
+
+// upgradeSpec9 仅在首次保存富文本值时升级，避免纯文本数据库因为在新版中打开而失去旧版兼容性。
+func upgradeSpec9(av *AttributeView) {
+	if RichTextSpec <= av.Spec || !av.HasRichText() {
+		return
+	}
+
+	av.Spec = RichTextSpec
+}
+
+// HasRichText 返回属性视图是否包含富文本值。
+func (av *AttributeView) HasRichText() bool {
+	if nil == av {
+		return false
+	}
+	found := false
+	av.visitPersistedValues(func(value *Value) {
+		if nil != value.Text && value.Text.IsRich() {
+			found = true
+		}
+	})
+	return found
+}
+
+// NormalizeRichText 校验所有富文本载荷，并刷新对应的纯文本投影。
+func (av *AttributeView) NormalizeRichText() (err error) {
+	if nil == av {
+		return
+	}
+	type normalizedText struct {
+		value       *ValueText
+		content     string
+		richContent string
+	}
+	var normalized []normalizedText
+	var luteEngine *lute.Lute
+	av.visitPersistedValues(func(value *Value) {
+		if nil != err || nil == value.Text || !value.Text.IsRich() {
+			return
+		}
+		rich := *value.Text.Rich
+		if luteEngine == nil {
+			luteEngine = newValueTextRichLute()
+		}
+		var tree *parse.Tree
+		if tree, err = normalizeValueTextRichWithLute(&rich, luteEngine); nil == err {
+			normalized = append(normalized, normalizedText{
+				value:       value.Text,
+				content:     valueTextRichPlainContent(tree),
+				richContent: rich.Content,
+			})
+		}
+	})
+	if nil != err {
+		return
+	}
+	for _, text := range normalized {
+		text.value.Content = text.content
+		text.value.Rich.Content = text.richContent
 	}
 	return
 }
@@ -59,6 +160,15 @@ func upgradeSpec7(av *AttributeView) {
 	}
 
 	av.Spec = 7
+}
+
+// upgradeSpec8 初始化数据库级自定义选项颜色。
+func upgradeSpec8(av *AttributeView) {
+	if 8 <= av.Spec {
+		return
+	}
+
+	av.Spec = 8
 }
 
 // upgradeSpec6 将卡片和看板的预设尺寸转换为可连续调节的实际宽度和宽高比。

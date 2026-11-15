@@ -1,9 +1,17 @@
+import {MobileDialog} from "../../dialog/mobileDialog";
 import type {SettingTabBuilder} from "../setting/builder";
 import {Constants} from "../../constants";
 import {fetchPost} from "../../util/fetch";
 import {getCloudURL} from "../util/about";
-import {openByMobile} from "../../editor/openLink";
+import {openLink} from "../../editor/openLink";
 import {sendAppSetting} from "./appRuntime";
+import {getHostCapabilities} from "../../util/hostCapabilities";
+import {openChangelog} from "../../boot/openChangelog";
+import {writeClipboardData} from "../../protyle/util/compatibility";
+import {showMessage} from "../../dialog/message";
+/// #if !BROWSER
+import {ipcRenderer} from "electron";
+/// #endif
 
 const registerAboutVersionGroup = (tab: SettingTabBuilder) => {
     const group = tab.group("version", "");
@@ -17,11 +25,14 @@ const registerAboutVersionGroup = (tab: SettingTabBuilder) => {
             window.siyuan.languages.checkUpdate,
             window.siyuan.languages.updateChannel,
             window.siyuan.languages.updateChannelTip,
+            window.siyuan.languages.changelog,
+            window.siyuan.languages.allChangelogs,
+            window.siyuan.languages.runtimeInfo,
         ],
         html: genAboutVersionHtml,
         afterMount: mountAboutVersionSlot,
     });
-    if (!window.siyuan.config.system.isMicrosoftStore) {
+    if (!window.siyuan.config.system.isMicrosoftStore && getHostCapabilities().ownsKernel) {
         group.select("system.updateChannel", {
             title: window.siyuan.languages.updateChannel,
             desc: window.siyuan.languages.updateChannelTip,
@@ -34,7 +45,8 @@ const registerAboutVersionGroup = (tab: SettingTabBuilder) => {
         });
     }
     /// #if !BROWSER
-    if (!window.siyuan.config.system.isMicrosoftStore && window.siyuan.config.system.container === "std" && window.siyuan.config.system.os !== "linux") {
+    if (!window.siyuan.config.system.isMicrosoftStore && getHostCapabilities().ownsKernel &&
+        window.siyuan.config.system.container === "std" && window.siyuan.config.system.os !== "linux") {
         group.switch("system.downloadInstallPkg", {
             title: window.siyuan.languages.autoDownloadUpdatePkg,
             desc: window.siyuan.languages.autoDownloadUpdatePkgTip,
@@ -45,29 +57,114 @@ const registerAboutVersionGroup = (tab: SettingTabBuilder) => {
 };
 
 const genAboutVersionHtml = (): string => {
-    if (window.siyuan.config.system.isMicrosoftStore) {
-        return `<div class="fn__flex b3-label config-item config-wrap">
+    if (!getHostCapabilities().ownsKernel) {
+        return `<div class="fn__flex b3-label config-item">
     <div class="fn__flex-1">
-        <div class="config-name">${window.siyuan.languages.currentVer} v${Constants.SIYUAN_VERSION}</div>
-        <div class="b3-label__text">${window.siyuan.languages.isMsStoreVerTip}</div>
-    </div>
-</div>`;
-    }
-    return `<div class="fn__flex b3-label config-item config-wrap">
-    <div class="fn__flex-1">
-        <div class="config-name">${window.siyuan.languages.currentVer} v${Constants.SIYUAN_VERSION}</div>
-        <div class="b3-label__text">${window.siyuan.languages.downloadLatestVer}</div>
+        ${genAboutVersionName()}
+        <div class="b3-label__text">${genAllChangelogsLink()}</div>
     </div>
     <div class="fn__space"></div>
-    <div class="fn__flex-center fn__size200">
-        <button id="checkUpdateBtn" class="b3-button b3-button--outline fn__block">
-            <svg><use xlink:href="#iconRefresh"></use></svg>${window.siyuan.languages.checkUpdate}
-        </button>
+    ${genAboutVersionActions(false)}
+</div>`;
+    }
+    if (window.siyuan.config.system.isMicrosoftStore) {
+        return `<div class="fn__flex b3-label config-item">
+    <div class="fn__flex-1">
+        ${genAboutVersionName()}
+        <div class="b3-label__text">${window.siyuan.languages.isMsStoreVerTip}<span class="fn__space"></span>${genAllChangelogsLink()}</div>
     </div>
+    <div class="fn__space"></div>
+    ${genAboutVersionActions(false)}
+</div>`;
+    }
+    return `<div class="fn__flex b3-label config-item">
+    <div class="fn__flex-1">
+        ${genAboutVersionName()}
+        <div class="b3-label__text">${window.siyuan.languages.downloadLatestVer}</div>
+        <div class="b3-label__text">${genAllChangelogsLink()}</div>
+    </div>
+    <div class="fn__space"></div>
+    ${genAboutVersionActions(true)}
 </div>`;
 };
 
+const genAboutVersionName = () => `<div class="config-name">${window.siyuan.languages.currentVer} v${Constants.SIYUAN_VERSION}</div>`;
+
+const genAllChangelogsLink = () => `<a href="https://github.com/siyuan-note/siyuan/releases" target="_blank">${window.siyuan.languages.allChangelogs}</a>`;
+
+const genAboutVersionActions = (showCheckUpdate: boolean) => `<div class="fn__flex-center fn__flex-column fn__size200">
+    ${showCheckUpdate ? `<button id="checkUpdateBtn" class="b3-button b3-button--outline fn__block">
+        <svg><use xlink:href="#iconRefresh"></use></svg>${window.siyuan.languages.checkUpdate}
+    </button>
+    <div class="fn__hr--small"></div>` : ""}
+    <button id="viewChangelogBtn" class="b3-button b3-button--outline fn__block">
+        <svg><use xlink:href="#iconFileText"></use></svg>${window.siyuan.languages.changelog}
+    </button>
+    <div class="fn__hr--small"></div>
+    <button type="button" id="viewRuntimeInfoBtn" class="b3-button b3-button--outline fn__block">
+        <svg><use xlink:href="#iconInfo"></use></svg>${window.siyuan.languages.runtimeInfo}
+    </button>
+</div>`;
+
 const mountAboutVersionSlot = (root: HTMLElement) => {
+    let runtimeInfoClicks = 0;
+    root.querySelector("#viewRuntimeInfoBtn")?.addEventListener("click", () => {
+        const started = performance.now();
+        const click = ++runtimeInfoClicks;
+        const request = Date.now();
+        const logStage = (stage: string) => {
+            const msg = `runtime info frontend [request=${request}, click=${click}, stage=${stage}, ` +
+                `total=${Math.round(performance.now() - started)}ms, visibility=${document.visibilityState}]`;
+            /// #if !BROWSER
+            ipcRenderer.send(Constants.SIYUAN_CMD, {cmd: "writeLog", msg});
+            /// #else
+            console.info(msg);
+            /// #endif
+        };
+        logStage("start");
+        let received = false;
+        fetchPost("/api/system/getRuntimeInfo", {}, (response) => {
+            received = true;
+            logStage("response");
+            const lines = [response.data.text, `Frontend: ${Constants.SIYUAN_VERSION}`, `User agent: ${navigator.userAgent}`];
+            /// #if !BROWSER
+            if (typeof process !== "undefined" && process.versions?.electron) {
+                lines.push(`Electron: ${process.versions.electron}`, `Chromium: ${process.versions.chrome}`, `Node.js: ${process.versions.node}`);
+            }
+            /// #endif
+            const text = lines.join("\n");
+            const dialog = new MobileDialog({
+                title: window.siyuan.languages.runtimeInfo,
+                width: "min(720px, 92vw)",
+                content: `<div class="b3-dialog__content">
+    <pre tabindex="0" style="margin: 0; max-height: 55vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text;"></pre>
+</div>
+<div class="b3-dialog__action">
+    <button type="button" data-action="copy" class="b3-button b3-button--text">${window.siyuan.languages.copy}</button>
+</div>`,
+            });
+            dialog.element.querySelector("pre").textContent = text;
+            dialog.element.querySelector('[data-action="copy"]').addEventListener("click", async () => {
+                const result = await writeClipboardData({textPlain: text});
+                if (result.status === "failed") {
+                    showMessage(window.siyuan.languages.clipboardPermissionDenied, 7000, "error");
+                    return;
+                }
+                showMessage(window.siyuan.languages.copied);
+                dialog.destroy();
+            });
+            logStage("dialog_created");
+            // 等待弹窗开启延时后的绘制帧，区分接口等待与渲染线程的调度延迟。
+            setTimeout(() => {
+                requestAnimationFrame(() => logStage("animation_frame"));
+            }, Constants.TIMEOUT_OPENDIALOG);
+        }).finally(() => {
+            if (!received) logStage("request_failed");
+        });
+    });
+    root.querySelector("#viewChangelogBtn")?.addEventListener("click", (event) => {
+        void openChangelog(true, event.currentTarget as HTMLButtonElement);
+    });
     const updateElement = root.querySelector("#checkUpdateBtn") as HTMLButtonElement | null;
     updateElement?.addEventListener("click", () => {
         const svgElement = updateElement.querySelector("svg");
@@ -95,7 +192,7 @@ const registerAboutInfoGroup = (tab: SettingTabBuilder) => {
             window.siyuan.languages.sponsor,
             motto,
         ],
-        html: () => `<div class="fn__flex b3-label config-item config-wrap">
+        html: () => `<div class="fn__flex b3-label config-item">
     <div class="fn__flex-1">
         <div class="config-about__logo">
             <img src="/stage/icon.png">
@@ -119,7 +216,7 @@ const registerAboutInfoGroup = (tab: SettingTabBuilder) => {
 </div>`,
         afterMount: (root) => {
             root.querySelector("#sponsorBtn")?.addEventListener("click", () => {
-                openByMobile(getCloudURL("sponsor"));
+                openLink(window.siyuan.ws.app, getCloudURL("sponsor"));
             });
         },
     });

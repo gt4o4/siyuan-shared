@@ -1,4 +1,4 @@
-import {escapeHtml} from "../../../util/escape";
+import {escapeHtml, escapeHtmlTextAndAttr} from "../../../util/escape";
 import {processSiYuanUri} from "../../../util/uri";
 import {highlightRender} from "../../../protyle/render/highlightRender";
 import {mathRender} from "../../../protyle/render/mathRender";
@@ -15,6 +15,7 @@ import {openLink} from "../../../editor/openLink";
 import {previewImages} from "../../../protyle/preview/image";
 import {getDiagramBlock, previewDiagram} from "../../../protyle/preview/diagram";
 import {removeCompressURL} from "../../../util/image";
+import {writeClipboardData} from "../../../protyle/util/compatibility";
 /// #if !MOBILE
 import {openGlobalSearch} from "../../../search/util";
 /// #else
@@ -49,24 +50,27 @@ export const renderTodoList = (result: string): string => {
 };
 
 // hasModel=false 时渲染"未配置模型"提示块替代示例，避免用户点击示例后卡死。
-export const renderWelcomeHTML = (hasModel = true): string => {
+export const renderWelcomeHTML = (hasModel = true, greetingKey = ""): string => {
     const L = window.siyuan.languages;
+    const greeting = escapeHtmlTextAndAttr(L[greetingKey] || L.agentWelcomeGreeting || "Hello, I am SiYuan Agent");
     if (!hasModel) {
         return '<div class="agent-welcome">' +
-            '<div class="agent-welcome__greeting">' + (L.agentWelcomeGreeting || "Hello, I am SiYuan Agent") + "</div>" +
+            '<div class="agent-welcome__greeting">' + greeting + "</div>" +
             '<div class="agent-welcome__no-model">' +
             '<div class="agent-welcome__no-model-title">' + (L.agentNoModel || "No model configured") + "</div>" +
             '<div class="agent-welcome__no-model-tip">' + L.agentNoModelTip + "</div>" +
             '<button class="b3-button agent-welcome__go-setting" data-type="go-ai-setting">' + (L.agentGoToSetting || "Go to Settings") + "</button>" +
+            '<div class="fn__hr"></div><button class="b3-button b3-button--outline" data-type="go-chatgpt">' + L.chatGPTConnect + "</button>" +
             "</div>" +
             "</div>";
     }
     return '<div class="agent-welcome">' +
-        '<div class="agent-welcome__greeting">' + (L.agentWelcomeGreeting || "Hello, I am SiYuan Agent") + "</div>" +
+        '<div class="agent-welcome__greeting">' + greeting + "</div>" +
         '<div class="agent-welcome__examples">' +
         '<div class="agent-welcome__example" data-text="' + escapeHtml(L.agentExample1 || "") + '">' + (L.agentExample1 || "") + "</div>" +
         '<div class="agent-welcome__example" data-text="' + escapeHtml(L.agentExample2 || "") + '">' + (L.agentExample2 || "") + "</div>" +
         '<div class="agent-welcome__example" data-text="' + escapeHtml(L.agentExample3 || "") + '">' + (L.agentExample3 || "") + "</div>" +
+        '<div class="agent-welcome__example" data-text="' + escapeHtmlTextAndAttr(L.agentExample4 || "") + '">' + escapeHtmlTextAndAttr(L.agentExample4 || "") + "</div>" +
         "</div>" +
         "</div>";
 };
@@ -100,12 +104,13 @@ export const renderQuestionCardHTML = (rawQuestions: Array<Record<string, unknow
             const label = (opt.label as string) || "";
             const desc = (opt.description as string) || "";
             html += '<label class="agent-chat__question-option">' +
-                '<input type="' + inputType + '" name="' + inputName + '" value="' + escapeHtml(label) + '">' +
+                '<input type="' + inputType + '" name="' + inputName + '" value="' + escapeHtmlTextAndAttr(label) + '">' +
+                '<span class="agent-chat__question-option-content">' +
                 '<span class="agent-chat__question-option-label">' + escapeHtml(label) + "</span>";
             if (desc) {
                 html += '<span class="agent-chat__question-option-desc">' + escapeHtml(desc) + "</span>";
             }
-            html += "</label>";
+            html += "</span></label>";
         }
         if (custom) {
             html += '<input class="agent-chat__question-custom" placeholder="' + (L.agentQuestionCustom || "Type your own answer...") + '" data-qi="' + qi + '">';
@@ -140,87 +145,6 @@ export const renderToolsLineHTML = (newTools: Array<{ name: string; running?: bo
     return detailLines;
 };
 
-// createThinkingCardElement 用于流式过程中的单个思考卡片。
-// 工具调用只接收名字列表（arguments/result 在 assistant entry 存一份）；
-// 标题文本由调用方传入（已通过 i18n 从 duration 生成）。
-export const createThinkingCardElement = (step: {
-    reasoning: string;
-    text: string;
-    toolNames?: string[];
-    reasoningContent: string
-}): HTMLElement => {
-    let detail = "";
-    if (step.toolNames && step.toolNames.length > 0) {
-        detail += '<div class="agent-chat__thinking-tools-line"><span class="agent-chat__thinking-summary">Tool calls:</span>';
-        for (let j = 0; j < step.toolNames.length; j++) {
-            detail += '<span class="agent-chat__thinking-tool">' + escapeHtml(step.toolNames[j]) + "</span>";
-        }
-        detail += "</div>";
-    }
-    if (step.reasoningContent) {
-        detail += "<div>" + escapeHtml(step.reasoningContent) + "</div>";
-    }
-
-    const el = document.createElement("div");
-    el.className = "agent-chat__msg agent-chat__msg--thinking agent-chat__msg--thinking-done";
-    el.innerHTML = '<div class="agent-chat__thinking-card">' +
-        '<div class="agent-chat__thinking-header">' +
-        '<span class="agent-chat__thinking-arrow">' +
-        '<svg class="agent-chat__thinking-arrow--expand"><use xlink:href="#iconExpand"></use></svg>' +
-        '<svg class="agent-chat__thinking-arrow--contract fn__none"><use xlink:href="#iconContract"></use></svg>' +
-        "</span>" +
-        '<span class="agent-chat__thinking-text">' + escapeHtml(step.text) + "</span>" +
-        "</div>" +
-        '<div class="agent-chat__thinking-body">' +
-        detail +
-        "</div>" +
-        "</div>";
-    return el;
-};
-
-export const bindThinkingCardToggle = (el: HTMLElement): void => {
-    const header = el.querySelector(".agent-chat__thinking-header") as HTMLElement;
-    const body = el.querySelector(".agent-chat__thinking-body") as HTMLElement;
-    const expandIcon = el.querySelector(".agent-chat__thinking-arrow--expand") as HTMLElement;
-    const contractIcon = el.querySelector(".agent-chat__thinking-arrow--contract") as HTMLElement;
-    if (!header || !body || !expandIcon || !contractIcon) {
-        return;
-    }
-    header.addEventListener("click", () => {
-        el.setAttribute("data-user-interacted", "true");
-        const isExpanded = body.classList.contains("agent-chat__thinking-body--expanded");
-        const isDone = el.classList.contains("agent-chat__msg--thinking-done");
-        if (isDone) {
-            // 思考完成后：两态 toggle（折叠↔完全展开），不经过预览中间态。
-            if (isExpanded) {
-                body.classList.remove("agent-chat__thinking-body--expanded");
-                expandIcon.classList.remove("fn__none");
-                contractIcon.classList.add("fn__none");
-            } else {
-                body.classList.remove("agent-chat__thinking-body--preview");
-                body.classList.add("agent-chat__thinking-body--expanded");
-                expandIcon.classList.add("fn__none");
-                contractIcon.classList.remove("fn__none");
-            }
-        } else {
-            // 流式中：三态循环（完全折叠 → 预览 → 完全展开 → 完全折叠）。
-            const isPreview = body.classList.contains("agent-chat__thinking-body--preview");
-            if (isExpanded) {
-                body.classList.remove("agent-chat__thinking-body--expanded");
-                expandIcon.classList.remove("fn__none");
-                contractIcon.classList.add("fn__none");
-            } else if (isPreview) {
-                body.classList.remove("agent-chat__thinking-body--preview");
-                body.classList.add("agent-chat__thinking-body--expanded");
-                expandIcon.classList.add("fn__none");
-                contractIcon.classList.remove("fn__none");
-            } else {
-                body.classList.add("agent-chat__thinking-body--preview");
-            }
-        }
-    });
-};
-
 // 为容器内所有代码块（pre）和公式块（div[data-subtype=math]）注入复制按钮。
 export const addCopyButtons = (container: HTMLElement): void => {
     // 代码块复制 code 文本；公式块复制 data-content（KaTeX 渲染前的原始 LaTeX）。
@@ -241,6 +165,18 @@ export const addCopyButtons = (container: HTMLElement): void => {
     });
 };
 
+export const copyAgentText = async (text: string) => {
+    const result = await writeClipboardData({textPlain: text});
+    if (result.error) {
+        console.log("Write Agent clipboard error:", result.error);
+    }
+    if (result.status === "failed") {
+        showMessage(window.siyuan.languages.clipboardPermissionDenied, 7000, "error");
+        return;
+    }
+    showMessage(window.siyuan.languages.copied, 2000);
+};
+
 // 构建单个复制按钮，getText 返回要复制的文本。
 const createCopyButton = (getText: () => string): HTMLElement => {
     const btn = document.createElement("span");
@@ -250,12 +186,7 @@ const createCopyButton = (getText: () => string): HTMLElement => {
     btn.setAttribute("data-position", "4north");
     btn.addEventListener("click", (e) => {
         e.stopPropagation();
-        const text = getText();
-        navigator.clipboard.writeText(text).then(() => {
-            showMessage(window.siyuan.languages.copied, 2000);
-        }).catch(() => {
-            showMessage(window.siyuan.languages.copied, 2000);
-        });
+        void copyAgentText(getText());
     });
     return btn;
 };
@@ -319,12 +250,17 @@ export const postRender = (container: HTMLElement, app?: App, onNavigate?: () =>
     plantumlRender(container);
     htmlRender(container);
     addCopyButtons(container);
+    bindAgentMessageEvents(container, app, onNavigate);
+};
+
+// 流式基础预览只绑定交互，不触发高亮、公式或图表渲染。
+export const bindAgentMessageEvents = (container: HTMLElement, app?: App, onNavigate?: () => void): void => {
     if (container.dataset.agentPreviewBound !== "true") {
         container.dataset.agentPreviewBound = "true";
         container.addEventListener("dblclick", (event: MouseEvent) => {
             const target = event.target as HTMLElement;
             const img = target.closest("img:not(.emoji)") as HTMLImageElement;
-            if (!img || !container.contains(img)) {
+            if (!img || !container.contains(img) || img.closest('[data-subtype="plantuml"]')) {
                 const diagramElement = getDiagramBlock(target.closest("[data-subtype]") as HTMLElement);
                 if (diagramElement && container.contains(diagramElement)) {
                     previewDiagram(diagramElement);

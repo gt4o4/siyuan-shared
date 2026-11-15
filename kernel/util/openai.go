@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package util
 
@@ -81,7 +69,8 @@ type OpenAIImageAdapter struct {
 	timeout time.Duration
 }
 
-func ChatGPT(msg string, contextMsgs []string, c *openai.Client, model string, maxTokens int, temperature float64, timeout int) (ret string, stop bool, err error) {
+func ChatGPT(msg string, contextMsgs []string, c *AIClient, apiBaseURL, protocol, model string, maxTokens int,
+	temperature float64, timeout int) (ret string, stop bool, err error) {
 	var reqMsgs []openai.ChatCompletionMessage
 
 	for _, ctxMsg := range contextMsgs {
@@ -115,7 +104,9 @@ func ChatGPT(msg string, contextMsgs []string, c *openai.Client, model string, m
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
 	defer cancel()
-	resp, err := c.CreateChatCompletion(ctx, req)
+	ctx = ContextWithOpenAIResponsesBaseURL(ctx, apiBaseURL)
+	ctx = ContextWithOpenAIChatTemperature(ctx, req.Temperature)
+	resp, err := CreateOpenAICompletion(ctx, c, protocol, req, nil)
 	if err != nil {
 		PushErrMsg("Requesting failed, please check kernel log for more details", 3000)
 		logging.LogErrorf("create chat completion failed: %s", err)
@@ -142,10 +133,10 @@ func ChatGPT(msg string, contextMsgs []string, c *openai.Client, model string, m
 	return
 }
 
-func NewOpenAIClient(apiKey, apiBaseURL string) *openai.Client {
+func NewOpenAIClient(apiKey, apiBaseURL string, headers ...map[string]string) *openai.Client {
 	config := openai.DefaultConfig(apiKey)
 	config.BaseURL = apiBaseURL
-	config.HTTPClient = httpclient.NewUserAgentClient(nil)
+	config.HTTPClient = newAIProviderHTTPClient(apiBaseURL, headers...)
 	return openai.NewClientWithConfig(config)
 }
 
@@ -171,16 +162,22 @@ func ExtraBodyForModel(model string) map[string]any {
 	return nil
 }
 
-// extraBodyTransport 包装一个 HTTPDoer，在 chat/completions 请求体中注入额外字段。
-// 利用 go-openai 在 client 层暴露的 HTTPDoer 扩展点（Chat 路径不支持 withExtraBody），
-// 对流式与非流式 chat 请求都生效；非 chat 请求原样透传。
+type openAIChatTemperatureKey struct{}
+
+// Chat 请求用上下文区分显式温度与未设置值，避免 SDK 的 omitempty 丢失零温度。
+func ContextWithOpenAIChatTemperature(ctx context.Context, temperature float32) context.Context {
+	return context.WithValue(ctx, openAIChatTemperatureKey{}, temperature)
+}
+
+// 通过 HTTPDoer 为流式和非流式 Chat 请求补充显式温度及模型额外参数。
 type extraBodyTransport struct {
 	base      openai.HTTPDoer
 	extraBody map[string]any
 }
 
 func (t *extraBodyTransport) Do(req *http.Request) (*http.Response, error) {
-	if len(t.extraBody) == 0 || req.Method != http.MethodPost || !strings.Contains(req.URL.Path, "chat/completions") {
+	temperature, explicitTemperature := req.Context().Value(openAIChatTemperatureKey{}).(float32)
+	if (!explicitTemperature && len(t.extraBody) == 0) || req.Method != http.MethodPost || !strings.Contains(req.URL.Path, "chat/completions") {
 		return t.base.Do(req)
 	}
 
@@ -193,13 +190,21 @@ func (t *extraBodyTransport) Do(req *http.Request) (*http.Response, error) {
 	}
 
 	var payload map[string]any
-	if err = json.Unmarshal(body, &payload); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	// 重写请求体时保留 seed 等整数的精度。
+	decoder.UseNumber()
+	if err = decoder.Decode(&payload); err != nil || payload == nil || !json.Valid(body) {
 		// 请求体解析失败，用原始 body 透传，绝不破坏请求。
 		req.Body = io.NopCloser(bytes.NewReader(body))
 		req.ContentLength = int64(len(body))
 		return t.base.Do(req)
 	}
 
+	if explicitTemperature {
+		if _, present := payload["temperature"]; !present {
+			payload["temperature"] = temperature
+		}
+	}
 	maps.Copy(payload, t.extraBody)
 
 	merged, err := json.Marshal(payload)
@@ -214,60 +219,126 @@ func (t *extraBodyTransport) Do(req *http.Request) (*http.Response, error) {
 	return t.base.Do(req)
 }
 
-// NewOpenAIClientWithModel 创建 OpenAI client，并按模型名匹配内置清单注入额外请求参数。
-// 绝大多数模型无匹配，走 NewOpenAIClient 老路径（不包中间件，零开销）；
-// 命中清单的模型（如 MiniMax）会注入厂商专属参数（如 reasoning_split）。
-func NewOpenAIClientWithModel(apiKey, apiBaseURL, model string) *openai.Client {
+// NewAIClientWithModel 创建生成客户端，并按模型与端点启用协议适配。
+// 模型请求统一启用思考字段适配，命中清单的模型会注入额外参数，官方 Gemini 端点会保留工具调用签名。
+func NewAIClientWithModel(apiKey, apiBaseURL, model string, headers ...map[string]string) *AIClient {
 	extra := ExtraBodyForModel(model)
-	if len(extra) == 0 {
-		return NewOpenAIClient(apiKey, apiBaseURL)
-	}
+	geminiThoughtSignatures := isGoogleGeminiOpenAICompatibleEndpoint(apiBaseURL, model)
 	config := openai.DefaultConfig(apiKey)
 	config.BaseURL = apiBaseURL
-	config.HTTPClient = &extraBodyTransport{base: httpclient.NewUserAgentClient(nil), extraBody: extra}
-	return openai.NewClientWithConfig(config)
+	var transport openai.HTTPDoer = newAIProviderHTTPClient(apiBaseURL, headers...)
+	transport = &extraBodyTransport{base: transport, extraBody: extra}
+	if geminiThoughtSignatures {
+		transport = WrapGeminiThoughtSignatureTransport(transport)
+	}
+	transport = &aiErrorResponseTransport{base: transport}
+	transport = &reasoningResponseTransport{base: transport}
+	config.HTTPClient = transport
+	return &AIClient{Client: openai.NewClientWithConfig(config), baseURL: apiBaseURL,
+		anthropicHTTP: newAnthropicHTTPClient(apiKey, apiBaseURL, headers...),
+		geminiHTTP:    newGeminiInteractionsHTTPClient(apiKey, apiBaseURL, headers...)}
 }
 
-// TestModel 测试模型可用性。优先调用 ListModels（GET /v1/models）拉取可用模型清单，
-// 校验 model 是否在其中；若该端点不可用（部分 OpenAI 兼容服务未实现），则回退到极简 Chat Completion。
+// TestModel 测试模型可用性。先按协议拉取可用模型清单，
+// 再按 Provider 协议发送极简文本生成请求，确认所选协议实际可用。
 // 返回值：available 为可用模型清单（仅 ListModels 成功时填充），matched 表示 model 是否可用，
 // err 为请求错误（鉴权失败、网络异常、模型不存在等，原样返回便于调用方展示原因）。
-func TestModel(apiKey, apiBaseURL, model string, timeout int) (available []string, matched bool, err error) {
+func TestModel(apiKey, apiBaseURL, protocol, model string, timeout int, headers ...map[string]string) (available []string, matched bool, err error) {
 	if 1 > timeout {
 		timeout = 30
 	}
-	client := NewOpenAIClient(apiKey, apiBaseURL)
+	client := NewAIClientWithModel(apiKey, apiBaseURL, model, headers...)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
 	defer cancel()
+	ctx = ContextWithOpenAIResponsesBaseURL(ctx, apiBaseURL)
 
 	// 优先校验模型是否在可用清单中
-	list, listErr := client.ListModels(ctx)
+	var availableIDs []string
+	var listErr error
+	if IsAnthropicMessagesProtocol(protocol) || IsGeminiInteractionsProtocol(protocol) {
+		var models []AvailableModel
+		if IsGeminiInteractionsProtocol(protocol) {
+			models, listErr = listGeminiInteractionModels(ctx, client)
+		} else {
+			models, listErr = listAnthropicModels(ctx, client)
+		}
+		for _, m := range models {
+			availableIDs = append(availableIDs, m.ID)
+		}
+	} else {
+		list, err := client.ListModels(ctx)
+		listErr = err
+		for _, m := range list.Models {
+			availableIDs = append(availableIDs, m.ID)
+		}
+	}
 	if nil == listErr {
 		model = strings.TrimSpace(model)
 		target := strings.ToLower(model)
-		for _, m := range list.Models {
-			available = append(available, m.ID)
-			if strings.ToLower(m.ID) == target {
+		for _, id := range availableIDs {
+			available = append(available, id)
+			if strings.ToLower(id) == target {
 				matched = true
 			}
 		}
-		return
+		if !matched {
+			logging.LogInfof("model [%s] not found in available list, test with text completion", model)
+		}
+	} else {
+		// ListModels 不可用时仍使用极简文本生成请求验证连通性与鉴权。
+		logging.LogInfof("list models failed [%s], test with text completion: %s", apiBaseURL, listErr)
 	}
 
-	// ListModels 不可用时回退到极简 Chat Completion 验证连通性与鉴权
-	logging.LogInfof("list models failed [%s], fallback to chat completion: %s", apiBaseURL, listErr)
-	messages := []openai.ChatCompletionMessage{{Role: "user", Content: "1"}}
-	_, err = client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
+	messages := []openai.ChatCompletionMessage{{Role: "user", Content: "Reply with 1"}}
+	request := openai.ChatCompletionRequest{
 		Model:               model,
 		Messages:            messages,
 		MaxCompletionTokens: 1,
-	})
+		Temperature:         1,
+	}
+	if !IsOpenAIResponsesProtocol(protocol) && !IsAnthropicMessagesProtocol(protocol) && !IsGeminiInteractionsProtocol(protocol) {
+		// Chat Completions 的输出预算包含推理 token，连通性测试使用有限预算生成简短回复。
+		request.MaxCompletionTokens = 1024
+	}
+	if IsOpenAIResponsesProtocol(protocol) {
+		// Responses 的输出预算至少为 16，包含可能使用的推理 token。
+		request.MaxCompletionTokens = 16
+	}
+	if IsGeminiInteractionsProtocol(protocol) {
+		// Gemini 的思考也消耗输出预算，为极简连通性测试保留有限预算。
+		request.MaxCompletionTokens = 256
+		request.ReasoningEffort = "low"
+	}
+	if IsOpenAIResponsesProtocol(protocol) || IsAnthropicMessagesProtocol(protocol) || IsGeminiInteractionsProtocol(protocol) {
+		request.Stream = true
+		var stream *OpenAICompletionStream
+		stream, err = CreateOpenAICompletionStream(ctx, client, protocol, request, nil)
+		if err == nil {
+			defer stream.Close()
+			for {
+				_, receiveErr := stream.Recv()
+				if errors.Is(receiveErr, io.EOF) {
+					break
+				}
+				if receiveErr != nil {
+					err = receiveErr
+					break
+				}
+			}
+		}
+	} else {
+		_, err = CreateOpenAICompletion(ctx, client, protocol, request, nil)
+	}
+	if IsGeminiInteractionsProtocol(protocol) && errors.Is(err, errGeminiInteractionIncomplete) {
+		// 受限预算可能被思考耗尽，已校验的终止响应仍能证明协议连通；正常生成继续将不完整响应视为错误。
+		err = nil
+	}
 	if nil != err {
+		matched = false
 		logging.LogErrorf("test model [%s] failed: %s", model, err)
 		return
 	}
 	matched = true
-	available = nil
 	return
 }
 
@@ -331,7 +402,7 @@ func ListAvailableModels(apiKey, apiBaseURL string, timeout int) (models []strin
 
 // ListAvailableModelsWithContext 拉取 Provider 的模型清单及可选上下文窗口。
 // 通用 OpenAI 兼容接口不保证返回上下文长度，缺失或非法时保留模型并将 ContextLength 置为 0。
-func ListAvailableModelsWithContext(apiKey, apiBaseURL string, timeout int) (models []AvailableModel, err error) {
+func ListAvailableModelsWithContext(apiKey, apiBaseURL string, timeout int, headers ...map[string]string) (models []AvailableModel, err error) {
 	if 1 > timeout {
 		timeout = 30
 	}
@@ -346,7 +417,7 @@ func ListAvailableModelsWithContext(apiKey, apiBaseURL string, timeout int) (mod
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
-	resp, err := httpclient.NewUserAgentClient(nil).Do(req)
+	resp, err := newAIProviderHTTPClient(apiBaseURL, headers...).Do(req)
 	if err != nil {
 		logging.LogErrorf("list models [%s] failed: %s", apiBaseURL, err)
 		return
@@ -399,42 +470,26 @@ func firstValidModelContextLength(values ...json.RawMessage) int {
 	return 0
 }
 
-func IsNetworkError(err error) bool {
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "actively refused") ||
-		strings.Contains(msg, "connection refused") ||
-		strings.Contains(msg, "no such host") ||
-		strings.Contains(msg, "connection failed") ||
-		strings.Contains(msg, "hostname resolution") ||
-		strings.Contains(msg, "no address associated with hostname") ||
-		strings.Contains(msg, "request canceled while waiting for connection") ||
-		strings.Contains(msg, "exceeded while awaiting") ||
-		strings.Contains(msg, "context deadline exceeded") ||
-		strings.Contains(msg, "timeout") ||
-		strings.Contains(msg, "connection") ||
-		strings.Contains(msg, "refused") ||
-		strings.Contains(msg, "socket") ||
-		strings.Contains(msg, "eof") ||
-		strings.Contains(msg, "closed") ||
-		strings.Contains(msg, "network")
-}
-
 // embeddingHTTPClient 单例 HTTP 客户端，复用连接池并限制每主机最大连接数，
 // 避免 embedding 索引器在 API 不可用时新建大量连接形成连接风暴。
 // 单次请求超时由调用方用 context.WithTimeout 控制，client 本身不设全局 Timeout。
 var (
 	embeddingHTTPClientOnce sync.Once
 	embeddingHTTPClient     *http.Client
+	embeddingHTTPTransport  *http.Transport
+	openAITransportMu       sync.Mutex
 )
 
 func getEmbeddingHTTPClient() *http.Client {
 	embeddingHTTPClientOnce.Do(func() {
-		transport := &http.Transport{
-			MaxConnsPerHost:     4, // 同一 embedding endpoint 的并发连接上限
-			MaxIdleConns:        8,
-			MaxIdleConnsPerHost: 4,
-			IdleConnTimeout:     90 * time.Second,
-		}
+		transport := httpclient.NewTransport(false)
+		transport.MaxConnsPerHost = 4 // 同一 embedding endpoint 的并发连接上限
+		transport.MaxIdleConns = 8
+		transport.MaxIdleConnsPerHost = 4
+		transport.IdleConnTimeout = 90 * time.Second
+		openAITransportMu.Lock()
+		embeddingHTTPTransport = transport
+		openAITransportMu.Unlock()
 		embeddingHTTPClient = httpclient.NewUserAgentClient(transport)
 	})
 	return embeddingHTTPClient
@@ -443,6 +498,9 @@ func getEmbeddingHTTPClient() *http.Client {
 func BatchGetEmbeddings(texts []string, apiKey, baseURL, model string, dimensions, timeout int) (ret [][]float32, err error) {
 	if 1 > len(texts) {
 		return
+	}
+	if timeout < 1 {
+		timeout = 30
 	}
 
 	config := openai.DefaultConfig(apiKey)
@@ -453,11 +511,23 @@ func BatchGetEmbeddings(texts []string, apiKey, baseURL, model string, dimension
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
 	defer cancel()
 
-	resp, err := client.CreateEmbeddings(ctx, openai.EmbeddingRequestStrings{
+	request := openai.EmbeddingRequestStrings{
 		Input:      texts,
 		Model:      openai.EmbeddingModel(model),
 		Dimensions: dimensions, // 0 时因 omitempty 不发送，等同于用模型默认维度
-	})
+	}
+	resp, err := client.CreateEmbeddings(ctx, request)
+	if ctx.Err() == nil && retryableEmbeddingError(err) {
+		// 嵌入计算遇到瞬时连接中断时最多补试一次，等待及补试共享原请求的超时预算。
+		timer := time.NewTimer(200 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			err = ctx.Err()
+		case <-timer.C:
+			resp, err = client.CreateEmbeddings(ctx, request)
+		}
+	}
 	if err != nil {
 		logging.LogErrorf("create embeddings failed: %s", err)
 		return
@@ -469,6 +539,17 @@ func BatchGetEmbeddings(texts []string, apiKey, baseURL, model string, dimension
 	return
 }
 
+// retryableEmbeddingError 仅重试传输层连接中断，不重试接口状态错误、响应解析错误或超时。
+func retryableEmbeddingError(err error) bool {
+	var requestErr *url.Error
+	if !errors.As(err, &requestErr) || requestErr.Timeout() {
+		return false
+	}
+	return errors.Is(requestErr.Err, io.EOF) || errors.Is(requestErr.Err, io.ErrUnexpectedEOF) ||
+		errors.Is(requestErr.Err, syscall.ECONNRESET) || errors.Is(requestErr.Err, syscall.EPIPE) ||
+		requestErr.Err.Error() == "http: server closed idle connection"
+}
+
 // rerankDocTextMaxRunes 限制单篇文档送入重排服务的最大 Unicode 字符数，兼顾常见模型的输入上限。
 const rerankDocTextMaxRunes = 4000
 
@@ -476,6 +557,7 @@ const rerankDocTextMaxRunes = 4000
 var (
 	rerankHTTPClientOnce sync.Once
 	rerankHTTPClient     *http.Client
+	rerankHTTPTransport  *http.Transport
 )
 
 func getRerankHTTPClient() *http.Client {
@@ -485,17 +567,63 @@ func getRerankHTTPClient() *http.Client {
 		transport.MaxIdleConns = 8
 		transport.MaxIdleConnsPerHost = 4
 		transport.IdleConnTimeout = 90 * time.Second
+		openAITransportMu.Lock()
+		rerankHTTPTransport = transport
+		openAITransportMu.Unlock()
 		rerankHTTPClient = httpclient.NewUserAgentClient(transport)
 	})
 	return rerankHTTPClient
 }
 
-// rerankRequest 对应主流重排服务的 /rerank 请求体（Jina/Cohere/阿里云 compatible-api 等）。
-type rerankRequest struct {
+func closeOpenAIIdleConnections() {
+	openAITransportMu.Lock()
+	defer openAITransportMu.Unlock()
+	if embeddingHTTPTransport != nil {
+		embeddingHTTPTransport.CloseIdleConnections()
+	}
+	if rerankHTTPTransport != nil {
+		rerankHTTPTransport.CloseIdleConnections()
+	}
+}
+
+type RerankRequestFormat string
+
+const (
+	RerankRequestFormatCohere    RerankRequestFormat = "cohere"
+	RerankRequestFormatDashScope RerankRequestFormat = "dashscope"
+)
+
+type RerankOptions struct {
+	APIKey        string
+	Endpoint      string
+	Model         string
+	RequestFormat RerankRequestFormat
+	TopN          int
+	Timeout       int
+}
+
+// rerankCohereRequest 对应 Jina、Cohere 和阿里云 compatible-api 等服务的扁平请求体。
+type rerankCohereRequest struct {
 	Model     string   `json:"model"`
 	Query     string   `json:"query"`
 	Documents []string `json:"documents"`
 	TopN      int      `json:"top_n,omitempty"`
+}
+
+type rerankDashScopeInput struct {
+	Query     string   `json:"query"`
+	Documents []string `json:"documents"`
+}
+
+type rerankDashScopeParameters struct {
+	TopN int `json:"top_n"`
+}
+
+// rerankDashScopeRequest 对应 DashScope 和 ZenMux 等服务的嵌套请求体。
+type rerankDashScopeRequest struct {
+	Model      string                     `json:"model"`
+	Input      rerankDashScopeInput       `json:"input"`
+	Parameters *rerankDashScopeParameters `json:"parameters,omitempty"`
 }
 
 // rerankResult 为响应 results 数组中的单项，index 指向 documents 下标。
@@ -507,6 +635,9 @@ type rerankResult struct {
 // rerankResponse 对应 /v1/rerank 响应体。
 type rerankResponse struct {
 	Results []rerankResult `json:"results"`
+	Output  *struct {
+		Results []rerankResult `json:"results"`
+	} `json:"output"`
 }
 
 // Rerank 调用重排服务对 query 与候选文档逐对精排。endpoint 为完整重排端点地址，不同服务商路径无统一标准
@@ -515,15 +646,15 @@ type rerankResponse struct {
 // 对每条 document 文本按 rerankDocTextMaxRunes 截断，防超服务端 token 限制并保证 UTF-8 完整。
 // topN 语义：topN <= 0 时不传 top_n（服务端默认返回全部文档评分，搜索场景用此避免被服务端 top_n 上限截断）；
 // topN > 0 时透传给服务端，仅用于测试连通性等只需少量结果的场景。
-func Rerank(query string, documents []string, apiKey, endpoint, model string, topN, timeout int) (indices []int, scores []float64, err error) {
-	if 1 > timeout {
-		timeout = 30
+func Rerank(query string, documents []string, options RerankOptions) (indices []int, scores []float64, err error) {
+	if 1 > options.Timeout {
+		options.Timeout = 30
 	}
 	if 1 > len(documents) {
 		return
 	}
-	if 0 < topN && topN > len(documents) {
-		topN = len(documents)
+	if 0 < options.TopN && options.TopN > len(documents) {
+		options.TopN = len(documents)
 	}
 
 	trimmed := make([]string, len(documents))
@@ -531,25 +662,20 @@ func Rerank(query string, documents []string, apiKey, endpoint, model string, to
 		trimmed[i] = truncateRerankDocument(doc)
 	}
 
-	body, err := json.Marshal(rerankRequest{
-		Model:     model,
-		Query:     query,
-		Documents: trimmed,
-		TopN:      topN,
-	})
+	body, err := marshalRerankRequest(query, trimmed, options)
 	if nil != err {
 		return
 	}
 
 	// endpoint 为完整重排端点地址，不做路径追加——不同服务商端点路径无统一标准，用户照文档填写。
-	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(endpoint, "/"), bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(options.Endpoint, "/"), bytes.NewReader(body))
 	if nil != err {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Authorization", "Bearer "+options.APIKey)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(options.Timeout)*time.Second)
 	defer cancel()
 	req = req.WithContext(ctx)
 
@@ -575,7 +701,16 @@ func Rerank(query string, documents []string, apiKey, endpoint, model string, to
 		return
 	}
 
-	for _, r := range rr.Results {
+	results := rr.Results
+	if nil == results && nil != rr.Output {
+		results = rr.Output.Results
+	}
+	if nil == results {
+		err = errors.New("rerank response missing results")
+		return
+	}
+
+	for _, r := range results {
 		if r.Index < 0 || r.Index >= len(documents) {
 			continue
 		}
@@ -583,6 +718,29 @@ func Rerank(query string, documents []string, apiKey, endpoint, model string, to
 		scores = append(scores, r.RelevanceScore)
 	}
 	return
+}
+
+func marshalRerankRequest(query string, documents []string, options RerankOptions) ([]byte, error) {
+	if RerankRequestFormatDashScope == options.RequestFormat {
+		request := rerankDashScopeRequest{
+			Model: options.Model,
+			Input: rerankDashScopeInput{
+				Query:     query,
+				Documents: documents,
+			},
+		}
+		if 0 < options.TopN {
+			request.Parameters = &rerankDashScopeParameters{TopN: options.TopN}
+		}
+		return json.Marshal(request)
+	}
+
+	return json.Marshal(rerankCohereRequest{
+		Model:     options.Model,
+		Query:     query,
+		Documents: documents,
+		TopN:      options.TopN,
+	})
 }
 
 func truncateRerankDocument(document string) string {
@@ -595,9 +753,10 @@ func truncateRerankDocument(document string) string {
 
 // TestRerankModel 测试重排模型可用性，用极简 query+documents 发一次重排请求验证连通性与鉴权。
 // 返回值：matched 表示是否连通成功，err 为请求错误（鉴权失败、网络异常、模型不存在等，原样返回便于调用方展示原因）。
-func TestRerankModel(apiKey, apiBaseURL, model string, timeout int) (matched bool, err error) {
+func TestRerankModel(options RerankOptions) (matched bool, err error) {
 	documents := []string{"a", "b"}
-	indices, _, err := Rerank("1", documents, apiKey, apiBaseURL, model, len(documents), timeout)
+	options.TopN = len(documents)
+	indices, _, err := Rerank("1", documents, options)
 	if nil != err {
 		return
 	}
@@ -719,12 +878,19 @@ func ValidateGeneratedImage(data []byte) (mimeType, extension string, err error)
 	return mimeType, extension, nil
 }
 
-func NewOpenAIImageAdapter(apiKey, apiBaseURL, model string, timeout int) *OpenAIImageAdapter {
+func NewOpenAIImageAdapter(apiKey, apiBaseURL, model string, timeout int, headers ...map[string]string) *OpenAIImageAdapter {
 	if timeout < 1 {
 		timeout = 30
 	}
+	client := NewAIClientWithModel(apiKey, apiBaseURL, model, headers...).Client
+	if isMiniMaxImageEndpoint(apiBaseURL) {
+		config := openai.DefaultConfig(apiKey)
+		config.BaseURL = apiBaseURL
+		config.HTTPClient = &miniMaxImageTransport{base: newAIProviderHTTPClient(apiBaseURL, headers...)}
+		client = openai.NewClientWithConfig(config)
+	}
 	return &OpenAIImageAdapter{
-		client:  NewOpenAIClientWithModel(apiKey, apiBaseURL, model),
+		client:  client,
 		model:   model,
 		timeout: time.Duration(timeout) * time.Second,
 	}
@@ -814,7 +980,7 @@ func downloadGeneratedImage(ctx context.Context, rawURL string) ([]byte, error) 
 func generatedImageHTTPClient() *http.Client {
 	return &http.Client{
 		Transport: &http.Transport{
-			Proxy:       http.ProxyFromEnvironment,
+			Proxy:       httpclient.ProxyFromEnvironment,
 			DialContext: generatedImageDialer().DialContext,
 		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {

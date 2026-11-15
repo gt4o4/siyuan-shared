@@ -1,25 +1,16 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
 import (
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/88250/lute/ast"
+	"github.com/88250/lute/editor"
 	"github.com/88250/lute/parse"
 	"github.com/siyuan-note/siyuan/kernel/treenode"
 	"github.com/siyuan-note/siyuan/kernel/util"
@@ -45,6 +36,92 @@ func TestNormalizeListItemBlockUpdateTree(t *testing.T) {
 	}
 	if normalizedTree.Root.FirstChild != updatedNode || normalizedTree.Root.LastChild != updatedNode || nil != updatedNode.Next {
 		t.Fatal("normalized update tree should contain only the first list item")
+	}
+}
+
+func TestSQLQueryEmbedKramdownUpdatePreservesIdentityAndAttributes(t *testing.T) {
+	const (
+		id          = "20261010180000-sqlembd"
+		rootID      = "20261010180000-sqldocu"
+		boxID       = "20261010180000-sqlbox1"
+		originalSQL = "SELECT * FROM blocks WHERE type = 'p' ORDER BY updated DESC LIMIT 10"
+		updatedSQL  = "SELECT * FROM blocks WHERE type = 'h' ORDER BY updated DESC LIMIT 5"
+	)
+	luteEngine := util.NewLute()
+	original := "{{" + originalSQL + "}}\n{: id=\"" + id + "\" updated=\"20261010180000\" " +
+		"custom-test=\"kept\" custom-heading-mode=\"1\" style=\"color: red;\"}\n"
+	load := func() *parse.Tree {
+		dom, err := DataBlockDOM(original, luteEngine)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tree := luteEngine.BlockDOM2Tree(dom)
+		tree.ID, tree.Box, tree.Root.ID = rootID, boxID, rootID
+		return tree
+	}
+	reading := getBlockKramdown0(load(), id, "md", luteEngine)
+	if !strings.Contains(reading, "{{"+originalSQL+"}}") || !strings.Contains(reading, `custom-test="kept"`) {
+		t.Fatalf("Kramdown must return the query and attributes, not rendered matches: %q", reading)
+	}
+	tree := load()
+	build := func(data string) ([]*Operation, error) {
+		operations, _, err := buildBlockUpdateOperations([]BlockUpdateInput{
+			{ID: id, Data: data, DataType: "markdown", LockType: true},
+		}, func(string) *treenode.BlockTree {
+			return &treenode.BlockTree{ID: id, RootID: rootID, BoxID: boxID}
+		}, func(string) (*parse.Tree, error) { return tree, nil })
+		return operations, err
+	}
+	operations, err := build(strings.Replace(reading, originalSQL, updatedSQL, 1))
+	if err != nil || len(operations) != 1 || operations[0].ID != id || !operations[0].LockType {
+		t.Fatalf("embed update failed: %+v, %v", operations, err)
+	}
+	updated := treenode.GetNodeInTree(luteEngine.BlockDOM2Tree(operations[0].Data.(string)), id)
+	if updated == nil || updated.Type != ast.NodeBlockQueryEmbed {
+		t.Fatalf("embed identity, type or SQL changed: %+v", updated)
+	}
+	if script := updated.ChildByType(ast.NodeBlockQueryEmbedScript); script == nil || string(script.Tokens) != updatedSQL {
+		t.Fatalf("updated SQL changed: %+v", script)
+	}
+	for _, attribute := range []string{"custom-test", "custom-heading-mode", "style"} {
+		old := treenode.GetNodeInTree(tree, id)
+		if updated.IALAttr(attribute) != old.IALAttr(attribute) {
+			t.Fatalf("attribute %s changed", attribute)
+		}
+	}
+	if _, err = build("ordinary paragraph"); err == nil {
+		t.Fatal("locked SQL embed must reject conversion to a paragraph")
+	}
+}
+
+func TestSQLQueryEmbedDOMUpdatePreservesCommentsAndAttributes(t *testing.T) {
+	const (
+		id     = "20261010190000-sqlembd"
+		rootID = "20261010190000-sqldocu"
+		query  = "-- literal case and ampersand\nSELECT * FROM blocks WHERE content = 'A&B'"
+	)
+	luteEngine := util.NewLute()
+	data := `<div data-type="NodeBlockQueryEmbed" data-node-id="` + id +
+		`" custom-test="kept" custom-heading-mode="1" data-content="-- literal case and ampersand&#10;SELECT * FROM blocks WHERE content = 'A&amp;B'"></div>`
+	tree := luteEngine.BlockDOM2Tree(data)
+	tree.ID, tree.Root.ID = rootID, rootID
+	readDOM := luteEngine.Tree2BlockDOM(tree, luteEngine.RenderOptions, luteEngine.ParseOptions)
+	updatedDOM := strings.Replace(readDOM, "A&amp;B", "C&amp;D", 1)
+	operations, _, err := buildBlockUpdateOperations([]BlockUpdateInput{
+		{ID: id, Data: updatedDOM, DataType: "dom", LockType: true},
+	}, func(string) *treenode.BlockTree { return &treenode.BlockTree{ID: id, RootID: rootID} },
+		func(string) (*parse.Tree, error) { return tree, nil })
+	if err != nil || len(operations) != 1 || operations[0].ID != id {
+		t.Fatalf("DOM embed update failed: %+v, %v", operations, err)
+	}
+	node := treenode.GetNodeInTree(luteEngine.BlockDOM2Tree(operations[0].Data.(string)), id)
+	if node == nil || node.Type != ast.NodeBlockQueryEmbed || node.IALAttr("custom-test") != "kept" ||
+		node.IALAttr("custom-heading-mode") != "1" {
+		t.Fatalf("DOM embed metadata changed: %+v", node)
+	}
+	script := node.ChildByType(ast.NodeBlockQueryEmbedScript)
+	if script == nil || strings.ReplaceAll(string(script.Tokens), editor.IALValEscNewLine, "\n") != strings.Replace(query, "A&B", "C&D", 1) {
+		t.Fatalf("DOM embed SQL changed: %+v", script)
 	}
 }
 
@@ -79,6 +156,37 @@ func TestResolveSuperBlockListItemAfterBlockDOMRoundTrip(t *testing.T) {
 	}
 	if err = treenode.ValidateBlockReplacement(oldItem, resolvedNode); err != nil {
 		t.Fatalf("super block list item replacement should be valid: %s", err)
+	}
+}
+
+func TestResolveMindmapItemAfterBlockDOMRoundTrip(t *testing.T) {
+	const oldID = "20260924140000-mindmapitem"
+	luteEngine := util.NewLute()
+	blockDOM, _ := luteEngine.Md2BlockDOMTree("* [ ] updated", true)
+	blockDOM = strings.ReplaceAll(blockDOM, `data-type="NodeList"`, `data-type="NodeMindmap"`)
+	blockDOM = strings.ReplaceAll(blockDOM, `data-type="NodeListItem"`, `data-type="NodeMindmapItem"`)
+	oldMindmap := &ast.Node{Type: ast.NodeMindmap, ListData: &ast.ListData{}}
+	oldItem := &ast.Node{Type: ast.NodeMindmapItem, ID: oldID, ListData: &ast.ListData{}}
+	oldMindmap.AppendChild(oldItem)
+	normalizedTree, updatedItem, err := normalizeBlockUpdateTree(oldItem, luteEngine.BlockDOM2Tree(blockDOM), luteEngine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updatedItem.SetIALAttr("id", oldID)
+	normalizedDOM := luteEngine.Tree2BlockDOM(normalizedTree, luteEngine.RenderOptions, luteEngine.ParseOptions)
+	transactionTree := luteEngine.BlockDOM2Tree(normalizedDOM)
+	if ast.NodeMindmap != firstContentBlock(transactionTree.Root).Type {
+		t.Fatal("standalone mind map item DOM should be wrapped in a mind map when parsed")
+	}
+	updatedNode, err := resolveBlockUpdateNode(oldItem, transactionTree.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ast.NodeMindmapItem != updatedNode.Type || oldID != updatedNode.ID {
+		t.Fatalf("unexpected resolved node [%s] [%s]", updatedNode.Type.String(), updatedNode.ID)
+	}
+	if err = treenode.ValidateBlockReplacement(oldItem, updatedNode); err != nil {
+		t.Fatalf("mind map item replacement should be valid: %s", err)
 	}
 }
 
@@ -288,4 +396,86 @@ func parseBlockUpdateDOMIDs(t *testing.T, name, data string) map[string]bool {
 		return ast.WalkContinue
 	})
 	return ids
+}
+
+func TestBuildBlockUpdateOperationsPreservesExplicitDOMIdentity(t *testing.T) {
+	for _, mode := range []string{"reorder", "insert", "insertWithoutID", "positionalFallback"} {
+		t.Run(mode, func(t *testing.T) {
+			engine := util.NewLute()
+			root := &ast.Node{Type: ast.NodeDocument, ID: updateTestRoot}
+			quote := &ast.Node{Type: ast.NodeBlockquote, ID: updateTestList}
+			quote.SetIALAttr("id", quote.ID)
+			paragraph := func(id, text string) *ast.Node {
+				n := &ast.Node{Type: ast.NodeParagraph, ID: id}
+				if id != "" {
+					n.SetIALAttr("id", id)
+				}
+				n.AppendChild(&ast.Node{Type: ast.NodeText, Tokens: []byte(text)})
+				return n
+			}
+			quote.AppendChild(paragraph(updateTestPara1, "A"))
+			quote.AppendChild(paragraph(updateTestPara2, "B"))
+			root.AppendChild(quote)
+			updated := &ast.Node{Type: ast.NodeBlockquote, ID: quote.ID}
+			updated.SetIALAttr("id", quote.ID)
+			want := map[string]string{"A": updateTestPara1, "B": updateTestPara2}
+			switch mode {
+			case "reorder":
+				updated.AppendChild(paragraph(updateTestPara2, "B"))
+				updated.AppendChild(paragraph(updateTestPara1, "A"))
+			case "insert", "insertWithoutID":
+				id := ast.NewNodeID()
+				if mode == "insertWithoutID" {
+					id = ""
+				} else {
+					want["new"] = id
+				}
+				updated.AppendChild(paragraph(id, "new"))
+				updated.AppendChild(paragraph(updateTestPara1, "A"))
+				updated.AppendChild(paragraph(updateTestPara2, "B"))
+			case "positionalFallback":
+				updated.AppendChild(paragraph("", "A"))
+				updated.AppendChild(paragraph("", "B"))
+			}
+			tree := &parse.Tree{ID: root.ID, Box: updateTestBoxID, Root: root}
+			dom := engine.RenderNodeBlockDOM(updated)
+			if mode == "positionalFallback" || mode == "insertWithoutID" {
+				dom = regexp.MustCompile(`data-node-id="[^"]+"`).ReplaceAllStringFunc(dom, func(attr string) string {
+					if strings.Contains(attr, quote.ID) {
+						return attr
+					}
+					if mode == "insertWithoutID" && (strings.Contains(attr, updateTestPara1) || strings.Contains(attr, updateTestPara2)) {
+						return attr
+					}
+					return ""
+				})
+			}
+			ops, _, err := buildBlockUpdateOperations([]BlockUpdateInput{{ID: quote.ID, DataType: "dom", Data: dom}},
+				func(id string) *treenode.BlockTree {
+					return &treenode.BlockTree{ID: id, RootID: root.ID, BoxID: updateTestBoxID}
+				},
+				func(string) (*parse.Tree, error) { return tree, nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			actual := engine.BlockDOM2Tree(ops[0].Data.(string))
+			seen := map[string]bool{}
+			ast.Walk(actual.Root, func(n *ast.Node, entering bool) ast.WalkStatus {
+				if entering && n.Type == ast.NodeParagraph {
+					if seen[n.ID] {
+						t.Fatalf("duplicate paragraph ID: %s", n.ID)
+					}
+					seen[n.ID] = true
+					text := string(n.FirstChild.Tokens)
+					if id := want[text]; id != "" && n.ID != id {
+						t.Fatalf("%s identity = %s, want %s", text, n.ID, id)
+					}
+					if text == "new" && (n.ID == updateTestPara1 || n.ID == updateTestPara2) {
+						t.Fatal("new content stole an existing identity")
+					}
+				}
+				return ast.WalkContinue
+			})
+		})
+	}
 }

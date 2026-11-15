@@ -1,34 +1,52 @@
+import {mobileInputDialog as openInputDialog} from "../dialog/mobileInputDialog";
 import {Constants} from "../constants";
 import {showMessage} from "../dialog/message";
 import {isMobile} from "./functions";
 import {fetchPost, fetchSyncPost} from "./fetch";
-import {Dialog} from "../dialog";
+import {ContractFormData} from "./contractFormData";
+import {MobileDialog as Dialog} from "../dialog/mobileDialog";
 import {getOpenNotebookCount} from "./pathName";
-import {replaceFileName, validateName} from "../editor/rename";
+import {normalizeNotebookName, validateName} from "../editor/rename";
+import {escapeHtml} from "../util/escape";
 import {setStorageVal} from "../protyle/util/compatibility";
 import {openFileById} from "../editor/util";
 import {openMobileFileById} from "../mobile/editor";
 import type {App} from "../index";
+import {genNotebookOptionsHTML, getLastDailyNoteNotebookId} from "./dailyNote";
+import {getHostCapabilities} from "./hostCapabilities";
+import {fetchWithDocumentSelection} from "./documentSelectionRequest";
 /// #if !BROWSER
 import {ipcRenderer} from "electron";
 import {importObsidianVault} from "../menus/importObsidian";
 import * as path from "path";
 /// #endif
 
+const pendingDailyNotes = new Map<string, Promise<void>>();
+
 export const fetchNewDailyNote = (app: App, notebook: string) => {
-    fetchPost("/api/filetree/createDailyNote", {
+    const pending = pendingDailyNotes.get(notebook);
+    if (pending) {
+        return pending;
+    }
+    const request = fetchWithDocumentSelection(selection => fetchSyncPost("/api/filetree/createDailyNote", {
+        selection,
         notebook,
         app: Constants.SIYUAN_APPID,
-    }, (response) => {
+    }, undefined, false), {notebooks: [notebook]}).then(response => {
+        if (!response || response.code !== 0 || !("id" in response.data)) {
+            return;
+        }
         /// #if MOBILE
         openMobileFileById(app, response.data.id, [Constants.CB_GET_SCROLL, Constants.CB_GET_FOCUS]);
         /// #else
         openFileById({app, id: response.data.id, action: [Constants.CB_GET_SCROLL, Constants.CB_GET_FOCUS]});
         /// #endif
-    });
+    }).finally(() => pendingDailyNotes.delete(notebook));
+    pendingDailyNotes.set(notebook, request);
+    return request;
 };
 
-export const newDailyNote = (app: App) => {
+const openDailyNote = (app: App, useLastNotebook: boolean) => {
     const exit = window.siyuan.dialogs.find(item => {
         if (item.element.getAttribute("data-key") === Constants.DIALOG_DIALYNOTE) {
             item.destroy();
@@ -54,47 +72,57 @@ export const newDailyNote = (app: App) => {
         return;
     }
     const localNotebookId = window.siyuan.storage[Constants.LOCAL_DAILYNOTEID];
-    const localNotebookIsOpen = window.siyuan.notebooks.find((item) => {
-        if (item.id === localNotebookId && !item.closed) {
-            return true;
-        }
-    });
-    if (localNotebookId && localNotebookIsOpen && !isMobile()) {
-        fetchNewDailyNote(app, localNotebookId);
+    const lastNotebookId = getLastDailyNoteNotebookId(window.siyuan.notebooks, localNotebookId);
+    if (lastNotebookId && useLastNotebook) {
+        fetchNewDailyNote(app, lastNotebookId);
     } else {
-        let optionsHTML = "";
-        window.siyuan.notebooks.forEach(item => {
-            if (!item.closed) {
-                optionsHTML += `<option value="${item.id}">${item.name}</option>`;
-            }
-        });
-        const dialog = new Dialog({
-            positionId: Constants.DIALOG_DIALYNOTE,
-            title: window.siyuan.languages.plsChoose,
-            content: `<div class="b3-dialog__content">
+        selectDailyNoteNotebook(window.siyuan.notebooks, notebook => fetchNewDailyNote(app, notebook));
+    }
+};
+
+export const selectDailyNoteNotebook = (notebooks: readonly {id: string, name: string, closed: boolean}[],
+                                       callback: (notebook: string) => void) => {
+    const optionsHTML = genNotebookOptionsHTML(notebooks);
+    const dialog = new Dialog({
+        positionId: Constants.DIALOG_DIALYNOTE,
+        title: window.siyuan.languages.plsChoose,
+        content: `<div class="b3-dialog__content">
     <select class="b3-select fn__block">${optionsHTML}</select>
 </div>
 <div class="b3-dialog__action">
     <button class="b3-button b3-button--cancel">${window.siyuan.languages.cancel}</button><div class="fn__space"></div>
     <button class="b3-button b3-button--text">${window.siyuan.languages.confirm}</button>
 </div>`,
-            width: isMobile() ? "92vw" : "520px",
-        });
-        dialog.element.setAttribute("data-key", Constants.DIALOG_DIALYNOTE);
-        const btnsElement = dialog.element.querySelectorAll(".b3-button");
-        const selectElement = dialog.element.querySelector(".b3-select") as HTMLSelectElement;
+        width: isMobile() ? "92vw" : "520px",
+    });
+    dialog.element.setAttribute("data-key", Constants.DIALOG_DIALYNOTE);
+    const btnsElement = dialog.element.querySelectorAll(".b3-button");
+    const selectElement = dialog.element.querySelector(".b3-select") as HTMLSelectElement;
+    const localNotebookId = getLastDailyNoteNotebookId(notebooks, window.siyuan.storage[Constants.LOCAL_DAILYNOTEID]);
+    if (localNotebookId) {
         selectElement.value = localNotebookId;
-        btnsElement[0].addEventListener("click", () => {
-            dialog.destroy();
-        });
-        btnsElement[1].addEventListener("click", () => {
-            const notebook = selectElement.value;
-            window.siyuan.storage[Constants.LOCAL_DAILYNOTEID] = notebook;
-            setStorageVal(Constants.LOCAL_DAILYNOTEID, window.siyuan.storage[Constants.LOCAL_DAILYNOTEID]);
-            fetchNewDailyNote(app, notebook);
-            dialog.destroy();
-        });
     }
+    btnsElement[0].addEventListener("click", () => {
+        dialog.destroy();
+    });
+    btnsElement[1].addEventListener("click", () => {
+        const notebook = selectElement.value;
+        if (!notebooks.some(item => item.id === notebook && !item.closed)) {
+            return;
+        }
+        window.siyuan.storage[Constants.LOCAL_DAILYNOTEID] = notebook;
+        setStorageVal(Constants.LOCAL_DAILYNOTEID, notebook);
+        callback(notebook);
+        dialog.destroy();
+    });
+};
+
+export const newDailyNote = (app: App) => {
+    openDailyNote(app, !isMobile());
+};
+
+export const newDailyNoteFromLastNotebook = (app: App) => {
+    openDailyNote(app, true);
 };
 
 export const mountHelp = () => {
@@ -107,24 +135,35 @@ export const mountHelp = () => {
     });
 };
 
+export const importNotebook = (file: File) => {
+    if (!getHostCapabilities().documentImportExport) {
+        return;
+    }
+    const formData = new ContractFormData({file});
+    fetchPost("/api/import/importSYNotebook", formData);
+};
+
 export const newNotebook = () => {
     let nativeImportHTML = "";
     /// #if !BROWSER
-    nativeImportHTML = `<div class="b3-list-item fn__pointer" data-type="import-markdown-file" role="button" tabindex="0"><svg class="b3-list-item__graphic"><use xlink:href="#iconMarkdown"></use></svg><span class="b3-list-item__text">Markdown ${window.siyuan.languages.doc}</span></div>
+    if (getHostCapabilities().localFileSystem) {
+        nativeImportHTML = `<div class="b3-list-item fn__pointer" data-type="import-markdown-file" role="button" tabindex="0"><svg class="b3-list-item__graphic"><use xlink:href="#iconMarkdown"></use></svg><span class="b3-list-item__text">Markdown ${window.siyuan.languages.doc}</span></div>
         <div class="b3-list-item fn__pointer" data-type="import-markdown-folder" role="button" tabindex="0"><svg class="b3-list-item__graphic"><use xlink:href="#iconFolder"></use></svg><span class="b3-list-item__text">Markdown ${window.siyuan.languages.folder}</span></div>
         <div class="b3-list-item fn__pointer" data-type="import-obsidian" role="button" tabindex="0"><svg class="b3-list-item__graphic"><use xlink:href="#iconObsidian"></use></svg><span class="b3-list-item__text">Obsidian Vault</span></div>`;
+    }
     /// #endif
-    const dialog = new Dialog({
-        title: window.siyuan.languages.newNotebook,
-        content: `<div class="b3-dialog__content">
-    <input placeholder="${window.siyuan.languages.notebookName}" class="b3-text-field fn__block" data-type="notebook-name">
-    <div class="fn__hr"></div>
+    const importHTML = getHostCapabilities().documentImportExport ? `<div class="fn__hr"></div>
     <div class="b3-label__text fn__pointer fn__flex" style="align-items: center;gap: 4px" data-type="toggle-import" role="button" tabindex="0" aria-expanded="false"><svg class="b3-list-item__arrow" style="display: block;flex: none;height: 14px;width: 14px" data-type="import-arrow"><use xlink:href="#iconRight"></use></svg><span style="line-height: 20px">${window.siyuan.languages.importFromMoreApps}</span></div>
     <div class="b3-list--background fn__none" data-type="import-options" style="padding-top: 8px">
         <label class="b3-list-item fn__pointer" data-type="import-sy"><svg class="b3-list-item__graphic"><use xlink:href="#iconSiYuan"></use></svg><span class="b3-list-item__text">SiYuan .sy.zip</span><input class="b3-form__upload" type="file" accept="application/zip"></label>
         <label class="b3-list-item fn__pointer" data-type="import-markdown-zip"><svg class="b3-list-item__graphic"><use xlink:href="#iconMarkdown"></use></svg><span class="b3-list-item__text">Markdown .zip</span><input class="b3-form__upload" type="file" accept="application/zip"></label>
         ${nativeImportHTML}
-    </div>
+    </div>` : "";
+    const dialog = new Dialog({
+        title: window.siyuan.languages.newNotebook,
+        content: `<div class="b3-dialog__content">
+    <input placeholder="${window.siyuan.languages.notebookName}" class="b3-text-field fn__block" data-type="notebook-name">
+    ${importHTML}
 </div>
 <div class="b3-dialog__action">
     <button class="b3-button b3-button--cancel" data-type="cancel">${window.siyuan.languages.cancel}</button><div class="fn__space"></div>
@@ -147,12 +186,22 @@ export const newNotebook = () => {
         if (!validateName(name)) {
             return false;
         }
-        name = replaceFileName(name);
+        name = normalizeNotebookName(name);
+        if (isMobile()) {
+            void dialog.runPending(async () => {
+                const response = await fetchSyncPost("/api/notebook/createNotebook", {name});
+                return response.code === 0;
+            });
+            return;
+        }
         fetchPost("/api/notebook/createNotebook", {
             name
         });
         dialog.destroy();
     });
+    if (!getHostCapabilities().documentImportExport) {
+        return;
+    }
     const createNotebookForImport = (fallbackName: string, callback: (notebookID: string) => void) => {
         let name = notebookNameElement.value.trim();
         if (!name) {
@@ -160,10 +209,21 @@ export const newNotebook = () => {
             notebookNameElement.value = name;
         }
         if (!validateName(name)) {
-            notebookNameElement.focus();
+            dialog.focusWhenReady(() => notebookNameElement);
             return;
         }
-        fetchPost("/api/notebook/createNotebook", {name: replaceFileName(name)}, (response) => {
+        if (isMobile()) {
+            let notebookID: string;
+            void dialog.runPending(async () => {
+                const response = await fetchSyncPost("/api/notebook/createNotebook", {name: normalizeNotebookName(name)});
+                notebookID = response.code === 0 ? response.data?.notebook?.id : undefined;
+                return !!notebookID;
+            }).then(success => {
+                if (success) callback(notebookID);
+            });
+            return;
+        }
+        fetchPost("/api/notebook/createNotebook", {name: normalizeNotebookName(name)}, (response) => {
             const notebookID = response.data?.notebook?.id as string | undefined;
             if (!notebookID) {
                 return;
@@ -193,10 +253,8 @@ export const newNotebook = () => {
         if (!event.target.files?.[0]) {
             return;
         }
-        const formData = new FormData();
-        formData.append("file", event.target.files[0]);
         dialog.destroy();
-        fetchPost("/api/import/importSYNotebook", formData);
+        importNotebook(event.target.files[0]);
     });
     dialog.element.querySelector('[data-type="import-markdown-zip"] .b3-form__upload').addEventListener("change", (event: InputEvent & {
         target: HTMLInputElement
@@ -207,15 +265,14 @@ export const newNotebook = () => {
         }
         event.target.value = "";
         createNotebookForImport(file.name.replace(/\.zip$/i, ""), (notebookID) => {
-            const formData = new FormData();
-            formData.append("file", file);
-            formData.append("notebook", notebookID);
-            formData.append("toPath", "/");
-            formData.append("skipRoot", "true");
+            const formData = new ContractFormData({file, notebook: notebookID, toPath: "/", skipRoot: "true"});
             fetchPost("/api/import/importZipMd", formData);
         });
     });
     /// #if !BROWSER
+    if (!getHostCapabilities().localFileSystem) {
+        return;
+    }
     const importMarkdown = async (isFile: boolean) => {
         const localPath = await ipcRenderer.invoke(Constants.SIYUAN_GET, {
             cmd: "showOpenDialog",
@@ -295,10 +352,14 @@ export const newEncryptedNotebook = () => {
         return;
     }
     newEncryptedNotebookPending = true;
-    // 先检查加密功能是否已启用；未启用则提示去设置页启用
+    // 先检查加密功能状态；未启用或需要恢复时提示用户前往设置页处理
     fetchPost("/api/notebook/getEncryptedNotebookStatus", {}, (response) => {
+        if (response.data.state === "RecoveryRequired") {
+            showMessage(window.siyuan.languages.encryptedNotebookRecoveryRequiredTip, 6000, "error");
+            return;
+        }
         if (response.data.state !== "Enabled") {
-            showMessage(window.siyuan.languages.enableEncryptedNotebook, 6000);
+            showMessage(window.siyuan.languages.encryptedNotebookNotEnabledTip, 6000);
             return;
         }
         const dialog = new Dialog({
@@ -335,9 +396,17 @@ export const newEncryptedNotebook = () => {
                 showMessage(window.siyuan.languages.masterPassword);
                 return false;
             }
+            if (isMobile()) {
+                return dialog.runPending(async () => {
+                    const response = await fetchSyncPost("/api/notebook/createEncryptedNotebook", {
+                        name: normalizeNotebookName(name), password,
+                    });
+                    return response.code === 0;
+                });
+            }
             btnsElement[1].disabled = true;
             const response = await fetchSyncPost("/api/notebook/createEncryptedNotebook", {
-                name: replaceFileName(name),
+                name: normalizeNotebookName(name),
                 password
             });
             if (response.code === 0) {
@@ -357,45 +426,36 @@ export const openEncryptedNotebook = (app: App, notebookId: string, name: string
     if (window.siyuan.dialogs.some((item) => item.element.getAttribute("data-key") === dialogKey)) {
         return;
     }
-    const dialog = new Dialog({
-        title: window.siyuan.languages.unlockEncryptedNotebook.replace("${x}", name),
-        content: `<div class="b3-dialog__content">
-    <input type="password" placeholder="${window.siyuan.languages.masterPassword}" class="b3-text-field fn__block">
-    <div class="fn__hr--b"></div>
-    <div>${window.siyuan.languages.encryptedNotebookRiskTip}</div>
-</div>
-<div class="b3-dialog__action">
-    <button class="b3-button b3-button--cancel">${window.siyuan.languages.cancel}</button><div class="fn__space"></div>
-    <button class="b3-button b3-button--text">${window.siyuan.languages.confirm}</button>
-</div>`,
-        width: isMobile() ? "92vw" : "520px"
+    const dialog = openInputDialog({
+        title: window.siyuan.languages.unlockEncryptedNotebook.replace("${x}", escapeHtml(name)),
+        value: "",
+        type: "password",
+        placeholder: window.siyuan.languages.masterPassword,
+        description: window.siyuan.languages.encryptedNotebookRiskTip,
+        awaitConfirm: true,
+        onConfirm: async (password, dialog) => {
+            const inputElement = dialog.element.querySelector<HTMLInputElement>("[data-dialog-input]");
+            const confirmElement = dialog.element.querySelector<HTMLButtonElement>("[data-input-confirm]");
+            if (!password) {
+                return false;
+            }
+            confirmElement.disabled = true;
+            // 原子化解锁并挂载：UnlockBox 成功后立即 Mount，Mount 失败则后端自动 LockBox 回滚，避免 DEK 残留
+            const response = await fetchSyncPost("/api/notebook/unlockAndOpenNotebook", {
+                notebook: notebookId,
+                password
+            });
+            if (response.code === 0) {
+                dialog.destroy();
+                return true;
+            } else {
+                confirmElement.disabled = false;
+                inputElement.value = "";
+                if (isMobile()) dialog.focusWhenReady(() => inputElement);
+                else inputElement.focus();
+                return false;
+            }
+        },
     });
     dialog.element.setAttribute("data-key", dialogKey);
-    const btnsElement = dialog.element.querySelectorAll<HTMLButtonElement>(".b3-button");
-    const inputElement = dialog.element.querySelector("input");
-    dialog.bindInput(inputElement, () => {
-        btnsElement[1].dispatchEvent(new CustomEvent("click"));
-    });
-    btnsElement[0].addEventListener("click", () => {
-        dialog.destroy();
-    });
-    btnsElement[1].addEventListener("click", async () => {
-        const password = inputElement.value;
-        if (!password) {
-            return false;
-        }
-        btnsElement[1].disabled = true;
-        // 原子化解锁并挂载：UnlockBox 成功后立即 Mount，Mount 失败则后端自动 LockBox 回滚，避免 DEK 残留
-        const response = await fetchSyncPost("/api/notebook/unlockAndOpenNotebook", {
-            notebook: notebookId,
-            password
-        });
-        if (response.code === 0) {
-            dialog.destroy();
-        } else {
-            btnsElement[1].disabled = false;
-            inputElement.value = "";
-            inputElement.focus();
-        }
-    });
 };

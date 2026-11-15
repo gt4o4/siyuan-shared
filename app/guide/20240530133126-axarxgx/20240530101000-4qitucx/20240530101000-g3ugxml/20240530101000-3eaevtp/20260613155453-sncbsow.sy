@@ -6,7 +6,7 @@
 		"id": "20260613155453-sncbsow",
 		"title": "フィールドタイプ",
 		"type": "doc",
-		"updated": "20260803170332"
+		"updated": "20261024164212"
 	},
 	"Children": [
 		{
@@ -15,16 +15,12 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20260613155453-m8ocpbs",
-				"updated": "20260613155453"
+				"updated": "20261024163013"
 			},
 			"Children": [
 				{
-					"Type": "NodeHeadingC8hMarker",
-					"Data": "## "
-				},
-				{
 					"Type": "NodeText",
-					"Data": "概述"
+					"Data": "概要"
 				}
 			]
 		},
@@ -33,19 +29,18 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20260613155453-d3d2xsm",
-				"updated": "20260613155453"
+				"updated": "20261016191345"
 			},
 			"Children": [
 				{
 					"Type": "NodeText",
-					"Data": "次の表はすべてのフィールドタイプとその主な特性を示しています："
+					"Data": "次の表は、全フィールドタイプと主な特性の一覧です。「テーブル計算」は列の下部に表示する統計計算を指し、利用できる計算方法はフィールドタイプによって異なります。"
 				}
 			]
 		},
 		{
 			"ID": "20260613155453-r3i5h0s",
 			"Type": "NodeTable",
-			"Data": "| フィールドタイプ | 使用例 | ソート可 | フィルター可 | 集計可 | 特殊テンプレート接尾辞 |\n|---------|---------|--------|--------|--------|------------|\n| テキスト | タイトル、説明、任意のテキスト | √ | √ | × | — |\n| 数値 | 金額、数量、評価 | √ | √ | √ | — |\n| 日付 | 期限、誕生日、作成日 | √ | √ | × | `_end` |\n| セレクト | ステータス、カテゴリ、優先度 | √ | √ | × | — |\n| マルチセレクト | タグ、複数カテゴリ | √ | √ | × | `_str` |\n| URL | 外部リンク、参考資料 | × | √ | × | — |\n| メール | 連絡先メール | × | √ | × | — |\n| 電話 | 連絡先電話番号 | × | √ | × | — |\n| チェックボックス | 完了/未完了、有効/無効 | √ | √ | × | — |\n| 主キー（ブロック） | レコードの一意識別子、コンテンツブロックにバインド可 | √ | √ | × | `_created` |\n| アセット | 添付ファイル、画像、ファイル | × | × | × | — |\n| リレーション | データベース間のレコード関連付け | × | √ | × | — |\n| ロールアップ | リレーションフィールドに基づく統計計算 | √ | √ | √ | — |\n| テンプレート | デフォルト値の自動入力 | × | × | × | — |\n| 作成日時 | レコード作成日時（自動） | √ | √ | × | — |\n| 更新日時 | レコード最終更新日時（自動） | √ | √ | × | — |\n| 行番号 | 自動採番 | √ | √ | × | — |",
 			"TableAligns": [
 				0,
 				0,
@@ -56,7 +51,7 @@
 			],
 			"Properties": {
 				"id": "20260613155453-r3i5h0s",
-				"updated": "20260613155453"
+				"updated": "20261024163013"
 			},
 			"Children": [
 				{
@@ -106,7 +101,7 @@
 									"Children": [
 										{
 											"Type": "NodeText",
-											"Data": "集計可"
+											"Data": "テーブル計算"
 										}
 									]
 								},
@@ -175,7 +170,7 @@
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "×"
+									"Data": "√"
 								}
 							]
 						},
@@ -309,7 +304,7 @@
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "×"
+									"Data": "√"
 								}
 							]
 						},
@@ -377,7 +372,7 @@
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "×"
+									"Data": "√"
 								}
 							]
 						},
@@ -444,7 +439,7 @@
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "×"
+									"Data": "√"
 								}
 							]
 						},
@@ -494,7 +489,7 @@
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "×"
+									"Data": "√"
 								}
 							]
 						},
@@ -512,7 +507,7 @@
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "×"
+									"Data": "√"
 								}
 							]
 						},
@@ -561,7 +556,7 @@
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "×"
+									"Data": "√"
 								}
 							]
 						},
@@ -579,7 +574,7 @@
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "×"
+									"Data": "√"
 								}
 							]
 						},
@@ -628,7 +623,7 @@
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "×"
+									"Data": "√"
 								}
 							]
 						},
@@ -646,7 +641,7 @@
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "×"
+									"Data": "√"
 								}
 							]
 						},
@@ -713,7 +708,7 @@
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "×"
+									"Data": "√"
 								}
 							]
 						},
@@ -753,7 +748,7 @@
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "レコードの一意識別子、コンテンツブロックにバインド可"
+									"Data": "エントリの内容。ブロックにバインド可能"
 								}
 							]
 						},
@@ -780,7 +775,7 @@
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "×"
+									"Data": "√"
 								}
 							]
 						},
@@ -830,7 +825,7 @@
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "×"
+									"Data": "√"
 								}
 							]
 						},
@@ -839,7 +834,7 @@
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "×"
+									"Data": "√"
 								}
 							]
 						},
@@ -848,7 +843,7 @@
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "×"
+									"Data": "√"
 								}
 							]
 						},
@@ -897,7 +892,7 @@
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "×"
+									"Data": "√"
 								}
 							]
 						},
@@ -915,7 +910,7 @@
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "×"
+									"Data": "√"
 								}
 							]
 						},
@@ -1022,7 +1017,7 @@
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "デフォルト値の自動入力"
+									"Data": "同じエントリのフィールド値をテンプレートで計算"
 								}
 							]
 						},
@@ -1031,7 +1026,7 @@
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "×"
+									"Data": "√"
 								}
 							]
 						},
@@ -1040,7 +1035,7 @@
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "×"
+									"Data": "√"
 								}
 							]
 						},
@@ -1049,7 +1044,7 @@
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "×"
+									"Data": "√"
 								}
 							]
 						},
@@ -1116,7 +1111,7 @@
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "×"
+									"Data": "√"
 								}
 							]
 						},
@@ -1183,7 +1178,7 @@
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "×"
+									"Data": "√"
 								}
 							]
 						},
@@ -1223,25 +1218,7 @@
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "自動採番"
-								}
-							]
-						},
-						{
-							"Type": "NodeTableCell",
-							"Children": [
-								{
-									"Type": "NodeText",
-									"Data": "√"
-								}
-							]
-						},
-						{
-							"Type": "NodeTableCell",
-							"Children": [
-								{
-									"Type": "NodeText",
-									"Data": "√"
+									"Data": "現在のビューでの行位置"
 								}
 							]
 						},
@@ -1251,6 +1228,91 @@
 								{
 									"Type": "NodeText",
 									"Data": "×"
+								}
+							]
+						},
+						{
+							"Type": "NodeTableCell",
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "×"
+								}
+							]
+						},
+						{
+							"Type": "NodeTableCell",
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "×"
+								}
+							]
+						},
+						{
+							"Type": "NodeTableCell",
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "—"
+								}
+							]
+						}
+					]
+				},
+				{
+					"Type": "NodeTableRow",
+					"TableAligns": [
+						0,
+						0,
+						0,
+						0,
+						0,
+						0
+					],
+					"Children": [
+						{
+							"Type": "NodeTableCell",
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "位置"
+								}
+							]
+						},
+						{
+							"Type": "NodeTableCell",
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "場所名と緯度・経度"
+								}
+							]
+						},
+						{
+							"Type": "NodeTableCell",
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "√"
+								}
+							]
+						},
+						{
+							"Type": "NodeTableCell",
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "√"
+								}
+							]
+						},
+						{
+							"Type": "NodeTableCell",
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "√"
 								}
 							]
 						},
@@ -1277,7 +1339,7 @@
 			"Children": [
 				{
 					"Type": "NodeBlockquoteMarker",
-					"Data": "\u003e "
+					"Data": "> "
 				},
 				{
 					"ID": "20260613155453-zpj6fxo",
@@ -1602,7 +1664,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20260613155453-j6ujmmn",
-				"updated": "20260613155453"
+				"updated": "20261024164212"
 			},
 			"Children": [
 				{
@@ -1641,7 +1703,7 @@
 			},
 			"Properties": {
 				"id": "20260613155453-hxzdpjl",
-				"updated": "20260613155453"
+				"updated": "20261024164212"
 			},
 			"Children": [
 				{
@@ -1657,7 +1719,7 @@
 					},
 					"Properties": {
 						"id": "20260613155453-la8m9i5",
-						"updated": "20260613155453"
+						"updated": "20261024161058"
 					},
 					"Children": [
 						{
@@ -1665,17 +1727,12 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20260613155453-i9e75bi",
-								"updated": "20260613155453"
+								"updated": "20261024161058"
 							},
 							"Children": [
 								{
-									"Type": "NodeTextMark",
-									"TextMarkType": "strong",
-									"TextMarkTextContent": "設定"
-								},
-								{
 									"Type": "NodeText",
-									"Data": "：作成時に「複数行」をチェックすると複数行テキストボックスに切り替わります"
+									"Data": "設定：フィールド設定の折り返し表示で、長いテキストの表示方法を調整できます"
 								}
 							]
 						}
@@ -1694,7 +1751,7 @@
 					},
 					"Properties": {
 						"id": "20260613155453-bh825gx",
-						"updated": "20260613155453"
+						"updated": "20261024164212"
 					},
 					"Children": [
 						{
@@ -1702,26 +1759,62 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20260613155453-n1bglqm",
-								"updated": "20260613155453"
+								"updated": "20261024164212"
 							},
 							"Children": [
 								{
-									"Type": "NodeTextMark",
-									"TextMarkType": "strong",
-									"TextMarkTextContent": "編集"
-								},
-								{
 									"Type": "NodeText",
-									"Data": "：セルに直接入力。複数行モードでは "
+									"Data": "編集：テキストセルは空でも入力済みでも、1 回クリックするとエディターが開きます。新しい入力はグローバルな Markdown のインライン構文設定に従います。構文を無効にしても既存の書式は保持されます。セルにテキストを入力し、"
 								},
 								{
 									"Type": "NodeTextMark",
 									"TextMarkType": "code",
-									"TextMarkTextContent": "Shift+Enter"
+									"TextMarkTextContent": "Shift"
 								},
 								{
 									"Type": "NodeText",
-									"Data": " で改行"
+									"Data": "+"
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "code",
+									"TextMarkTextContent": "Enter"
+								},
+								{
+									"Type": "NodeText",
+									"Data": " で改行します"
+								}
+							]
+						}
+					]
+				},
+				{
+					"ID": "20261108121039-4122ec8",
+					"Type": "NodeListItem",
+					"Data": "-",
+					"ListData": {
+						"Tight": true,
+						"BulletChar": 45,
+						"Padding": 2,
+						"Marker": "LQ==",
+						"Num": -1
+					},
+					"Properties": {
+						"id": "20261108121039-4122ec8",
+						"updated": "20261108121039"
+					},
+					"Children": [
+						{
+							"ID": "20261108121039-0339165",
+							"Type": "NodeParagraph",
+							"Properties": {
+								"id": "20261108121039-0339165",
+								"updated": "20261108121039"
+							},
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "Markdown エクスポート：テキストフィールドのリスト、下線などの書式は表のセル内に HTML として保持されます。プレビューするアプリは Markdown の表内の HTML に対応している必要があります"
 								}
 							]
 						}
@@ -1809,7 +1902,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20260613155453-ok5spyv",
-				"updated": "20260613155453"
+				"updated": "20261024161058"
 			},
 			"Children": [
 				{
@@ -1848,7 +1941,7 @@
 			},
 			"Properties": {
 				"id": "20260613155453-h0e1qg2",
-				"updated": "20260613155453"
+				"updated": "20261024161058"
 			},
 			"Children": [
 				{
@@ -1864,7 +1957,7 @@
 					},
 					"Properties": {
 						"id": "20260613155453-ihzmr2p",
-						"updated": "20260613155453"
+						"updated": "20261024161058"
 					},
 					"Children": [
 						{
@@ -1872,17 +1965,12 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20260613155453-pvidelv",
-								"updated": "20260613155453"
+								"updated": "20261024161058"
 							},
 							"Children": [
 								{
-									"Type": "NodeTextMark",
-									"TextMarkType": "strong",
-									"TextMarkTextContent": "設定"
-								},
-								{
 									"Type": "NodeText",
-									"Data": "：作成時に数値形式を選択可能——整数、小数、パーセント、通貨"
+									"Data": "設定：フィールド設定で、通常の数値、パーセント、通貨などの表示形式を選びます"
 								}
 							]
 						}
@@ -2044,7 +2132,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20260613155453-u24im6o",
-				"updated": "20260613155453"
+				"updated": "20261009120841"
 			},
 			"Children": [
 				{
@@ -2062,12 +2150,12 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20260613155453-gge1qu8",
-				"updated": "20260613155453"
+				"updated": "20261009120841"
 			},
 			"Children": [
 				{
 					"Type": "NodeText",
-					"Data": "日付または日時の保存に使用します。"
+					"Data": "日付または日時の保存に使用します。グレゴリオ暦と旧暦（中国暦）に対応しています。"
 				}
 			]
 		},
@@ -3374,7 +3462,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20260613155453-c7r4fc8",
-				"updated": "20260613155453"
+				"updated": "20261024164212"
 			},
 			"Children": [
 				{
@@ -3392,12 +3480,12 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20260613155453-tzmqz46",
-				"updated": "20260613155453"
+				"updated": "20261024162311"
 			},
 			"Children": [
 				{
 					"Type": "NodeText",
-					"Data": "データベースの各レコードの一意識別子です。コンテンツブロックタイプのレコードでは、主キーが対応するコンテンツブロックにバインドされ、構造化データと非構造化コンテンツを接続します。各テーブルには必ず一つの主キーフィールドが必要です。"
+					"Data": "主キーフィールドはエントリの主な内容を表示し、ブロックにバインドして構造化フィールドとノート本文を結び付けることもできます。データベースには主キーフィールドがひとつありますが、表示テキストは重複でき、一意の ID ではありません。"
 				}
 			]
 		},
@@ -3413,7 +3501,7 @@
 			},
 			"Properties": {
 				"id": "20260613155453-hrd5jzx",
-				"updated": "20260613155453"
+				"updated": "20261024164212"
 			},
 			"Children": [
 				{
@@ -3466,7 +3554,7 @@
 					},
 					"Properties": {
 						"id": "20260613155453-9no0vax",
-						"updated": "20260613155453"
+						"updated": "20261024162311"
 					},
 					"Children": [
 						{
@@ -3500,7 +3588,7 @@
 							},
 							"Properties": {
 								"id": "20260613155453-cc5w08v",
-								"updated": "20260613155453"
+								"updated": "20261024162311"
 							},
 							"Children": [
 								{
@@ -3548,7 +3636,7 @@
 									},
 									"Properties": {
 										"id": "20260613155453-kmz5pof",
-										"updated": "20260613155453"
+										"updated": "20261024162311"
 									},
 									"Children": [
 										{
@@ -3556,12 +3644,12 @@
 											"Type": "NodeParagraph",
 											"Properties": {
 												"id": "20260613155453-vmzzhep",
-												"updated": "20260613155453"
+												"updated": "20261024162311"
 											},
 											"Children": [
 												{
 													"Type": "NodeText",
-													"Data": "非コンテンツブロックレコード：ビューに直接エントリを追加し、主キーはシステムが自動生成"
+													"Data": "未バインドのエントリ：ビューで直接追加し、主キーのテキストを編集できます。エントリ ID は自動生成されます"
 												}
 											]
 										}
@@ -3621,7 +3709,7 @@
 					},
 					"Properties": {
 						"id": "20260613155453-yjadt4n",
-						"updated": "20260613155453"
+						"updated": "20261024164212"
 					},
 					"Children": [
 						{
@@ -3629,17 +3717,12 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20260613155453-62y0q9n",
-								"updated": "20260613155453"
+								"updated": "20261024164212"
 							},
 							"Children": [
 								{
-									"Type": "NodeTextMark",
-									"TextMarkType": "strong",
-									"TextMarkTextContent": "注意事項"
-								},
-								{
 									"Type": "NodeText",
-									"Data": "：セルから直接バインド関係を変更することはできません。コンテンツブロックが削除されると、対応するレコードも削除されます"
+									"Data": "バインドの管理：エントリの属性パネルにあるバインド／再バインドボタンで対象ブロックを変更できます。バインド先のブロックを削除すると、データベースのエントリも削除されます"
 								}
 							]
 						}
@@ -3653,7 +3736,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20260613155453-a7dzotw",
-				"updated": "20260613155453"
+				"updated": "20261016191345"
 			},
 			"Children": [
 				{
@@ -3692,7 +3775,7 @@
 			},
 			"Properties": {
 				"id": "20260613155453-bz67chh",
-				"updated": "20260613155453"
+				"updated": "20261016191345"
 			},
 			"Children": [
 				{
@@ -3932,7 +4015,7 @@
 					},
 					"Properties": {
 						"id": "20260613155453-3pxnrjq",
-						"updated": "20260613155453"
+						"updated": "20261016191345"
 					},
 					"Children": [
 						{
@@ -3940,7 +4023,7 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20260613155453-kdri03o",
-								"updated": "20260613155453"
+								"updated": "20261016191345"
 							},
 							"Children": [
 								{
@@ -3950,7 +4033,7 @@
 								},
 								{
 									"Type": "NodeText",
-									"Data": "：マルチアセットフィールドは複数ファイルの保存に対応。フィルターとソートは非対応"
+									"Data": "：アセットフィールドは複数ファイルを保存でき、フィルターとソートに対応します。表示テンプレートを設定すると、その結果でグループ化することもできます"
 								}
 							]
 						}
@@ -3964,7 +4047,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20260613155453-h8d1o9u",
-				"updated": "20260613155453"
+				"updated": "20261024162311"
 			},
 			"Children": [
 				{
@@ -4003,7 +4086,7 @@
 			},
 			"Properties": {
 				"id": "20260613155453-0up5lka",
-				"updated": "20260613155453"
+				"updated": "20261024162311"
 			},
 			"Children": [
 				{
@@ -4211,7 +4294,7 @@
 					},
 					"Properties": {
 						"id": "20260613155453-3mrha9n",
-						"updated": "20260613155453"
+						"updated": "20261024162311"
 					},
 					"Children": [
 						{
@@ -4219,17 +4302,12 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20260613155453-9m3sads",
-								"updated": "20260613155453"
+								"updated": "20261024162311"
 							},
 							"Children": [
 								{
-									"Type": "NodeTextMark",
-									"TextMarkType": "strong",
-									"TextMarkTextContent": "フィルター"
-								},
-								{
 									"Type": "NodeText",
-									"Data": "：値あり/なしのフィルターに対応"
+									"Data": "フィルタ：関連エントリを含む・含まない、空・空でないなどの条件に対応します"
 								}
 							]
 						}
@@ -4697,7 +4775,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20260613155453-wkp7gx0",
-				"updated": "20260803170332"
+				"updated": "20261016191345"
 			},
 			"Children": [
 				{
@@ -4715,12 +4793,12 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20260613155453-86jm133",
-				"updated": "20260613155453"
+				"updated": "20261016191345"
 			},
 			"Children": [
 				{
 					"Type": "NodeText",
-					"Data": "新規エントリ作成時にデフォルト値を自動入力します。"
+					"Data": "ビューの描画時に、テンプレートを使って同じエントリの他のフィールド値を読み取り、計算して表示します。"
 				}
 			]
 		},
@@ -4736,7 +4814,7 @@
 			},
 			"Properties": {
 				"id": "20260613155453-w7y2gve",
-				"updated": "20260803170332"
+				"updated": "20261016191345"
 			},
 			"Children": [
 				{
@@ -4752,7 +4830,7 @@
 					},
 					"Properties": {
 						"id": "20260613155453-mizwy7t",
-						"updated": "20260613155453"
+						"updated": "20261016191345"
 					},
 					"Children": [
 						{
@@ -4760,7 +4838,7 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20260613155453-pf2uql1",
-								"updated": "20260613155453"
+								"updated": "20261016191345"
 							},
 							"Children": [
 								{
@@ -4770,7 +4848,7 @@
 								},
 								{
 									"Type": "NodeText",
-									"Data": "：作成時にデフォルト値テキストを記述可能。テンプレート変数構文に対応"
+									"Data": "：フィールド設定に、テンプレート変数を使って内容を計算・表示するテンプレートを記述します"
 								}
 							]
 						}
@@ -4789,7 +4867,7 @@
 					},
 					"Properties": {
 						"id": "20260613155453-s8h5kuk",
-						"updated": "20260613155453"
+						"updated": "20261016191345"
 					},
 					"Children": [
 						{
@@ -4797,17 +4875,17 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20260613155453-6a8mmls",
-								"updated": "20260613155453"
+								"updated": "20261016191345"
 							},
 							"Children": [
 								{
 									"Type": "NodeTextMark",
 									"TextMarkType": "strong",
-									"TextMarkTextContent": "自動入力ルール"
+									"TextMarkTextContent": "計算ルール"
 								},
 								{
 									"Type": "NodeText",
-									"Data": "：新規エントリ作成時、テンプレートフィールドの値がプリセット内容で自動入力されます"
+									"Data": "：結果はビューの描画時に再計算され、テンプレートフィールドのセル値は直接編集できません"
 								}
 							]
 						}
@@ -4872,7 +4950,7 @@
 					},
 					"Properties": {
 						"id": "20260613155453-bi2ilu7",
-						"updated": "20260803170332"
+						"updated": "20261016191345"
 					},
 					"Children": [
 						{
@@ -4880,7 +4958,7 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20260613155453-vdj6lin",
-								"updated": "20260803170332"
+								"updated": "20261016191345"
 							},
 							"Children": [
 								{
@@ -4890,7 +4968,7 @@
 								},
 								{
 									"Type": "NodeText",
-									"Data": "：「テンプレートスニペット」とは異なり、このテンプレートはデータベースエントリのデフォルト値入力のみに作用します。テンプレートフィールド内の HTML コンテンツはデフォルトでサニタイズされます。スクリプトを実行するには、"
+									"Data": "：テンプレートフィールドは「テンプレートスニペット」と同じ構文を使います。新規エントリのデフォルト値を事前入力するには、別途「項目テンプレート」を設定してください。テンプレートフィールド内の HTML コンテンツはデフォルトでサニタイズされます。スクリプトを実行するには、"
 								},
 								{
 									"Type": "NodeTextMark",
@@ -4899,7 +4977,11 @@
 								},
 								{
 									"Type": "NodeText",
-									"Data": "​ - "
+									"Data": "​"
+								},
+								{
+									"Type": "NodeText",
+									"Data": " - "
 								},
 								{
 									"Type": "NodeTextMark",
@@ -4908,7 +4990,11 @@
 								},
 								{
 									"Type": "NodeText",
-									"Data": "​ - "
+									"Data": "​"
+								},
+								{
+									"Type": "NodeText",
+									"Data": " - "
 								},
 								{
 									"Type": "NodeTextMark",
@@ -4917,7 +5003,11 @@
 								},
 								{
 									"Type": "NodeText",
-									"Data": "​ - "
+									"Data": "​"
+								},
+								{
+									"Type": "NodeText",
+									"Data": " - "
 								},
 								{
 									"Type": "NodeTextMark",
@@ -4926,7 +5016,7 @@
 								},
 								{
 									"Type": "NodeText",
-									"Data": " ​を有効にしてください。ただし、クロスサイトスクリプティング（XSS）攻撃を避けるため、コードが安全であることを確認してから有効にしてください。"
+									"Data": "​ を有効にしてください。ただし、クロスサイトスクリプティング（XSS）攻撃を避けるため、コードが安全であることを確認してから有効にしてください"
 								}
 							]
 						}
@@ -4940,7 +5030,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20260613155453-iepetzj",
-				"updated": "20260613155453"
+				"updated": "20261024162311"
 			},
 			"Children": [
 				{
@@ -4958,12 +5048,12 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20260613155453-pfwun0y",
-				"updated": "20260613155453"
+				"updated": "20261024162311"
 			},
 			"Children": [
 				{
 					"Type": "NodeText",
-					"Data": "エントリの作成日時を自動記録します。"
+					"Data": "エントリの作成日時を表示します。ブロックにバインドしている場合は、そのブロックの作成日時を使います。"
 				}
 			]
 		},
@@ -4979,7 +5069,7 @@
 			},
 			"Properties": {
 				"id": "20260613155453-s1dqhyi",
-				"updated": "20260613155453"
+				"updated": "20261024162311"
 			},
 			"Children": [
 				{
@@ -5106,7 +5196,7 @@
 					},
 					"Properties": {
 						"id": "20260613155453-d98vj5w",
-						"updated": "20260613155453"
+						"updated": "20261024162311"
 					},
 					"Children": [
 						{
@@ -5114,17 +5204,12 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20260613155453-2ua4ocj",
-								"updated": "20260613155453"
+								"updated": "20261024162311"
 							},
 							"Children": [
 								{
-									"Type": "NodeTextMark",
-									"TextMarkType": "strong",
-									"TextMarkTextContent": "注意事項"
-								},
-								{
 									"Type": "NodeText",
-									"Data": "：レコード作成後、この値は固定されます"
+									"Data": "注意：ブロックへのバインドや再バインドを行うと、表示日時はバインド先の日時に変わります"
 								}
 							]
 						}
@@ -5138,7 +5223,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20260613155453-poagye3",
-				"updated": "20260613155453"
+				"updated": "20261024162311"
 			},
 			"Children": [
 				{
@@ -5156,12 +5241,12 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20260613155453-94l1qr3",
-				"updated": "20260613155453"
+				"updated": "20261024162311"
 			},
 			"Children": [
 				{
 					"Type": "NodeText",
-					"Data": "エントリの最終更新日時を自動記録します。"
+					"Data": "エントリの更新日時を表示します。ブロックにバインドしている場合は、そのブロックの更新日時を使います。"
 				}
 			]
 		},
@@ -5299,7 +5384,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20260613155453-9mgsavw",
-				"updated": "20260613155453"
+				"updated": "20261016191345"
 			},
 			"Children": [
 				{
@@ -5317,12 +5402,12 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20260613155453-5m01icd",
-				"updated": "20260613155453"
+				"updated": "20261016191345"
 			},
 			"Children": [
 				{
 					"Type": "NodeText",
-					"Data": "自動採番です。"
+					"Data": "現在のビューでのエントリの表示位置に基づいて番号を表示します。"
 				}
 			]
 		},
@@ -5338,7 +5423,7 @@
 			},
 			"Properties": {
 				"id": "20260613155453-zqgzapc",
-				"updated": "20260613155453"
+				"updated": "20261016191345"
 			},
 			"Children": [
 				{
@@ -5391,7 +5476,7 @@
 					},
 					"Properties": {
 						"id": "20260613155453-sylr4wb",
-						"updated": "20260613155453"
+						"updated": "20261016191345"
 					},
 					"Children": [
 						{
@@ -5399,7 +5484,7 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20260613155453-kmuapo4",
-								"updated": "20260613155453"
+								"updated": "20261016191345"
 							},
 							"Children": [
 								{
@@ -5409,7 +5494,7 @@
 								},
 								{
 									"Type": "NodeText",
-									"Data": "：1から自動採番"
+									"Data": "：現在の表示順に 1 から番号を表示します"
 								}
 							]
 						}
@@ -5428,7 +5513,7 @@
 					},
 					"Properties": {
 						"id": "20260613155453-qfszih9",
-						"updated": "20260613155453"
+						"updated": "20261016191345"
 					},
 					"Children": [
 						{
@@ -5436,7 +5521,7 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20260613155453-kpxurdw",
-								"updated": "20260613155453"
+								"updated": "20261016191345"
 							},
 							"Children": [
 								{
@@ -5446,7 +5531,7 @@
 								},
 								{
 									"Type": "NodeText",
-									"Data": "：数値でソート"
+									"Data": "：行番号フィールドでのソートには対応していません"
 								}
 							]
 						}
@@ -5465,7 +5550,7 @@
 					},
 					"Properties": {
 						"id": "20260613155453-8o2iv52",
-						"updated": "20260613155453"
+						"updated": "20261016191345"
 					},
 					"Children": [
 						{
@@ -5473,7 +5558,7 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20260613155453-2wslnio",
-								"updated": "20260613155453"
+								"updated": "20261016191345"
 							},
 							"Children": [
 								{
@@ -5483,7 +5568,7 @@
 								},
 								{
 									"Type": "NodeText",
-									"Data": "：より大きい/より小さい/等しいなどの数値比較に対応"
+									"Data": "：行番号フィールドでのフィルターには対応していません"
 								}
 							]
 						}
@@ -5502,7 +5587,7 @@
 					},
 					"Properties": {
 						"id": "20260613155453-rqssxt3",
-						"updated": "20260613155453"
+						"updated": "20261016191345"
 					},
 					"Children": [
 						{
@@ -5510,7 +5595,7 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20260613155453-71d4yhl",
-								"updated": "20260613155453"
+								"updated": "20261016191345"
 							},
 							"Children": [
 								{
@@ -5520,11 +5605,132 @@
 								},
 								{
 									"Type": "NodeText",
-									"Data": "：行番号はエントリ作成時に割り当てられ、途中のエントリを削除しても後続のエントリが再採番されることはありません"
+									"Data": "：ソート、フィルター、エントリの削除によって表示位置が変わると、行番号も変わります。永続的な識別子としては使用できません"
 								}
 							]
 						}
 					]
+				}
+			]
+		},
+		{
+			"ID": "20261009034010-6j4iniw",
+			"Type": "NodeHeading",
+			"HeadingLevel": 2,
+			"Properties": {
+				"id": "20261009034010-6j4iniw",
+				"updated": "20261024161816"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "位置フィールド"
+				}
+			]
+		},
+		{
+			"ID": "20261009034010-x0x9tob",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261009034010-x0x9tob",
+				"updated": "20261012014859"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "「位置」タイプのフィールドを追加し、セルをクリックして名前と WGS84 座標を編集します。名前は省略できます。経度と緯度は十進数の度数で両方を指定します。経度は -180 から 180、緯度は -90 から 90 の範囲で、ゼロも有効です。両方の座標を空欄にすると、名前だけを保存できます。座標は自動変換されません。"
+				}
+			]
+		},
+		{
+			"ID": "20261009034010-1609sdo",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261009034010-1609sdo",
+				"updated": "20261012014859"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "経度と緯度は、それぞれの入力欄に入力します。例えば、経度には 116.4074、緯度には 39.9042 を入力します。名前だけを変更すると出典テキストは保持されます。座標を変更すると、出典テキストは消去されます。"
+				}
+			]
+		},
+		{
+			"ID": "20261009034010-fry67po",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261009034010-fry67po",
+				"updated": "20261024161816"
+			},
+			"Children": [
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "保存"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " で変更を適用し、"
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "キャンセル"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " で破棄します。"
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "消去"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " は位置の値を削除します。テキストのフィルターとソートには、名前、座標、固定の WGS84 ラベルを組み合わせたテキストを使用します。アプリ内では経度、緯度の順に表示し、プレーンテキストのコピーとエクスポートでは "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "名前; 緯度, 経度 [WGS84]"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " の形式で出力します。"
+				}
+			]
+		},
+		{
+			"ID": "20261024161816-ln68wsu",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261024161816-ln68wsu",
+				"updated": "20261024161816"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "名前がない場合は名前とセミコロンを省略します。このテキスト、または WGS84 の "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "緯度, 経度"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " の組を位置セルに貼り付けられます。例えば "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "北京; 39.9042, 116.4074 [WGS84]"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " には名前と座標が含まれます。データベース内の構造化コピーは、経度と緯度それぞれの名前付きフィールドの値を保持します。"
 				}
 			]
 		},
@@ -5534,7 +5740,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20260613155453-6mat9xa",
-				"updated": "20260613194142"
+				"updated": "20261016191345"
 			},
 			"Children": [
 				{
@@ -5559,7 +5765,7 @@
 			},
 			"Properties": {
 				"id": "20260613155453-0o2rj30",
-				"updated": "20260613155453"
+				"updated": "20261016191345"
 			},
 			"Children": [
 				{
@@ -5827,7 +6033,7 @@
 					},
 					"Properties": {
 						"id": "20260613155453-v6h1zhk",
-						"updated": "20260613155453"
+						"updated": "20261016191345"
 					},
 					"Children": [
 						{
@@ -5835,12 +6041,12 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20260613155453-i8nekrn",
-								"updated": "20260613155453"
+								"updated": "20261016191345"
 							},
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "順序付きの番号が必要 → "
+									"Data": "現在の行位置を表示したい → "
 								},
 								{
 									"Type": "NodeTextMark",
@@ -5901,7 +6107,7 @@
 					},
 					"Properties": {
 						"id": "20260613155453-lmlp653",
-						"updated": "20260613155453"
+						"updated": "20261016191345"
 					},
 					"Children": [
 						{
@@ -5909,17 +6115,21 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20260613155453-qloc83r",
-								"updated": "20260613155453"
+								"updated": "20261016191345"
 							},
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "新規エントリにデフォルト値を事前入力 → "
+									"Data": "同じエントリの他のフィールドから内容を動的に計算 → "
 								},
 								{
 									"Type": "NodeTextMark",
 									"TextMarkType": "strong",
-									"TextMarkTextContent": "テンプレート"
+									"TextMarkTextContent": "テンプレートフィールド"
+								},
+								{
+									"Type": "NodeText",
+									"Data": "。新規エントリにデフォルト値を事前入力 → 項目テンプレート"
 								}
 							]
 						}

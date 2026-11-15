@@ -1,12 +1,12 @@
 {
 	"ID": "20200905090211-2vixtlf",
-	"Spec": "2",
+	"Spec": "3",
 	"Type": "NodeDocument",
 	"Properties": {
 		"id": "20200905090211-2vixtlf",
 		"title": "内容块类型",
 		"type": "doc",
-		"updated": "20260803171606"
+		"updated": "20261107131528"
 	},
 	"Children": [
 		{
@@ -15,7 +15,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20210104090624-fkv1xsc",
-				"updated": "20260425181343"
+				"updated": "20261016111305"
 			},
 			"Children": [
 				{
@@ -53,7 +53,7 @@
 			"Properties": {
 				"colgroup": "||",
 				"id": "20210104090624-c5bu25o",
-				"updated": "20260425181343"
+				"updated": "20261016111305"
 			},
 			"Children": [
 				{
@@ -916,6 +916,144 @@
 										},
 										{
 											"Type": "NodeLinkText",
+											"Data": "mindmap-list"
+										},
+										{
+											"Type": "NodeCloseBracket"
+										},
+										{
+											"Type": "NodeOpenParen"
+										},
+										{
+											"Type": "NodeLinkDest",
+											"Data": "assets/mindmap-list-20260921215248-e039c4.svg"
+										},
+										{
+											"Type": "NodeCloseParen"
+										}
+									]
+								},
+								{
+									"Type": "NodeText",
+									"Data": "​"
+								}
+							]
+						},
+						{
+							"Type": "NodeTableCell",
+							"Data": "td",
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "思维导图块"
+								}
+							]
+						},
+						{
+							"Type": "NodeTableCell",
+							"Data": "td",
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "容器块"
+								}
+							]
+						}
+					]
+				},
+				{
+					"Type": "NodeTableRow",
+					"Data": "tr",
+					"Children": [
+						{
+							"Type": "NodeTableCell",
+							"Data": "td",
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "​​​​"
+								},
+								{
+									"Type": "NodeImage",
+									"Data": "span",
+									"Children": [
+										{
+											"Type": "NodeBang"
+										},
+										{
+											"Type": "NodeOpenBracket"
+										},
+										{
+											"Type": "NodeLinkText",
+											"Data": "listitem-block"
+										},
+										{
+											"Type": "NodeCloseBracket"
+										},
+										{
+											"Type": "NodeOpenParen"
+										},
+										{
+											"Type": "NodeLinkDest",
+											"Data": "assets/listitem-block-20260425175517-4uac18s.png"
+										},
+										{
+											"Type": "NodeCloseParen"
+										}
+									]
+								},
+								{
+									"Type": "NodeText",
+									"Data": "​"
+								}
+							]
+						},
+						{
+							"Type": "NodeTableCell",
+							"Data": "td",
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "思维导图项块"
+								}
+							]
+						},
+						{
+							"Type": "NodeTableCell",
+							"Data": "td",
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "容器块"
+								}
+							]
+						}
+					]
+				},
+				{
+					"Type": "NodeTableRow",
+					"Data": "tr",
+					"Children": [
+						{
+							"Type": "NodeTableCell",
+							"Data": "td",
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "​​​​"
+								},
+								{
+									"Type": "NodeImage",
+									"Data": "span",
+									"Children": [
+										{
+											"Type": "NodeBang"
+										},
+										{
+											"Type": "NodeOpenBracket"
+										},
+										{
+											"Type": "NodeLinkText",
 											"Data": "listitem-block"
 										},
 										{
@@ -1112,6 +1250,126 @@
 							"Data": "td",
 							"Children": [
 								{
+									"Type": "NodeImage",
+									"Children": [
+										{
+											"Type": "NodeBang"
+										},
+										{
+											"Type": "NodeOpenBracket"
+										},
+										{
+											"Type": "NodeLinkText",
+											"Data": "tabs-block"
+										},
+										{
+											"Type": "NodeCloseBracket"
+										},
+										{
+											"Type": "NodeOpenParen"
+										},
+										{
+											"Type": "NodeLinkDest",
+											"Data": "assets/tabs-block-20260906010000-kzrxtfp.png"
+										},
+										{
+											"Type": "NodeCloseParen"
+										}
+									]
+								}
+							]
+						},
+						{
+							"Type": "NodeTableCell",
+							"Data": "td",
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "页签块"
+								}
+							]
+						},
+						{
+							"Type": "NodeTableCell",
+							"Data": "td",
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "容器块"
+								}
+							]
+						}
+					]
+				},
+				{
+					"Type": "NodeTableRow",
+					"Data": "tr",
+					"Children": [
+						{
+							"Type": "NodeTableCell",
+							"Data": "td",
+							"Children": [
+								{
+									"Type": "NodeImage",
+									"Children": [
+										{
+											"Type": "NodeBang"
+										},
+										{
+											"Type": "NodeOpenBracket"
+										},
+										{
+											"Type": "NodeLinkText",
+											"Data": "tab-item-block"
+										},
+										{
+											"Type": "NodeCloseBracket"
+										},
+										{
+											"Type": "NodeOpenParen"
+										},
+										{
+											"Type": "NodeLinkDest",
+											"Data": "assets/tab-item-block-20260906010000-gdmnqvw.png"
+										},
+										{
+											"Type": "NodeCloseParen"
+										}
+									]
+								}
+							]
+						},
+						{
+							"Type": "NodeTableCell",
+							"Data": "td",
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "页签项块"
+								}
+							]
+						},
+						{
+							"Type": "NodeTableCell",
+							"Data": "td",
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "容器块"
+								}
+							]
+						}
+					]
+				},
+				{
+					"Type": "NodeTableRow",
+					"Data": "tr",
+					"Children": [
+						{
+							"Type": "NodeTableCell",
+							"Data": "td",
+							"Children": [
+								{
 									"Type": "NodeText",
 									"Data": "​​​​"
 								},
@@ -1249,7 +1507,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20210104090624-9qgquxh",
-				"updated": "20260803171606"
+				"updated": "20261101144749"
 			},
 			"Children": [
 				{
@@ -1337,7 +1595,7 @@
 			"HeadingLevel": 3,
 			"Properties": {
 				"id": "20210104090624-zdi6qkg",
-				"updated": "20260803163440"
+				"updated": "20261024163013"
 			},
 			"Children": [
 				{
@@ -1388,7 +1646,7 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20240513100725-fefiba9",
-				"updated": "20260803163440"
+				"updated": "20261024163013"
 			},
 			"Children": [
 				{
@@ -1402,7 +1660,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​ - "
+					"Data": " - "
 				},
 				{
 					"Type": "NodeTextMark",
@@ -1411,7 +1669,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​ - "
+					"Data": " - "
 				},
 				{
 					"Type": "NodeTextMark",
@@ -1420,7 +1678,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": " ​ 后，整体的标题层级在导出时才符合正常逻辑。"
+					"Data": " 后，整体的标题层级在导出时才符合正常逻辑。"
 				}
 			]
 		},
@@ -1524,7 +1782,7 @@
 			"HeadingLevel": 3,
 			"Properties": {
 				"id": "20210104090624-erf17it",
-				"updated": "20260425180351"
+				"updated": "20261024162311"
 			},
 			"Children": [
 				{
@@ -1711,12 +1969,54 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20260222161831-2ijwkjg",
-				"updated": "20260222162357"
+				"updated": "20261024162311"
 			},
 			"Children": [
 				{
 					"Type": "NodeText",
-					"Data": "如果表格包含合并的单元格或标题，则会以 HTML 形式复制或导出为 Markdown。"
+					"Data": "表格包含合并单元格或多行表头时，复制和导出的 Markdown 会使用 HTML 表格保留结构。"
+				}
+			]
+		},
+		{
+			"ID": "20261017142635-4dbby6c",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261017142635-4dbby6c",
+				"updated": "20261017170001"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "移动端点击单元格可编辑文字。长按尚未进入编辑的单元格可进入区域选择，也可使用键盘工具栏的块菜单。拖动选区的两个角点手柄可扩大或缩小范围，拖到视口边缘可自动滚动表格。滑动单元格内容仍用于滚动；编辑文字时，长按仍用于选字。"
+				}
+			]
+		},
+		{
+			"ID": "20261017142635-bcg68ni",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261017142635-bcg68ni",
+				"updated": "20261017174053"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "点击单元格后，其所在行和列的边框上会显示蓝色点阵手柄。点击列上方或行左侧的手柄可选中整列或整行。在顶部工具栏开启「多选」后，可点选增减不连续的单元格、行或列。通过「更多」可合并单元格、设置样式和对齐，或批量操作所选行列；点击「关闭」退出选择。"
+				}
+			]
+		},
+		{
+			"ID": "20261017142635-oe1mo6v",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261017142635-oe1mo6v",
+				"updated": "20261017171205"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "点击任意一行的列分隔线使其高亮，再横向拖动高亮线调整列宽；纵向滑动仍用于滚动表格，点击线外退出调整。选中列后可通过「更多」按内容自适应或均分列宽。点击表格边缘的加号可添加行列，拖动边缘控件可批量增加行列或移除末尾的空白行列。收缩表格时会保留非空内容和合并单元格。表格超出可视宽度时，添加列及右下角控件会停靠在可视区域右侧；桌面端将鼠标移到该边缘，移动端点击单元格即可显示。新增列仍追加到整张表格末尾，操作完成后会自动滚动展示。右侧操作留白随表格内容滚动，仅在末尾出现。"
 				}
 			]
 		},
@@ -1766,7 +2066,7 @@
 			"HeadingLevel": 3,
 			"Properties": {
 				"id": "20220429115141-c7omuyq",
-				"updated": "20260803171606"
+				"updated": "20261024163013"
 			},
 			"Children": [
 				{
@@ -1778,7 +2078,7 @@
 		{
 			"ID": "20220429115137-wr4okkr",
 			"Type": "NodeHTMLBlock",
-			"Data": "\u003cruby\u003e\n你\u003crt\u003enǐ\u003c/rt\u003e\n　好\u003crt\u003e　hǎo\u003c/rt\u003e\n　世\u003crt\u003e　shì\u003c/rt\u003e\n　界\u003crt\u003e　jiè\u003c/rt\u003e\n\u003c/ruby\u003e\u003cbr\u003e\nHello World",
+			"Data": "<ruby>\n你<rt>nǐ</rt>\n　好<rt>　hǎo</rt>\n　世<rt>　shì</rt>\n　界<rt>　jiè</rt>\n</ruby><br>\nHello World",
 			"Properties": {
 				"id": "20220429115137-wr4okkr",
 				"updated": "20220429115137"
@@ -1813,7 +2113,7 @@
 			"ListData": {},
 			"Properties": {
 				"id": "20240427230507-yeaxqbs",
-				"updated": "20260803171606"
+				"updated": "20261024163013"
 			},
 			"Children": [
 				{
@@ -1825,7 +2125,7 @@
 					},
 					"Properties": {
 						"id": "20240427230507-x75u8vb",
-						"updated": "20260803171606"
+						"updated": "20261024163013"
 					},
 					"Children": [
 						{
@@ -1833,7 +2133,7 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20240427230507-i73h3ru",
-								"updated": "20260803171606"
+								"updated": "20261024163013"
 							},
 							"Children": [
 								{
@@ -1863,7 +2163,7 @@
 								},
 								{
 									"Type": "NodeText",
-									"Data": "​ - "
+									"Data": " - "
 								},
 								{
 									"Type": "NodeTextMark",
@@ -1872,7 +2172,7 @@
 								},
 								{
 									"Type": "NodeText",
-									"Data": "​ - "
+									"Data": " - "
 								},
 								{
 									"Type": "NodeTextMark",
@@ -1881,7 +2181,7 @@
 								},
 								{
 									"Type": "NodeText",
-									"Data": "​，但请确认代码安全后再开启，以免遭遇跨站脚本攻击（XSS）"
+									"Data": "，但请确认代码安全后再开启，以免遭遇跨站脚本攻击（XSS）"
 								}
 							]
 						}
@@ -1914,7 +2214,7 @@
 								{
 									"Type": "NodeTextMark",
 									"TextMarkType": "code",
-									"TextMarkTextContent": "\u0026lt;div\u0026gt;\u0026lt;/div\u0026gt;"
+									"TextMarkTextContent": "&lt;div&gt;&lt;/div&gt;"
 								},
 								{
 									"Type": "NodeText",
@@ -2418,6 +2718,74 @@
 			]
 		},
 		{
+			"ID": "20260921215916-j34ty5i",
+			"Type": "NodeHeading",
+			"HeadingLevel": 3,
+			"Properties": {
+				"id": "20260921215916-j34ty5i",
+				"updated": "20261016111305"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "思维导图块"
+				}
+			]
+		},
+		{
+			"ID": "20260921215248-f1u8uzo",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20260921215248-f1u8uzo",
+				"updated": "20260923221935"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "思维导图块是独立的块类型。可以将无序列表、有序列表或任务列表转换为思维导图块，也可以转换回列表。转换会保留列表项内容、编号和任务状态。以列表形式保存的旧思维导图会在打开文档进行编辑时升级。"
+				}
+			]
+		},
+		{
+			"ID": "20261016111305-t5hg0oj",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261016111305-t5hg0oj",
+				"updated": "20261016111305"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "思维导图块只能包含思维导图项块。每个思维导图项都有独立的块 ID，可包含普通内容块及嵌套思维导图，但不能直接包含列表块、列表项块或其他思维导图项块。"
+				}
+			]
+		},
+		{
+			"ID": "20261012014537-ma26lwg",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261012014537-ma26lwg",
+				"updated": "20261012014859"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "详见"
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "block-ref",
+					"TextMarkBlockRefID": "20210104091228-wdpx6ev",
+					"TextMarkBlockRefSubtype": "s",
+					"TextMarkTextContent": "思维导图块"
+				},
+				{
+					"Type": "NodeText",
+					"Data": "。"
+				}
+			]
+		},
+		{
 			"ID": "20210104090624-n9anlgh",
 			"Type": "NodeHeading",
 			"HeadingLevel": 3,
@@ -2545,7 +2913,7 @@
 			"Children": [
 				{
 					"Type": "NodeBlockquoteMarker",
-					"Data": "\u003e "
+					"Data": "> "
 				},
 				{
 					"ID": "20210104090624-o0wtf6v",
@@ -2654,12 +3022,149 @@
 			]
 		},
 		{
+			"ID": "20260905124213-9etkynq",
+			"Type": "NodeHeading",
+			"Properties": {
+				"id": "20260905124213-9etkynq",
+				"updated": "20260906202104"
+			},
+			"HeadingLevel": 3,
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "页签块"
+				}
+			]
+		},
+		{
+			"ID": "20260905124213-6mc5n1n",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20260905124213-6mc5n1n",
+				"updated": "20260906202104"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "页签块将内容分组显示，点击标题切换，拖拽标题排序，双击标题重命名。支持顶部或左侧布局，编辑模式的选中状态会保存并同步；锁定编辑的文档会在本地记住阅读位置，不修改默认页签。"
+				}
+			]
+		},
+		{
+			"ID": "20260906003122-7k5crhi",
+			"Type": "NodeTabs",
+			"Properties": {
+				"id": "20260906003122-7k5crhi",
+				"updated": "20260906003122",
+				"tabs-active-id": "20260906003122-jpiy4iu"
+			},
+			"Children": [
+				{
+					"ID": "20260906003122-jpiy4iu",
+					"Type": "NodeTabItem",
+					"Properties": {
+						"id": "20260906003122-jpiy4iu",
+						"updated": "20260906003122"
+					},
+					"Children": [
+						{
+							"ID": "20260906003122-71zp2pa",
+							"Type": "NodeParagraph",
+							"Properties": {
+								"id": "20260906003122-71zp2pa",
+								"updated": "20260906003122"
+							},
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "这是第一页的正文。"
+								}
+							]
+						}
+					],
+					"TabItemTitle": "第一页"
+				},
+				{
+					"ID": "20260906003122-1afhnbj",
+					"Type": "NodeTabItem",
+					"Properties": {
+						"id": "20260906003122-1afhnbj",
+						"updated": "20260906003122"
+					},
+					"Children": [
+						{
+							"ID": "20260906003122-4m3u6x6",
+							"Type": "NodeParagraph",
+							"Properties": {
+								"id": "20260906003122-4m3u6x6",
+								"updated": "20260906003122"
+							},
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "点击第二个页签查看此内容。"
+								}
+							]
+						}
+					],
+					"TabItemTitle": "第二页"
+				}
+			]
+		},
+		{
+			"ID": "20260906003122-tqc63mt",
+			"Type": "NodeHeading",
+			"Properties": {
+				"id": "20260906003122-tqc63mt",
+				"updated": "20260906220233"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "页签项块"
+				}
+			],
+			"HeadingLevel": 3
+		},
+		{
+			"ID": "20260906003122-xun3tcl",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20260906003122-xun3tcl",
+				"updated": "20260906220233"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "页签项包含标题和正文，支持嵌套内容和块引用。标题的斜杠菜单和移动端加号菜单支持行级元素，包括图片、附件和新建文档并引用；打开菜单时保留标题输入区。在块标菜单中选择 "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "页签块"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " - "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "任务"
+				},
+				{
+					"Type": "NodeText",
+					"Data": "，可切换整组的任务模式。"
+				}
+			]
+		},
+		{
 			"ID": "20210104090624-jtebaer",
 			"Type": "NodeHeading",
 			"HeadingLevel": 3,
 			"Properties": {
 				"id": "20210104090624-jtebaer",
-				"updated": "20260425180520"
+				"updated": "20260928225427"
 			},
 			"Children": [
 				{
@@ -2694,12 +3199,188 @@
 			]
 		},
 		{
+			"ID": "20260928225427-nm9hbe6",
+			"Type": "NodeList",
+			"ListData": {},
+			"Properties": {
+				"id": "20260928225427-nm9hbe6",
+				"updated": "20260928225427"
+			},
+			"Children": [
+				{
+					"ID": "20260928225427-k1dee87",
+					"Type": "NodeListItem",
+					"ListData": {
+						"BulletChar": 42,
+						"Marker": "Kg=="
+					},
+					"Properties": {
+						"id": "20260928225427-k1dee87",
+						"updated": "20260928225427"
+					},
+					"Children": [
+						{
+							"ID": "20260928225427-04zhlj8",
+							"Type": "NodeParagraph",
+							"Properties": {
+								"id": "20260928225427-04zhlj8",
+								"updated": "20260928225427"
+							},
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "输入 "
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "/"
+								},
+								{
+									"Type": "NodeText",
+									"Data": "，选择 "
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "横向超级块"
+								},
+								{
+									"Type": "NodeText",
+									"Data": " 或 "
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "纵向超级块"
+								},
+								{
+									"Type": "NodeText",
+									"Data": "，即可创建包含两个空段落的左右或上下布局，并在第一个段落开始输入。可以搜索“分栏”找到这两个选项，移动端也可从键盘工具栏的插入面板选择"
+								}
+							]
+						}
+					]
+				},
+				{
+					"ID": "20260928225427-duan8en",
+					"Type": "NodeListItem",
+					"ListData": {
+						"BulletChar": 42,
+						"Marker": "Kg=="
+					},
+					"Properties": {
+						"id": "20260928225427-duan8en",
+						"updated": "20260928225427"
+					},
+					"Children": [
+						{
+							"ID": "20260928225427-5hnfex1",
+							"Type": "NodeParagraph",
+							"Properties": {
+								"id": "20260928225427-5hnfex1",
+								"updated": "20260928225427"
+							},
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "在超级块的块标菜单中，选择 "
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "超级块"
+								},
+								{
+									"Type": "NodeText",
+									"Data": " - "
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "在当前超级块开头添加分栏"
+								},
+								{
+									"Type": "NodeText",
+									"Data": " 或 "
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "超级块"
+								},
+								{
+									"Type": "NodeText",
+									"Data": " - "
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "在当前超级块末尾添加分栏"
+								},
+								{
+									"Type": "NodeText",
+									"Data": "，可在横向布局的两端添加空段落；纵向布局对应添加块。新块不会复制现有子块的类型或内容"
+								}
+							]
+						}
+					]
+				},
+				{
+					"ID": "20260928225427-eu2cjgj",
+					"Type": "NodeListItem",
+					"ListData": {
+						"BulletChar": 42,
+						"Marker": "Kg=="
+					},
+					"Properties": {
+						"id": "20260928225427-eu2cjgj",
+						"updated": "20260928225427"
+					},
+					"Children": [
+						{
+							"ID": "20260928225427-f7s9zeg",
+							"Type": "NodeParagraph",
+							"Properties": {
+								"id": "20260928225427-f7s9zeg",
+								"updated": "20260928225427"
+							},
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "在纵向超级块的直接子块菜单中，选择 "
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "在左侧创建局部分栏"
+								},
+								{
+									"Type": "NodeText",
+									"Data": " 或 "
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "在右侧创建局部分栏"
+								},
+								{
+									"Type": "NodeText",
+									"Data": "，会将当前块和一个新空段落组合成内层横向超级块，其他块保持原布局。局部分栏不改变已有左右插栏快捷键的作用范围"
+								}
+							]
+						}
+					]
+				}
+			]
+		},
+		{
 			"ID": "20210104090624-5abfwla",
 			"Type": "NodeHeading",
 			"HeadingLevel": 3,
 			"Properties": {
 				"id": "20210104090624-5abfwla",
-				"updated": "20260425180524"
+				"updated": "20261101144749"
 			},
 			"Children": [
 				{
@@ -2733,12 +3414,182 @@
 			]
 		},
 		{
+			"ID": "20261023112115-3dui2fu",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261023112115-3dui2fu",
+				"updated": "20261023133001"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "文档标题默认允许包含半角斜杠 /，无需设置开关。例如，A/B 可以是一篇文档的标题，与 A 下的子文档 B 不同。已有标题和文档链接保持不变，／ 和 %2F 仍按原文字面显示。创建文档副本时会保留标题格式，并在标题末尾添加副本后缀。空标题保持为空，不添加后缀，也不受界面语言影响。带子文档创建副本时，仅副本根文档添加后缀。"
+				}
+			]
+		},
+		{
+			"ID": "20261025133233-wb4xxky",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261025133233-wb4xxky",
+				"updated": "20261107131528"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "文档标题支持全部原生行级元素，包括组合文字样式、图片、超链接、标签、块引用、行内公式、备注和文件注解引用。可在文档上方或移动端顶栏直接编辑完整标题；移动端新建文档后直接聚焦顶栏输入。通过重命名操作，桌面端打开居中对话框，移动端打开底部抽屉，均使用独立的单行富文本输入区，不显示文档块标和角标。输入区使用界面字号和通用输入框主题背景，长标题可横向滚动。打开抽屉后自动聚焦标题并唤起键盘。抽屉随键盘上方的可见区域调整高度。重命名对话框中的修改仅在点击确定后保存，关闭对话框或下拉收起抽屉会取消本次修改。文档树、页签和桌面端页签下拉列表显示标题中的行级样式和图片，普通文字标题按普通文字显示。系统窗口标题和正文面包屑显示纯文本摘要。笔记本文档同样支持富文本标题，笔记本名称随标题的纯文本内容（包括图片替代文本）更新。启用笔记本文档后，从笔记本重命名入口也可编辑完整标题。"
+				}
+			]
+		},
+		{
+			"ID": "20261025133233-qyd5yh8",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261025133233-qyd5yh8",
+				"updated": "20261025133233"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "标题中的引用归属于文档块，会出现在目标的反向链接中；打开标题反链可定位到标题编辑器。动态锚文本随目标更新，循环引用使用稳定的局部文字，避免标题反复膨胀。"
+				}
+			]
+		},
+		{
+			"ID": "20261025133233-xqrl2vp",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261025133233-xqrl2vp",
+				"updated": "20261025133233"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "标题块转换为文档时，行级内容完整进入文档标题；反向转换时恢复为标题块中的内容。已有正文段落即使文字与标题相同，也会保留。"
+				}
+			]
+		},
+		{
+			"ID": "20261025133233-d3o6mqo",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261025133233-d3o6mqo",
+				"updated": "20261025133233"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "笔记本名称也可保留半角 /，仍使用纯文本。名称中的斜杠不产生层级，导出时会生成适合文件系统的名称，不修改已保存的名称。"
+				}
+			]
+		},
+		{
+			"ID": "20261025133233-edwhu6s",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261025133233-edwhu6s",
+				"updated": "20261025133233"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "其他编辑器修改标题时，当前输入会保留。可先查看最新标题，再选择保存自己的标题；支持富文本剪贴板时，也可复制当前输入并加载最新标题。"
+				}
+			]
+		},
+		{
+			"ID": "20261025133233-2ucvzs4",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261025133233-2ucvzs4",
+				"updated": "20261025133233"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "在标题编辑器中，"
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "Enter"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 进入正文，"
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "Shift+Enter"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 插入标题内换行。原有行级格式快捷键同样可用，块转换快捷键不适用于标题。"
+				}
+			]
+		},
+		{
+			"ID": "20261023112115-qkbgw0v",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261023112115-qkbgw0v",
+				"updated": "20261023112115"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "显示路径用于阅读；需要定位某篇文档时，请使用文档链接或块引用。依赖拆分标题路径定位文档的插件需要适配结构化寻址。"
+				}
+			]
+		},
+		{
+			"ID": "20261024163013-5ujjlqb",
+			"Type": "NodeHeading",
+			"Properties": {
+				"id": "20261024163013-5ujjlqb",
+				"updated": "20261024163013"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "自定义块"
+				}
+			],
+			"HeadingLevel": 3
+		},
+		{
+			"ID": "20261024163013-obic6od",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261024163013-obic6od",
+				"updated": "20261024163013"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "插件可提供自定义内容块的显示和交互。使用时需安装并启用对应的 "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "block-ref",
+					"TextMarkBlockRefID": "20230506210010-houyyvy",
+					"TextMarkBlockRefSubtype": "s",
+					"TextMarkTextContent": "插件"
+				},
+				{
+					"Type": "NodeText",
+					"Data": "；插件不可用或当前环境不支持其渲染时，会显示保存的原始内容。停用插件不会自动删除这些内容。"
+				}
+			]
+		},
+		{
 			"ID": "20200925095848-aon4lem",
 			"Type": "NodeHeading",
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20200925095848-aon4lem",
-				"updated": "20210302223257"
+				"updated": "20261016111305"
 			},
 			"Children": [
 				{
@@ -2770,7 +3621,7 @@
 			"ListData": {},
 			"Properties": {
 				"id": "20210104090624-vsksysm",
-				"updated": "20210302223257"
+				"updated": "20261016111305"
 			},
 			"Children": [
 				{
@@ -2964,6 +3815,118 @@
 								{
 									"Type": "NodeText",
 									"Data": "文档块"
+								}
+							]
+						}
+					]
+				},
+				{
+					"ID": "20260906003122-4h509lv",
+					"Type": "NodeListItem",
+					"ListData": {
+						"BulletChar": 42,
+						"Marker": "Kg=="
+					},
+					"Properties": {
+						"id": "20260906003122-4h509lv",
+						"updated": "20260906003122"
+					},
+					"Children": [
+						{
+							"ID": "20260906003122-x7ano6a",
+							"Type": "NodeParagraph",
+							"Properties": {
+								"id": "20260906003122-x7ano6a",
+								"updated": "20260906003122"
+							},
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "页签块：只能包含页签项块"
+								}
+							]
+						}
+					]
+				},
+				{
+					"ID": "20260906003122-egrc569",
+					"Type": "NodeListItem",
+					"ListData": {
+						"BulletChar": 42,
+						"Marker": "Kg=="
+					},
+					"Properties": {
+						"id": "20260906003122-egrc569",
+						"updated": "20260906003122"
+					},
+					"Children": [
+						{
+							"ID": "20260906003122-5yng35y",
+							"Type": "NodeParagraph",
+							"Properties": {
+								"id": "20260906003122-5yng35y",
+								"updated": "20260906003122"
+							},
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "页签项块：包含普通内容块及嵌套页签块"
+								}
+							]
+						}
+					]
+				},
+				{
+					"ID": "20261016111305-tdchsxm",
+					"Type": "NodeListItem",
+					"ListData": {
+						"BulletChar": 42,
+						"Marker": "Kg=="
+					},
+					"Properties": {
+						"id": "20261016111305-tdchsxm",
+						"updated": "20261016111305"
+					},
+					"Children": [
+						{
+							"ID": "20261016111305-a9a64vw",
+							"Type": "NodeParagraph",
+							"Properties": {
+								"id": "20261016111305-a9a64vw",
+								"updated": "20261016111305"
+							},
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "思维导图块：只能包含思维导图项块"
+								}
+							]
+						}
+					]
+				},
+				{
+					"ID": "20261016111305-410l2sw",
+					"Type": "NodeListItem",
+					"ListData": {
+						"BulletChar": 42,
+						"Marker": "Kg=="
+					},
+					"Properties": {
+						"id": "20261016111305-410l2sw",
+						"updated": "20261016111305"
+					},
+					"Children": [
+						{
+							"ID": "20261016111305-9vyve5m",
+							"Type": "NodeParagraph",
+							"Properties": {
+								"id": "20261016111305-9vyve5m",
+								"updated": "20261016111305"
+							},
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "思维导图项块：包含普通内容块及嵌套思维导图，不能直接包含列表块、列表项块或思维导图项块"
 								}
 							]
 						}

@@ -1,5 +1,10 @@
-import {isMobile} from "../util/functions";
+import {MobileDialog} from "../dialog/mobileDialog";
+import {getFrontend, isMobile} from "../util/functions";
 import {Dialog} from "../dialog";
+import {closeNativeSettings, openNativeSettings} from "../config/setting/nativeWindow";
+import {isSettingsWindow} from "../config/setting/windowContext";
+import {fitSettingsWindowDialog} from "../config/setting/windowDialog";
+import {genUUID} from "../util/genID";
 
 export class Setting {
     private items: IPluginSettingOption[] = [];
@@ -7,6 +12,11 @@ export class Setting {
     private destroyCallback: () => void;
     private width: string;
     private height: string;
+    private openInWindow: boolean;
+    private windowKey = "plugin-" + genUUID();
+    private windowOpen = false;
+    private closeWindowCallback: () => void;
+    private windowSession = 0;
     public dialog:Dialog;
 
     constructor(options: {
@@ -14,11 +24,13 @@ export class Setting {
         width?: string,
         destroyCallback?: () => void
         confirmCallback?: () => void
+        openInWindow?: boolean
     }) {
         this.confirmCallback = options.confirmCallback;
         this.destroyCallback = options.destroyCallback;
         this.width = options.width || (isMobile() ? "92vw" : "768px");
         this.height = options.height || "80vh";
+        this.openInWindow = options.openInWindow === true;
     }
 
     public addItem(options: IPluginSettingOption) {
@@ -26,7 +38,38 @@ export class Setting {
     }
 
     public open(name: string) {
-        const dialog = new Dialog({
+        if (this.openInWindow && getFrontend().startsWith("desktop") && !isSettingsWindow()) {
+            if (!this.windowOpen) {
+                this.windowOpen = true;
+                this.windowSession++;
+            }
+            const session = this.windowSession;
+            const closed = () => {
+                if (!this.windowOpen || session !== this.windowSession) return;
+                this.windowOpen = false;
+                this.dialog = undefined;
+                this.items.forEach(item => {
+                    if (item.actionElement && item.actionElement.ownerDocument !== document) {
+                        document.adoptNode(item.actionElement);
+                    }
+                });
+                this.destroyCallback?.();
+            };
+            this.closeWindowCallback = closed;
+            void openNativeSettings(window.siyuan.ws.app, {}, {
+                name, closed, isOpen: () => this.windowOpen && session === this.windowSession,
+                mount: create => {
+                    this.dialog = create({width: this.width, height: this.height, items: this.items,
+                        confirmCallback: this.confirmCallback, destroyCallback: closed});
+                },
+            }, this.windowKey).catch(error => {
+                closed();
+                console.error(error);
+            });
+            return;
+        }
+        const windowRoot = isSettingsWindow() && window.siyuan.dialogs.length === 0;
+        const dialog = new MobileDialog({
             title: name,
             content: `<div class="b3-dialog__content">
 </div>
@@ -40,6 +83,9 @@ export class Setting {
             destroyCallback: () => {
                 if (this.destroyCallback) {
                     this.destroyCallback();
+                }
+                if (windowRoot) {
+                    window.close();
                 }
             }
         });
@@ -64,7 +110,7 @@ export class Setting {
     </div>
 </${tagName}>`;
             } else {
-                html = `<${tagName} class="fn__flex b3-label config-item${tagName === "label" ? "" : " config-wrap"}">
+                html = `<${tagName} class="fn__flex b3-label config-item">
     <div class="fn__flex-1">
         ${titleBlock}
     </div>
@@ -76,29 +122,43 @@ export class Setting {
                 if (["INPUT", "TEXTAREA"].includes(actionElement.tagName)) {
                     dialog.bindInput(actionElement as HTMLInputElement, () => {
                         btnsElement[1].dispatchEvent(new CustomEvent("click"));
-                    }, actionElement.tagName === "INPUT");
+                    }, actionElement.tagName === "INPUT", false);
                 }
                 if (item.direction === "row") {
                     contentElement.lastElementChild.lastElementChild.insertAdjacentElement("beforeend", actionElement);
                     actionElement.classList.add("fn__block");
                 } else {
                     actionElement.classList.remove("fn__block");
-                    actionElement.classList.add("fn__flex-center", "fn__size200");
+                    actionElement.classList.add("fn__flex-center");
+                    if (!actionElement.classList.contains("b3-switch")) {
+                        actionElement.classList.add("fn__size200");
+                    }
                     contentElement.lastElementChild.insertAdjacentElement("beforeend", actionElement);
                 }
             }
         });
-        (contentElement.querySelector("input, textarea") as HTMLElement)?.focus();
         const btnsElement = dialog.element.querySelectorAll(".b3-dialog__action .b3-button");
         btnsElement[0].addEventListener("click", () => {
             dialog.destroy();
         });
         btnsElement[1].addEventListener("click", () => {
-            if (this.confirmCallback) {
-                this.confirmCallback();
-            }
-            dialog.destroy();
+            void dialog.runPending(async () => {
+                await this.confirmCallback?.();
+                return true;
+            });
         });
         this.dialog = dialog;
+        if (windowRoot) {
+            fitSettingsWindowDialog(dialog);
+        }
+    }
+
+    public close() {
+        if (this.windowOpen) {
+            closeNativeSettings(this.windowKey);
+            this.closeWindowCallback?.();
+        } else {
+            this.dialog?.destroy();
+        }
     }
 }

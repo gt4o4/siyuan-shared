@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package cmd
 
@@ -90,11 +78,15 @@ var repoCreateCmd = &cobra.Command{
 			return nil
 		}
 
-		id, err := model.IndexRepo(memo)
+		id, created, err := model.CreateRepoSnapshot(memo)
 		if err != nil {
 			return err
 		}
-		fmt.Println("created snapshot", id)
+		if created {
+			fmt.Println("created snapshot", id)
+		} else {
+			fmt.Println("no changes; existing snapshot", id)
+		}
 		return nil
 	},
 }
@@ -158,7 +150,9 @@ var repoCheckoutCmd = &cobra.Command{
 			return nil
 		}
 
-		model.CheckoutRepoDirect(id)
+		if err := model.CheckoutRepoDirect(id); err != nil {
+			return err
+		}
 		model.AppendPushReloadFiletreeEntry()
 		model.AppendPushReloadUIEntry()
 		fmt.Println("ok")
@@ -361,7 +355,7 @@ func init() {
 	repoListCmd.Flags().Bool("tag", false, "list tagged snapshots only")
 	repoListCmd.Flags().IntP("page", "p", 1, "page number")
 
-	repoCreateCmd.Flags().String("memo", "", "snapshot memo")
+	repoCreateCmd.Flags().String("memo", "", "snapshot memo (default: Create manually)")
 
 	repoTagCmd.Flags().String("id", "", "snapshot ID")
 	repoTagCmd.Flags().String("name", "", "tag name")

@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
@@ -47,12 +35,14 @@ var managedEncryptedExports = struct {
 	jobs map[string]managedEncryptedExport
 }{jobs: map[string]managedEncryptedExport{}}
 
-type MobileExportLease struct {
+type ExportArtifactLease struct {
 	ID   string `json:"leaseID"`
 	Path string `json:"path"`
 	Name string `json:"name"`
 	Size int64  `json:"size"`
 }
+
+type MobileExportLease = ExportArtifactLease
 
 type mobileExportLeaseState struct {
 	boxID      string
@@ -163,8 +153,17 @@ func IsManagedEncryptedExportPath(relativePath string) bool {
 	return len(parts) >= 1 && ast.IsNodeIDPattern(parts[0])
 }
 
-// AcquireMobileExportLease 为移动端导出取得覆盖整个原生复制过程的生命周期租约。
-func AcquireMobileExportLease(exportPath string) (lease *MobileExportLease, err error) {
+// normalExportTempName 避免普通导出使用加密导出的第一层归属目录，保留归档内部的原始名称。
+func normalExportTempName(name string) string {
+	parts := strings.SplitN(filepath.ToSlash(filepath.Clean(name)), "/", 2)
+	if ast.IsNodeIDPattern(parts[0]) {
+		parts[0] = "export-" + parts[0]
+	}
+	return filepath.FromSlash(strings.Join(parts, "/"))
+}
+
+// AcquireExportArtifactLease 为导出产物取得覆盖整个复制过程的生命周期租约。
+func AcquireExportArtifactLease(exportPath string) (lease *ExportArtifactLease, err error) {
 	if after, ok := strings.CutPrefix(exportPath, "/export/"); ok {
 		fileName, decodeErr := url.PathUnescape(after)
 		if decodeErr != nil {
@@ -222,7 +221,41 @@ func AcquireMobileExportLease(exportPath string) (lease *MobileExportLease, err 
 		if resolveErr != nil {
 			return nil, resolveErr
 		}
+		if ensureErr := EnsureAssetLocal(artifact); ensureErr != nil {
+			return nil, ensureErr
+		}
 		return registerMobileExportLease("", artifact, filepath.Base(artifact), "")
+	}
+	return prepareEncryptedAssetExport(relativePath, boxID, false)
+}
+
+// PrepareEncryptedAssetForExternalOpen 生成保留原始名称的受管明文副本，供外部程序打开或定位。
+// 副本随笔记本锁定清理，外部程序的修改不会写回加密资源。
+func PrepareEncryptedAssetForExternalOpen(assetPath string) (string, error) {
+	relativePath, boxID, err := assetPathAndBox(assetPath, "")
+	if err != nil {
+		return "", err
+	}
+	if boxID == "" || !IsEncryptedBox(boxID) {
+		return "", errors.New("source is not an encrypted asset")
+	}
+	artifact, err := prepareEncryptedAssetExport(relativePath, boxID, true)
+	if err != nil {
+		return "", err
+	}
+	return artifact.Path, nil
+}
+
+func prepareEncryptedAssetExport(relativePath, boxID string, external bool) (lease *ExportArtifactLease, err error) {
+	if !IsBoxUnlocked(boxID) {
+		return nil, errors.New(Conf.Language(314))
+	}
+	artifact, resolveErr := GetAssetAbsPathInBox(relativePath, boxID)
+	if resolveErr != nil {
+		return nil, resolveErr
+	}
+	if ensureErr := EnsureAssetLocal(artifact); ensureErr != nil {
+		return nil, ensureErr
 	}
 
 	if err = AcquireEncryptedBoxOperation(boxID); err != nil {
@@ -240,16 +273,16 @@ func AcquireMobileExportLease(exportPath string) (lease *MobileExportLease, err 
 	if dekErr != nil {
 		return nil, dekErr
 	}
-	artifact, resolveErr := GetAssetAbsPathInBox(relativePath, boxID)
-	if resolveErr != nil {
-		return nil, resolveErr
-	}
 	diskName := filepath.Base(relativePath)
 	leaseID, idErr := newManagedEncryptedExportID()
 	if idErr != nil {
 		return nil, idErr
 	}
-	cleanupDir := filepath.Join(util.TempDir, "export", boxID, "mobile", leaseID)
+	kind := "mobile"
+	if external {
+		kind = "external"
+	}
+	cleanupDir := filepath.Join(util.TempDir, "export", boxID, kind, leaseID)
 	if mkErr := os.MkdirAll(cleanupDir, 0700); mkErr != nil {
 		return nil, mkErr
 	}
@@ -291,6 +324,16 @@ func AcquireMobileExportLease(exportPath string) (lease *MobileExportLease, err 
 	if originalName == "" || originalName == "." {
 		originalName = diskName
 	}
+	if external {
+		namedPath := filepath.Join(cleanupDir, originalName)
+		if plainPath != namedPath {
+			if err = os.Rename(plainPath, namedPath); err != nil {
+				return nil, err
+			}
+		}
+		cleanup = false
+		return &ExportArtifactLease{Path: namedPath, Name: originalName}, nil
+	}
 	lease, err = registerMobileExportLeaseWithID(leaseID, boxID, plainPath, originalName, cleanupDir)
 	if err != nil {
 		_ = os.RemoveAll(cleanupDir)
@@ -299,6 +342,11 @@ func AcquireMobileExportLease(exportPath string) (lease *MobileExportLease, err 
 	cleanup = false
 	release = false
 	return
+}
+
+// AcquireMobileExportLease 为移动端导出取得覆盖整个原生复制过程的生命周期租约。
+func AcquireMobileExportLease(exportPath string) (lease *MobileExportLease, err error) {
+	return AcquireExportArtifactLease(exportPath)
 }
 
 // GetMobileExportName 返回移动端保存对话框使用的文件名，不生成明文临时文件。
@@ -360,9 +408,14 @@ func registerMobileExportLeaseWithID(leaseID, boxID, artifact, name, cleanupDir 
 	return &MobileExportLease{ID: leaseID, Path: artifact, Name: name, Size: info.Size()}, nil
 }
 
+// ReleaseExportArtifactLease 释放导出产物租约；重复调用不会产生副作用。
+func ReleaseExportArtifactLease(leaseID string) {
+	releaseMobileExportLease(leaseID, false)
+}
+
 // ReleaseMobileExportLease 释放移动端导出租约；重复调用不会产生副作用。
 func ReleaseMobileExportLease(leaseID string) {
-	releaseMobileExportLease(leaseID, false)
+	ReleaseExportArtifactLease(leaseID)
 }
 
 func releaseMobileExportLease(leaseID string, expired bool) {

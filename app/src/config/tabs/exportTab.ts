@@ -1,3 +1,4 @@
+import {escapeHtmlTextAndAttr} from "../../util/escape";
 /// #if !BROWSER
 import {ipcRenderer} from "electron";
 import {useShell} from "../../util/pathName";
@@ -19,7 +20,7 @@ const registerExportReferencesGroup = (tab: SettingTabBuilder) => {
         desc: window.siyuan.languages.includeRelatedDocsTip,
     });
     group.select("export.blockRefMode", {
-        title: window.siyuan.languages.ref,
+        title: window.siyuan.languages.exportBlockRefMode,
         desc: window.siyuan.languages.export11,
         options: [
             {value: 2, label: window.siyuan.languages.export2},
@@ -40,13 +41,17 @@ const registerExportReferencesGroup = (tab: SettingTabBuilder) => {
 const registerExportFormatGroup = (tab: SettingTabBuilder) => {
     const group = tab.group("format", window.siyuan.languages.configGroupFormat);
 
+    group.switch("export.addTitle", {
+        title: window.siyuan.languages.export17,
+        desc: window.siyuan.languages.export18,
+    });
     group.switch("export.markdownYFM", {
         title: window.siyuan.languages.export23,
         desc: window.siyuan.languages.export24,
     });
-    group.switch("export.addTitle", {
-        title: window.siyuan.languages.export17,
-        desc: window.siyuan.languages.export18,
+    group.switch("export.headingNumber", {
+        title: window.siyuan.languages.exportHeadingNumber,
+        desc: window.siyuan.languages.exportHeadingNumberTip,
     });
     group.switch("export.paragraphBeginningSpace", {
         title: window.siyuan.languages.paragraphBeginningSpace,
@@ -148,7 +153,7 @@ const registerExportPandocGroup = (tab: SettingTabBuilder) => {
         afterMount: mountExportPandocStack,
     }, (stack) => {
         const pandocBinLabel = window.siyuan.config.export.pandocBin ?
-            Lute.EscapeHTMLStr(window.siyuan.config.export.pandocBin) : `${window.siyuan.languages.builtIn} Pandoc`;
+            escapeHtmlTextAndAttr(window.siyuan.config.export.pandocBin) : `${window.siyuan.languages.builtIn} Pandoc`;
         stack.title(`${window.siyuan.languages.export19}<span class="fn__space"></span><a href="javascript:void(0)" id="pandocBinPathDisplay" style="word-break: break-all">${pandocBinLabel}</a>`);
         stack.button({
             id: "pandocBinReset",
@@ -163,6 +168,7 @@ const registerExportPandocGroup = (tab: SettingTabBuilder) => {
         });
     });
     group.textBlock("export.pandocParams", {
+        spellcheck: false,
         title: window.siyuan.languages.export25,
         desc: window.siyuan.languages.export26,
         mode: "textarea",

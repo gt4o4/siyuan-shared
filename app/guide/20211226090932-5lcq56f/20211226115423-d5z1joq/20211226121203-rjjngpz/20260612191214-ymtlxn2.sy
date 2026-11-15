@@ -6,7 +6,7 @@
 		"id": "20260612191214-ymtlxn2",
 		"title": "命令列",
 		"type": "doc",
-		"updated": "20260704130000"
+		"updated": "20261101194733"
 	},
 	"Children": [
 		{
@@ -67,7 +67,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20260618123823-9n2h06a",
-				"updated": "20260618123823"
+				"updated": "20261006133358"
 			},
 			"Children": [
 				{
@@ -114,7 +114,7 @@
 			"ListData": {},
 			"Properties": {
 				"id": "20260618123823-gwobglg",
-				"updated": "20260618123823"
+				"updated": "20261006133358"
 			},
 			"Children": [
 				{
@@ -126,7 +126,7 @@
 					},
 					"Properties": {
 						"id": "20260618123823-pg296go",
-						"updated": "20260618123823"
+						"updated": "20261006133358"
 					},
 					"Children": [
 						{
@@ -134,7 +134,7 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20260618123823-dsraz6n",
-								"updated": "20260618123823"
+								"updated": "20261006133358"
 							},
 							"Children": [
 								{
@@ -166,25 +166,25 @@
 								},
 								{
 									"Type": "NodeText",
-									"Data": "。Microsoft Store 版本執行於 MSIX 沙箱中，無法自動修改 "
+									"Data": "。Microsoft Store 版（3.8.7 及以上）在 Windows 10 1607（組建 14393）及以上系統中註冊 "
 								},
 								{
 									"Type": "NodeTextMark",
 									"TextMarkType": "code",
-									"TextMarkTextContent": "PATH"
+									"TextMarkTextContent": "siyuan.exe"
 								},
 								{
 									"Type": "NodeText",
-									"Data": "​。可部署一個 "
+									"Data": "​ 應用程式執行別名。安裝或更新後，開啟新的終端機並執行 "
 								},
 								{
 									"Type": "NodeTextMark",
 									"TextMarkType": "code",
-									"TextMarkTextContent": "siyuan.cmd"
+									"TextMarkTextContent": "siyuan --help"
 								},
 								{
 									"Type": "NodeText",
-									"Data": "​ 轉發器（一次性，商店版更新後依然有效）"
+									"Data": "​"
 								}
 							]
 						},
@@ -194,7 +194,7 @@
 							"IsFencedCodeBlock": true,
 							"Properties": {
 								"id": "20260708122000-twstore1",
-								"updated": "20260708122000"
+								"updated": "20261006133358"
 							},
 							"Children": [
 								{
@@ -207,7 +207,7 @@
 								},
 								{
 									"Type": "NodeCodeBlockCode",
-									"Data": "# 僅適用於 Microsoft Store 版 —— 在 PowerShell 中執行一次\n$shimDir = \"$env:LOCALAPPDATA\\Microsoft\\WindowsApps\"   # 該目錄預設已在 PATH 中\n@(\n    '@echo off'\n    'setlocal'\n    'set \"ROOT=\"'\n    'for /f \"delims=\" %%i in (''powershell -NoProfile -Command \"(Get-AppxPackage *SiYuan*).InstallLocation\"'') do set \"ROOT=%%i\"'\n    'if not defined ROOT goto :noshim'\n    '\"%ROOT%\\app\\resources\\kernel\\SiYuan-Kernel.exe\" %*'\n    'exit /b %ERRORLEVEL%'\n    ':noshim'\n    '1>&2 echo siyuan: 找不到 Microsoft Store 版本'\n    'exit /b 1'\n) | Set-Content \"$shimDir\\siyuan.cmd\"\n"
+									"Data": "siyuan --help\n\n# 檢查實際使用的命令\nGet-Command siyuan -All\nwhere.exe siyuan\n"
 								},
 								{
 									"Type": "NodeCodeBlockFenceCloseMarker",
@@ -216,16 +216,75 @@
 							]
 						},
 						{
-							"ID": "20260708130000-twuninst",
+							"ID": "20261006133358-uu0ne7i",
 							"Type": "NodeParagraph",
 							"Properties": {
-								"id": "20260708130000-twuninst",
-								"updated": "20260708130000"
+								"id": "20261006133358-uu0ne7i",
+								"updated": "20261006133358"
 							},
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "解除安裝商店版時如需清理："
+									"Data": "如果找不到命令，請檢查 Windows 中思源的應用程式執行別名是否已啟用，以及 "
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "code",
+									"TextMarkTextContent": "%LOCALAPPDATA%\\Microsoft\\WindowsApps"
+								},
+								{
+									"Type": "NodeText",
+									"Data": " 是否在 "
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "code",
+									"TextMarkTextContent": "PATH"
+								},
+								{
+									"Type": "NodeText",
+									"Data": " 中。上述命令可檢查命令解析結果；同時安裝多個思源版本或 "
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "code",
+									"TextMarkTextContent": "PATH"
+								},
+								{
+									"Type": "NodeText",
+									"Data": " 順序可能導致呼叫其他可執行檔"
+								}
+							]
+						},
+						{
+							"ID": "20260708130000-twuninst",
+							"Type": "NodeParagraph",
+							"Properties": {
+								"id": "20260708130000-twuninst",
+								"updated": "20261006133358"
+							},
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "如果曾建立舊的 "
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "code",
+									"TextMarkTextContent": "siyuan.cmd"
+								},
+								{
+									"Type": "NodeText",
+									"Data": " 轉發器，請先執行 "
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "code",
+									"TextMarkTextContent": "& \"$env:LOCALAPPDATA\\Microsoft\\WindowsApps\\siyuan.exe\" --help"
+								},
+								{
+									"Type": "NodeText",
+									"Data": " 確認商店版別名可用，再視需要刪除轉發器："
 								},
 								{
 									"Type": "NodeTextMark",
@@ -364,7 +423,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20260618123823-m29cezj",
-				"updated": "20260618123823"
+				"updated": "20261016112115"
 			},
 			"Children": [
 				{
@@ -385,7 +444,7 @@
 			"Properties": {
 				"colgroup": "|||",
 				"id": "20260618123823-p711ybl",
-				"updated": "20260618123823"
+				"updated": "20261016112115"
 			},
 			"Children": [
 				{
@@ -487,17 +546,13 @@
 							"Data": "td",
 							"Children": [
 								{
-									"Type": "NodeText",
-									"Data": "環境變數 "
-								},
-								{
 									"Type": "NodeTextMark",
 									"TextMarkType": "code",
 									"TextMarkTextContent": "SIYUAN_WORKSPACE_PATH"
 								},
 								{
 									"Type": "NodeText",
-									"Data": "​ 或已註冊工作空間或 "
+									"Data": "，否則 "
 								},
 								{
 									"Type": "NodeTextMark",
@@ -665,7 +720,72 @@
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "空執行模式，僅驗證參數不實際執行"
+									"Data": "預演支援的變更，不實際執行"
+								}
+							]
+						}
+					]
+				},
+				{
+					"Type": "NodeTableRow",
+					"Data": "tr",
+					"Children": [
+						{
+							"Type": "NodeTableCell",
+							"Data": "td",
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "​"
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "code",
+									"TextMarkTextContent": "--log-level"
+								},
+								{
+									"Type": "NodeText",
+									"Data": "​"
+								}
+							]
+						},
+						{
+							"Type": "NodeTableCell",
+							"Data": "td",
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "​"
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "code",
+									"TextMarkTextContent": "-v"
+								},
+								{
+									"Type": "NodeText",
+									"Data": "​"
+								}
+							]
+						},
+						{
+							"Type": "NodeTableCell",
+							"Data": "td",
+							"Children": [
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "code",
+									"TextMarkTextContent": "warn"
+								}
+							]
+						},
+						{
+							"Type": "NodeTableCell",
+							"Data": "td",
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "日誌級別：off、trace、debug、info、warn、error 或 fatal"
 								}
 							]
 						}
@@ -678,7 +798,7 @@
 			"Type": "NodeBlockquote",
 			"Properties": {
 				"id": "20260618123823-xb6h9pu",
-				"updated": "20260618123823"
+				"updated": "20261016112115"
 			},
 			"Children": [
 				{
@@ -690,9 +810,60 @@
 					"Type": "NodeParagraph",
 					"Properties": {
 						"id": "20260618123823-3okl7bw",
-						"updated": "20260618123823"
+						"updated": "20261016112115"
 					},
 					"Children": [
+						{
+							"Type": "NodeText",
+							"Data": "一般單次指令的指令碼應始終傳入 "
+						},
+						{
+							"Type": "NodeTextMark",
+							"TextMarkType": "code",
+							"TextMarkTextContent": "--workspace"
+						},
+						{
+							"Type": "NodeText",
+							"Data": "，避免選錯資料。"
+						},
+						{
+							"Type": "NodeTextMark",
+							"TextMarkType": "code",
+							"TextMarkTextContent": "workspace info"
+						},
+						{
+							"Type": "NodeText",
+							"Data": " 可以回退至最後一個已註冊工作空間；"
+						},
+						{
+							"Type": "NodeTextMark",
+							"TextMarkType": "code",
+							"TextMarkTextContent": "serve"
+						},
+						{
+							"Type": "NodeText",
+							"Data": " 依 "
+						},
+						{
+							"Type": "NodeTextMark",
+							"TextMarkType": "block-ref",
+							"TextMarkBlockRefID": "20211226122358-hctqcn5",
+							"TextMarkBlockRefSubtype": "s",
+							"TextMarkTextContent": "Kernel 參數"
+						},
+						{
+							"Type": "NodeText",
+							"Data": " 選擇工作空間，未指定 "
+						},
+						{
+							"Type": "NodeTextMark",
+							"TextMarkType": "code",
+							"TextMarkTextContent": "--log-level"
+						},
+						{
+							"Type": "NodeText",
+							"Data": " 時使用設定的日誌層級。僅在支援的指令中使用 "
+						},
 						{
 							"Type": "NodeText",
 							"Data": "​"
@@ -704,7 +875,7 @@
 						},
 						{
 							"Type": "NodeText",
-							"Data": "​ 適合腳本化處理；"
+							"Data": "。"
 						},
 						{
 							"Type": "NodeTextMark",
@@ -713,16 +884,7 @@
 						},
 						{
 							"Type": "NodeText",
-							"Data": "​ 適用於所有修改類操作，會輸出 "
-						},
-						{
-							"Type": "NodeTextMark",
-							"TextMarkType": "code",
-							"TextMarkTextContent": "[dry-run] Would..."
-						},
-						{
-							"Type": "NodeText",
-							"Data": "​ 提示。"
+							"Data": " 用於預演支援的變更，不保證實際執行時所有檢查都會通過。"
 						}
 					]
 				}
@@ -1154,7 +1316,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20260618123823-n8l9nsl",
-				"updated": "20260618123823"
+				"updated": "20261024162311"
 			},
 			"Children": [
 				{
@@ -1169,7 +1331,7 @@
 			"HeadingLevel": 3,
 			"Properties": {
 				"id": "20260618123823-mfpgqq7",
-				"updated": "20260618123823"
+				"updated": "20261016112115"
 			},
 			"Children": [
 				{
@@ -1183,22 +1345,9 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20260618123823-1nk5pvb",
-				"updated": "20260618123823"
+				"updated": "20261016112115"
 			},
 			"Children": [
-				{
-					"Type": "NodeText",
-					"Data": "以 "
-				},
-				{
-					"Type": "NodeTextMark",
-					"TextMarkType": "code",
-					"TextMarkTextContent": "--format json"
-				},
-				{
-					"Type": "NodeText",
-					"Data": "​ 輸出 JSON，供腳本解析處理。"
-				},
 				{
 					"Type": "NodeTextMark",
 					"TextMarkType": "code",
@@ -1206,7 +1355,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​、"
+					"Data": " 和 "
 				},
 				{
 					"Type": "NodeTextMark",
@@ -1215,7 +1364,34 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​ 等所有查詢命令均支援 JSON 輸出。"
+					"Data": " 支援以 "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "--format json"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 輸出 JSON 供指令碼處理。請核對各指令的輸出約定：即使全域格式設為 JSON，"
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "file list"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 仍輸出表格，"
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "file read"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 仍輸出原文。"
 				}
 			]
 		},
@@ -1225,7 +1401,7 @@
 			"HeadingLevel": 3,
 			"Properties": {
 				"id": "20260618123823-fkmsb4g",
-				"updated": "20260618123823"
+				"updated": "20261016112115"
 			},
 			"Children": [
 				{
@@ -1239,12 +1415,12 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20260618123823-i31v69y",
-				"updated": "20260618123823"
+				"updated": "20261016112115"
 			},
 			"Children": [
 				{
 					"Type": "NodeText",
-					"Data": "修改/刪除操作先用 "
+					"Data": "對於支援 "
 				},
 				{
 					"Type": "NodeTextMark",
@@ -1253,7 +1429,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​ 驗證參數，確認輸出為預期的 "
+					"Data": " 的修改或刪除操作，先預演並核對 "
 				},
 				{
 					"Type": "NodeTextMark",
@@ -1262,7 +1438,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​ 後，再移除該旗標執行實際操作。"
+					"Data": " 輸出。預演不會執行實際執行時的全部檢查；移除參數前仍應確認工作空間和備份。"
 				}
 			]
 		},
@@ -1366,7 +1542,7 @@
 			"HeadingLevel": 3,
 			"Properties": {
 				"id": "20260618123823-fe82ndy",
-				"updated": "20260618123823"
+				"updated": "20261024162311"
 			},
 			"Children": [
 				{
@@ -1380,9 +1556,13 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20260618123823-18qolcy",
-				"updated": "20260618123823"
+				"updated": "20261024162311"
 			},
 			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "以 "
+				},
 				{
 					"Type": "NodeText",
 					"Data": "​"
@@ -1390,11 +1570,11 @@
 				{
 					"Type": "NodeTextMark",
 					"TextMarkType": "code",
-					"TextMarkTextContent": "repo create --memo"
+					"TextMarkTextContent": "repo create --memo \"checkpoint\""
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​ 建立快照作為檢查點；"
+					"Data": " 建立快照檢查點。"
 				},
 				{
 					"Type": "NodeTextMark",
@@ -1403,7 +1583,43 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​ 匯出完整工作空間備份。"
+					"Data": " 僅匯出完整 "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "data"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 目錄，不包含 "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "conf"
+				},
+				{
+					"Type": "NodeText",
+					"Data": "、"
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "history"
+				},
+				{
+					"Type": "NodeText",
+					"Data": "、"
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "repo"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 等工作空間目錄，不是整個工作空間備份；存在任何加密筆記本時會拒絕執行。"
 				}
 			]
 		},
@@ -1413,7 +1629,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20260618123823-6bt9dt0",
-				"updated": "20260618123823"
+				"updated": "20261016112115"
 			},
 			"Children": [
 				{
@@ -1435,7 +1651,7 @@
 			},
 			"Properties": {
 				"id": "20260618123823-mm2gj6c",
-				"updated": "20260618123823"
+				"updated": "20261016112115"
 			},
 			"Children": [
 				{
@@ -1449,7 +1665,7 @@
 					},
 					"Properties": {
 						"id": "20260618123823-rsbcpt6",
-						"updated": "20260618123823"
+						"updated": "20261016112115"
 					},
 					"Children": [
 						{
@@ -1457,12 +1673,12 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20260618123823-o0s9ivx",
-								"updated": "20260618123823"
+								"updated": "20261016112115"
 							},
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "修改/刪除類操作建議先用 "
+									"Data": "支援時使用 "
 								},
 								{
 									"Type": "NodeTextMark",
@@ -1471,7 +1687,7 @@
 								},
 								{
 									"Type": "NodeText",
-									"Data": "​ 驗證參數正確性"
+									"Data": " 預演變更；預演成功不保證實際執行成功"
 								}
 							]
 						}
@@ -1506,6 +1722,92 @@
 							]
 						}
 					]
+				},
+				{
+					"ID": "20261016112115-ndwtjod",
+					"Type": "NodeListItem",
+					"Properties": {
+						"id": "20261016112115-ndwtjod",
+						"updated": "20261016112115"
+					},
+					"ListData": {
+						"Typ": 1,
+						"Delimiter": 46,
+						"Marker": "Mi4=",
+						"Num": 2
+					},
+					"Children": [
+						{
+							"ID": "20261016112115-4bmhcj7",
+							"Type": "NodeParagraph",
+							"Properties": {
+								"id": "20261016112115-4bmhcj7",
+								"updated": "20261016112115"
+							},
+							"Children": [
+								{
+									"Type": "NodeText",
+									"Data": "單次 CLI 指令不支援加密筆記本及其區塊、原始檔案、歷史和快照檔案內容，即使已在應用中解鎖也不支援。工作空間中只要存在加密筆記本，"
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "code",
+									"TextMarkTextContent": "export data"
+								},
+								{
+									"Type": "NodeText",
+									"Data": " 就會被拒絕。請透過應用內的 "
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "設定"
+								},
+								{
+									"Type": "NodeText",
+									"Data": " - "
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "應用"
+								},
+								{
+									"Type": "NodeText",
+									"Data": " - "
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "資料"
+								},
+								{
+									"Type": "NodeText",
+									"Data": " - "
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "匯出 Data"
+								},
+								{
+									"Type": "NodeText",
+									"Data": " 匯出資料封存檔，依 "
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "block-ref",
+									"TextMarkBlockRefID": "20260907120000-crytw01",
+									"TextMarkBlockRefSubtype": "s",
+									"TextMarkTextContent": "加密筆記本"
+								},
+								{
+									"Type": "NodeText",
+									"Data": " 說明復原，並分開保管相符的金鑰備份和主密碼"
+								}
+							]
+						}
+					]
 				}
 			]
 		},
@@ -1515,7 +1817,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20260618123823-higd400",
-				"updated": "20260618123823"
+				"updated": "20261101194733"
 			},
 			"Children": [
 				{
@@ -3100,7 +3402,7 @@
 			"HeadingLevel": 3,
 			"Properties": {
 				"id": "20260618123823-c380p94",
-				"updated": "20260618123823"
+				"updated": "20260809232000"
 			},
 			"Children": [
 				{
@@ -4100,7 +4402,7 @@
 			"IsFencedCodeBlock": true,
 			"Properties": {
 				"id": "20260618123823-v6z94wh",
-				"updated": "20260618123823"
+				"updated": "20260809232000"
 			},
 			"Children": [
 				{
@@ -4113,7 +4415,7 @@
 				},
 				{
 					"Type": "NodeCodeBlockCode",
-					"Data": "siyuan block get --id block-id\nsiyuan block children --id block-id\nsiyuan block breadcrumb --id block-id\nsiyuan block dom --id block-id\nsiyuan block kramdown --id block-id\nsiyuan block kramdown --id block-id --mode md\nsiyuan block stat --id doc-id\n\nsiyuan block insert --parent parent-id --data \"# 新標題\"\nsiyuan block insert --parent parent-id --file ./content.md\nsiyuan block insert --parent parent-id --data \"段落\" --previous sibling-id\n\nsiyuan block append --parent parent-id --data \"- 列表項\"\nsiyuan block append --parent parent-id --file ./content.md\n\nsiyuan block prepend --parent parent-id --data \"> 引用\"\n\nsiyuan block update --id block-id --data \"修改後內容\"\nsiyuan block update --id block-id --file ./content.md\n\nsiyuan block delete --id block-id\n\nsiyuan block move --id block-id --parent target-id\nsiyuan block move --id block-id --parent target-id --previous sibling-id\n\nsiyuan block batch-get --ids \"id1,id2,id3\"\nsiyuan block batch-kramdown --ids \"id1,id2,id3\"\n"
+					"Data": "siyuan block get --id block-id\nsiyuan block children --id block-id\nsiyuan block breadcrumb --id block-id\nsiyuan block dom --id block-id\nsiyuan block kramdown --id block-id\nsiyuan block kramdown --id block-id --mode md\nsiyuan block stat --id doc-id\n\nsiyuan block insert --parent parent-id --data \"# 新標題\"\nsiyuan block insert --parent parent-id --file ./content.md\nsiyuan block insert --parent parent-id --data \"段落\" --previous sibling-id\n\nsiyuan block append --parent parent-id --data \"- 列表項\"\nsiyuan block append --parent parent-id --file ./content.md\n\nsiyuan block prepend --parent parent-id --data \"> 引用\"\n\nsiyuan block update --id block-id --data \"修改後內容\"\nsiyuan block update --id block-id --file ./content.md\n\nsiyuan block delete --id block-id\n\nsiyuan block move --id block-id --parent target-id\nsiyuan block move --id block-id --parent target-id --previous sibling-id\n\nsiyuan block batch-get --ids \"id1,id2,id3\"\nsiyuan block batch-kramdown --ids \"id1,id2,id3\"\nsiyuan block update --id block-id --data \"updated content\" --lock-type\n"
 				},
 				{
 					"Type": "NodeCodeBlockFenceCloseMarker",
@@ -4295,7 +4597,7 @@
 			"HeadingLevel": 3,
 			"Properties": {
 				"id": "20260618123823-5n9vh1d",
-				"updated": "20260618123823"
+				"updated": "20261024160716"
 			},
 			"Children": [
 				{
@@ -4309,12 +4611,32 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20260618123823-cqzt3wt",
-				"updated": "20260618123823"
+				"updated": "20261016112115"
 			},
 			"Children": [
 				{
 					"Type": "NodeText",
-					"Data": "全文搜尋，支援按筆記本、路徑、區塊類型過濾，以及多種搜尋方法和排序方式。"
+					"Data": "支援依筆記本、路徑和區塊類型篩選，並提供多種搜尋方法與排序。"
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "--method 4"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 是語意搜尋，需要啟用嵌入模型並準備嵌入索引；請先在應用中依 "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "block-ref",
+					"TextMarkBlockRefID": "20260804171003-semnt02",
+					"TextMarkBlockRefSubtype": "s",
+					"TextMarkTextContent": "語意搜尋"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 完成設定和索引。資源檔案搜尋只支援方法 0–3。"
 				}
 			]
 		},
@@ -4328,7 +4650,7 @@
 			"Properties": {
 				"colgroup": "|",
 				"id": "20260618123823-i6ptxqr",
-				"updated": "20260618123823"
+				"updated": "20261016112115"
 			},
 			"Children": [
 				{
@@ -4532,7 +4854,7 @@
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "按子類型過濾（o=有序列表/u=無序列表/t=任務列表），可重複"
+									"Data": "按子類型過濾：h1 至 h6 為標題層級；list:o/u/t 為列表區塊，listItem:o/u/t 為列表項區塊（o=有序、u=無序、t=任務），可重複指定；不再支援裸 o/u/t"
 								}
 							]
 						}
@@ -4612,7 +4934,7 @@
 								},
 								{
 									"Type": "NodeText",
-									"Data": "​ 模糊"
+									"Data": "​ 語意搜尋"
 								}
 							]
 						}
@@ -4856,7 +5178,7 @@
 			"IsFencedCodeBlock": true,
 			"Properties": {
 				"id": "20260618123823-1depvwg",
-				"updated": "20260618123823"
+				"updated": "20261024160716"
 			},
 			"Children": [
 				{
@@ -4869,7 +5191,7 @@
 				},
 				{
 					"Type": "NodeCodeBlockCode",
-					"Data": "siyuan search \"關鍵字\"\nsiyuan search \"關鍵字\" --notebook box1 --notebook box2\nsiyuan search \"關鍵字\" --path \"/目錄\"\nsiyuan search \"關鍵字\" --type document --type heading\nsiyuan search \"關鍵字\" --subtype o --subtype u\nsiyuan search \"關鍵字\" --method 2\nsiyuan search \"關鍵字\" --order-by 4 --page 1 --page-size 20\nsiyuan search \"關鍵字\" --group-by 1\n"
+					"Data": "siyuan search \"關鍵字\"\nsiyuan search \"關鍵字\" --notebook box1 --notebook box2\nsiyuan search \"關鍵字\" --path \"/目錄\"\nsiyuan search \"關鍵字\" --type document --type heading\nsiyuan search \"關鍵字\" --type listItem --subtype listItem:o --subtype listItem:u\nsiyuan search \"SELECT * FROM blocks WHERE type='h' LIMIT 20\" --method 2\nsiyuan search \"關鍵字\" --order-by 4 --page 1 --page-size 20\nsiyuan search \"關鍵字\" --group-by 1\n"
 				},
 				{
 					"Type": "NodeCodeBlockFenceCloseMarker",
@@ -5369,7 +5691,7 @@
 			"HeadingLevel": 3,
 			"Properties": {
 				"id": "20260618123823-fcc5zu8",
-				"updated": "20260618123823"
+				"updated": "20261016112115"
 			},
 			"Children": [
 				{
@@ -5383,12 +5705,12 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20260618123823-6okdop9",
-				"updated": "20260618123823"
+				"updated": "20261016112115"
 			},
 			"Children": [
 				{
 					"Type": "NodeText",
-					"Data": "將文件匯出為各種格式。"
+					"Data": "匯出文件至不同格式，"
 				},
 				{
 					"Type": "NodeTextMark",
@@ -5397,7 +5719,36 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​ 指定輸出檔案路徑。"
+					"Data": " 指定輸出檔案。"
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "export data"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 僅封裝工作空間的 "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "data"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 目錄，存在任何加密筆記本時會拒絕執行。支援的應用內備份與復原方式見 "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "block-ref",
+					"TextMarkBlockRefID": "20260907120000-crytw01",
+					"TextMarkBlockRefSubtype": "s",
+					"TextMarkTextContent": "加密筆記本"
+				},
+				{
+					"Type": "NodeText",
+					"Data": "。"
 				}
 			]
 		},
@@ -5412,7 +5763,7 @@
 			"Properties": {
 				"colgroup": "||",
 				"id": "20260618123823-8zd0exu",
-				"updated": "20260618123823"
+				"updated": "20261016112115"
 			},
 			"Children": [
 				{
@@ -5883,7 +6234,7 @@
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "匯出完整資料備份"
+									"Data": "僅匯出 data 目錄；存在任何加密筆記本時不可用"
 								}
 							]
 						}
@@ -5897,7 +6248,7 @@
 			"IsFencedCodeBlock": true,
 			"Properties": {
 				"id": "20260618123823-ekx7mlj",
-				"updated": "20260618123823"
+				"updated": "20261016112115"
 			},
 			"Children": [
 				{
@@ -5910,7 +6261,7 @@
 				},
 				{
 					"Type": "NodeCodeBlockCode",
-					"Data": "siyuan export md --id doc-id\nsiyuan export md --id doc-id --output ./output.md\nsiyuan export html --id doc-id --output ./output.html\nsiyuan export preview --id doc-id --output ./preview.html\nsiyuan export docx --id doc-id --output ./output.docx\nsiyuan export sy --id doc-id --output ./backup.sy.zip\nsiyuan export md-zip --id doc-id --output ./archive.zip\nsiyuan export data --output ./full-backup.zip\n"
+					"Data": "siyuan export md --id doc-id\nsiyuan export md --id doc-id --output ./output.md\nsiyuan export html --id doc-id --output ./output.html\nsiyuan export preview --id doc-id --output ./preview.html\nsiyuan export docx --id doc-id --output ./output.docx\nsiyuan export sy --id doc-id --output ./backup.sy.zip\nsiyuan export md-zip --id doc-id --output ./archive.zip\nsiyuan export data --output ./data-backup.zip\n"
 				},
 				{
 					"Type": "NodeCodeBlockFenceCloseMarker",
@@ -5924,7 +6275,7 @@
 			"HeadingLevel": 3,
 			"Properties": {
 				"id": "20260618123823-sl7sdvi",
-				"updated": "20260618123823"
+				"updated": "20261016112115"
 			},
 			"Children": [
 				{
@@ -5958,7 +6309,7 @@
 			"Properties": {
 				"colgroup": "||",
 				"id": "20260618123823-4tp2iwy",
-				"updated": "20260618123823"
+				"updated": "20261016112115"
 			},
 			"Children": [
 				{
@@ -6301,7 +6652,7 @@
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "匯入完整資料備份"
+									"Data": "匯入 data 目錄備份"
 								}
 							]
 						}
@@ -6315,7 +6666,7 @@
 			"IsFencedCodeBlock": true,
 			"Properties": {
 				"id": "20260618123823-mgbd9us",
-				"updated": "20260618123823"
+				"updated": "20261016112115"
 			},
 			"Children": [
 				{
@@ -6328,7 +6679,7 @@
 				},
 				{
 					"Type": "NodeCodeBlockCode",
-					"Data": "siyuan import md --file ./notes --notebook notebook-id\nsiyuan import md --file ./doc.md --notebook notebook-id --hpath \"/匯入目錄\"\nsiyuan import sy --file ./backup.sy.zip --notebook notebook-id\nsiyuan import data --file ./full-backup.zip\n"
+					"Data": "siyuan import md --file ./notes --notebook notebook-id\nsiyuan import md --file ./doc.md --notebook notebook-id --hpath \"/匯入目錄\"\nsiyuan import sy --file ./backup.sy.zip --notebook notebook-id\nsiyuan import data --file ./data-backup.zip\n"
 				},
 				{
 					"Type": "NodeCodeBlockFenceCloseMarker",
@@ -9641,7 +9992,7 @@
 			"HeadingLevel": 3,
 			"Properties": {
 				"id": "20260618123823-68rq10j",
-				"updated": "20260618123823"
+				"updated": "20261024162311"
 			},
 			"Children": [
 				{
@@ -10819,7 +11170,7 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20260618123823-w37cz3v",
-				"updated": "20260618123823"
+				"updated": "20261024162311"
 			},
 			"Children": [
 				{
@@ -10834,15 +11185,6 @@
 				{
 					"Type": "NodeText",
 					"Data": "​ 欄位類型："
-				},
-				{
-					"Type": "NodeTextMark",
-					"TextMarkType": "code",
-					"TextMarkTextContent": "block"
-				},
-				{
-					"Type": "NodeText",
-					"Data": "​ / "
 				},
 				{
 					"Type": "NodeTextMark",
@@ -10915,6 +11257,15 @@
 				{
 					"Type": "NodeText",
 					"Data": "​ / "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "location"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " / "
 				},
 				{
 					"Type": "NodeTextMark",
@@ -11355,7 +11706,7 @@
 			"HeadingLevel": 3,
 			"Properties": {
 				"id": "20260618123823-chsmlf1",
-				"updated": "20260618123823"
+				"updated": "20260809232000"
 			},
 			"Children": [
 				{
@@ -11821,7 +12172,7 @@
 			"IsFencedCodeBlock": true,
 			"Properties": {
 				"id": "20260618123823-k21hsi1",
-				"updated": "20260618123823"
+				"updated": "20260809232000"
 			},
 			"Children": [
 				{
@@ -11834,7 +12185,7 @@
 				},
 				{
 					"Type": "NodeCodeBlockCode",
-					"Data": "siyuan template search\nsiyuan template search \"會議\"\nsiyuan template get --path templates/週報.md\nsiyuan template create --name \"週報\" --data \"# 週報\"\nsiyuan template create --name \"週報\" --file ./weekly.md\nsiyuan template create --name \"週報\" --data \"# 週報\" --overwrite\nsiyuan template render --path templates/週報.md --id doc-id\nsiyuan template save-as --id doc-id --name \"會議紀錄\"\nsiyuan template save-as --id doc-id --name \"會議紀錄\" --overwrite\nsiyuan template remove --path templates/週報.md\n"
+					"Data": "siyuan template search\nsiyuan template search \"會議\"\nsiyuan template get --path 週報.md\nsiyuan template create --name \"週報\" --data \"# 週報\"\nsiyuan template create --name \"週報\" --file ./weekly.md\nsiyuan template create --name \"週報\" --data \"# 週報\" --overwrite\nsiyuan template render --path 週報.md --id doc-id\nsiyuan template save-as --id doc-id --name \"會議紀錄\"\nsiyuan template save-as --id doc-id --name \"會議紀錄\" --overwrite\nsiyuan template remove --path 週報.md\n"
 				},
 				{
 					"Type": "NodeCodeBlockFenceCloseMarker",
@@ -12513,6 +12864,235 @@
 				{
 					"Type": "NodeCodeBlockFenceCloseMarker",
 					"Data": "```"
+				}
+			]
+		},
+		{
+			"ID": "20260809180000-e92835b",
+			"Type": "NodeHeading",
+			"HeadingLevel": 3,
+			"Properties": {
+				"id": "20260809180000-e92835b",
+				"updated": "20261101194733"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "伺服器"
+				}
+			]
+		},
+		{
+			"ID": "20260809180000-e03df60",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20260809180000-e03df60",
+				"updated": "20261016112115"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "啟動 HTTP 服務。"
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "--workspace"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 選擇工作空間資料目錄；"
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "--wd"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 選擇包含 "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "appearance/"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 和 "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "stage/"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 的程式資源目錄，通常會自動尋找。"
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "--port"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 指定連接埠，"
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "--readonly"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 設定唯讀模式，"
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "--accessAuthCode"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 設定存取鑑權碼，"
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "--lang"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 設定介面語言，"
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "--mode"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 設定 dev 或 prod 模式，"
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "--ssl"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 啟用 HTTPS 和 WSS，"
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "--safe-mode"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 啟用安全模式。"
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "--attach-ui"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 僅供 Electron 內部使用。"
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "--enable-pprof"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 會公開無需鑑權的程序診斷資訊，只能用於本機開發。"
+				}
+			]
+		},
+		{
+			"ID": "20261101194733-dzxrxry",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261101194733-dzxrxry",
+				"updated": "20261101194733"
+			},
+			"Children": [
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "--fixed-port"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 預設為 "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "true"
+				},
+				{
+					"Type": "NodeText",
+					"Data": "，設定 "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "--fixed-port=false"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 可關閉供瀏覽器擴充功能使用的額外 6806 連接埠反向代理。該參數不改變 "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "--port"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 或發布服務；主服務設定為 "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "--port 6806"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 時仍監聽 6806。原先透過該反向代理連線的用戶端需要改用主服務的實際連接埠。移除該參數或將其設為 true 並重新啟動核心即可恢復反向代理。"
+				}
+			]
+		},
+		{
+			"ID": "20260809180000-5b0b082",
+			"Type": "NodeCodeBlock",
+			"IsFencedCodeBlock": true,
+			"Properties": {
+				"id": "20260809180000-5b0b082",
+				"updated": "20261101194733"
+			},
+			"Children": [
+				{
+					"Type": "NodeCodeBlockFenceOpenMarker",
+					"Data": "```",
+					"CodeBlockFenceLen": 3
+				},
+				{
+					"Type": "NodeCodeBlockFenceInfoMarker"
+				},
+				{
+					"Type": "NodeCodeBlockCode",
+					"Data": "siyuan serve --workspace /path/to/workspace --port 6806\nsiyuan serve --workspace /path/to/workspace --port 6806 --readonly true\nsiyuan serve --workspace /path/to/workspace --port 6806 --wd /path/to/resources --lang zh-TW --ssl\nsiyuan serve --workspace /path/to/workspace --port 6807 --fixed-port=false\n"
+				},
+				{
+					"Type": "NodeCodeBlockFenceCloseMarker",
+					"Data": "```",
+					"CodeBlockFenceLen": 3
 				}
 			]
 		},

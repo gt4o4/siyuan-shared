@@ -1,14 +1,17 @@
+import {mobileConfirmDialog} from "../../dialog/mobileConfirmDialog";
+import {MobileDialog} from "../../dialog/mobileDialog";
+import {escapeHtmlTextAndAttr} from "../../util/escape";
 import {bindPasswordIconaToggle} from "../render/fragments";
-import {Dialog} from "../../dialog";
-import {confirmDialog} from "../../dialog/confirmDialog";
 import {showMessage} from "../../dialog/message";
 import {Constants} from "../../constants";
 import {isMobile} from "../../util/functions";
+import {readText} from "../../protyle/util/compatibility";
 import {secretsConfigApi, variablesConfigApi} from "./secretsVariablesRuntime";
 
 interface NamedItem {
     name: string;
     value: string;
+    allowedHosts?: string[];
 }
 
 // region 密钥区块（Secrets）
@@ -19,6 +22,8 @@ export const getSecretsBlockKeywords = (): string[] => [
     window.siyuan.languages.addSecret,
     window.siyuan.languages.secretName,
     window.siyuan.languages.secretValue,
+    window.siyuan.languages.secretAllowedHosts,
+    window.siyuan.languages.secretAllowedHostsTip,
     window.siyuan.languages.noSecretConfigured,
 ];
 
@@ -27,7 +32,7 @@ export const genSecretsBlockHtml = (): string => `<div class="b3-label config-it
     <div class="fn__hr--small"></div>
     <div id="secretList"></div>
     <div class="fn__hr"></div>
-    <div class="config-wrap">
+    <div class="fn__flex">
         <button class="b3-button b3-button--outline fn__flex-center fn__size200" data-type="addSecret">
             <svg><use xlink:href="#iconAdd"></use></svg>
             ${window.siyuan.languages.addSecret}
@@ -74,7 +79,7 @@ export const mountSecretsBlock = (root: HTMLElement) => {
                 return;
             }
             showDeleteConfirm(name, () => {
-                saveSecrets(root, window.siyuan.config.secrets.items.filter((item) => item.name !== name));
+                return saveSecrets(root, window.siyuan.config.secrets.items.filter((item) => item.name !== name));
             });
         }
     });
@@ -96,8 +101,13 @@ const renderSecretList = (root: HTMLElement) => {
     });
 };
 
-const saveSecrets = (root: HTMLElement, items: Config.ISecret[]) => {
-    secretsConfigApi.patch("items", items, () => renderSecretList(root));
+const saveSecrets = (root: HTMLElement, items: NamedItem[]) => {
+    const normalized: Config.ISecret[] = items.map((item) => ({
+        name: item.name,
+        value: item.value,
+        allowedHosts: item.allowedHosts ?? [],
+    }));
+    return secretsConfigApi.patch("items", normalized, () => renderSecretList(root));
 };
 
 const getSecretName = (el: HTMLElement): string | undefined =>
@@ -121,7 +131,7 @@ export const genVariablesBlockHtml = (): string => `<div class="b3-label config-
     <div class="fn__hr--small"></div>
     <div id="variableList"></div>
     <div class="fn__hr"></div>
-    <div class="config-wrap">
+    <div class="fn__flex">
         <button class="b3-button b3-button--outline fn__flex-center fn__size200" data-type="addVariable">
             <svg><use xlink:href="#iconAdd"></use></svg>
             ${window.siyuan.languages.addVariable}
@@ -168,7 +178,7 @@ export const mountVariablesBlock = (root: HTMLElement) => {
                 return;
             }
             showDeleteConfirm(name, () => {
-                saveVariables(root, window.siyuan.config.variables.items.filter((item) => item.name !== name));
+                return saveVariables(root, window.siyuan.config.variables.items.filter((item) => item.name !== name));
             });
         }
     });
@@ -191,7 +201,7 @@ const renderVariableList = (root: HTMLElement) => {
 };
 
 const saveVariables = (root: HTMLElement, items: Config.IVariable[]) => {
-    variablesConfigApi.patch("items", items, () => renderVariableList(root));
+    return variablesConfigApi.patch("items", items, () => renderVariableList(root));
 };
 
 const getVariableName = (el: HTMLElement): string | undefined =>
@@ -219,8 +229,8 @@ const renderNamedItemList = (options: RenderNamedItemListOptions) => {
         return;
     }
     const html = items.map((item) => {
-        return `<div class="b3-list-item b3-list-item--narrow${hideActionClass}" ${dataAttr}="${Lute.EscapeHTMLStr(item.name)}">
-    <span class="b3-list-item__text">${Lute.EscapeHTMLStr(item.name)}</span>
+        return `<div class="b3-list-item b3-list-item--narrow${hideActionClass}" ${dataAttr}="${escapeHtmlTextAndAttr(item.name)}">
+    <span class="b3-list-item__text">${escapeHtmlTextAndAttr(item.name)}</span>
     <span data-type="${deleteType}" class="b3-list-item__action b3-list-item__action--warning b3-tooltips b3-tooltips__w" aria-label="${window.siyuan.languages.delete}">
         <svg><use xlink:href="#iconTrashcan"></use></svg>
     </span>
@@ -242,6 +252,7 @@ const openItemDialog = (options: OpenItemDialogOptions) => {
     const {root, existingName, kind} = options;
     const isNew = !existingName;
     const isSecret = kind === "secret";
+    const mobile = isMobile();
     const configItems: NamedItem[] = isSecret
         ? window.siyuan.config.secrets.items
         : window.siyuan.config.variables.items;
@@ -264,27 +275,43 @@ const openItemDialog = (options: OpenItemDialogOptions) => {
 
     const valueInputHtml = isSecret
         ? `<div class="b3-form__icona fn__block">
-    <input id="itemValue" type="password" class="b3-text-field b3-form__icona-input" spellcheck="false" value="${Lute.EscapeHTMLStr(initial.value)}">
+    <input id="itemValue" type="password" class="b3-text-field b3-form__icona-input" spellcheck="false" value="${escapeHtmlTextAndAttr(initial.value)}">
     <svg class="b3-form__icona-icon" data-action="togglePassword" style="user-select: none;">
         <use xlink:href="#iconEye"></use>
     </svg>
 </div>`
-        : `<input class="b3-text-field fn__block" id="itemValue" type="text" spellcheck="false" value="${Lute.EscapeHTMLStr(initial.value)}"/>`;
+        : `<input class="b3-text-field fn__block" id="itemValue" type="text" spellcheck="false" value="${escapeHtmlTextAndAttr(initial.value)}"/>`;
+    const valueFieldHtml = mobile && isSecret
+        ? `<div class="fn__flex"><div class="fn__flex-1">${valueInputHtml}</div><div class="fn__space"></div>
+    <button class="b3-button b3-button--outline fn__flex-center" data-action="pasteValue">${window.siyuan.languages.paste}</button>
+</div>`
+        : valueInputHtml;
 
-    const dialog = new Dialog({
+    const initialHosts: string[] = isSecret ? (initial.allowedHosts ?? []) : [];
+    const hostsInputHtml = isSecret
+        ? `<div class="b3-label b3-label--inner">
+    <div class="config-name">${window.siyuan.languages.secretAllowedHosts}</div>
+    <div class="b3-label__text">${window.siyuan.languages.secretAllowedHostsTip}</div>
+    <div class="fn__hr"></div>
+    <input class="b3-text-field fn__block" id="itemAllowedHosts" type="text" spellcheck="false" value="${escapeHtmlTextAndAttr(initialHosts.join(", "))}"/>
+</div>`
+        : "";
+
+    const dialog = new MobileDialog({
         title: titleKey,
-        width: isMobile() ? "92vw" : "520px",
+        width: mobile ? "92vw" : "520px",
         content: `<div class="b3-dialog__content">
     <div class="b3-label b3-label--inner">
         <div class="config-name">${isSecret ? window.siyuan.languages.secretName : window.siyuan.languages.variableName}</div>
         <div class="b3-label__text">${isSecret ? window.siyuan.languages.secretNameTip : window.siyuan.languages.variableNameTip}</div>
         <div class="fn__hr"></div>
-        <input class="b3-text-field fn__block" id="itemName" type="text" spellcheck="false" value="${Lute.EscapeHTMLStr(initial.name)}"/>
+        <input class="b3-text-field fn__block" id="itemName" type="text" spellcheck="false" value="${escapeHtmlTextAndAttr(initial.name)}"/>
     </div>
+    ${hostsInputHtml}
     <div class="b3-label b3-label--inner">
         <div class="config-name">${valueKey}</div>
         <div class="fn__hr"></div>
-        ${valueInputHtml}
+        ${valueFieldHtml}
     </div>
 </div>
 <div class="b3-dialog__action">
@@ -296,8 +323,31 @@ const openItemDialog = (options: OpenItemDialogOptions) => {
     dialog.element.setAttribute("data-key", Constants.DIALOG_AIPROVIDER);
     if (isSecret) {
         bindPasswordIconaToggle(dialog.element, "itemValue");
+        const pasteButton = dialog.element.querySelector<HTMLButtonElement>('[data-action="pasteValue"]');
+        pasteButton?.addEventListener("click", async () => {
+            pasteButton.disabled = true;
+            try {
+                const text = await readText(true);
+                if (dialog.element.dataset.dialogClosing || !dialog.element.isConnected) {
+                    return;
+                }
+                if (typeof text !== "string") {
+                    showMessage(window.siyuan.languages.clipboardPermissionDenied);
+                    return;
+                }
+                if (text) {
+                    dialog.element.querySelector<HTMLInputElement>("#itemValue").value = text;
+                }
+            } catch {
+                if (!dialog.element.dataset.dialogClosing && dialog.element.isConnected) {
+                    showMessage(window.siyuan.languages.clipboardPermissionDenied);
+                }
+            } finally {
+                pasteButton.disabled = false;
+            }
+        });
     }
-    dialog.element.querySelector<HTMLInputElement>("#itemName").select();
+    dialog.focusWhenReady(() => dialog.element.querySelector<HTMLInputElement>("#itemName"), {select: true});
 
     const btns = dialog.element.querySelectorAll(".b3-dialog__action .b3-button");
     btns[0].addEventListener("click", () => dialog.destroy());
@@ -307,6 +357,12 @@ const openItemDialog = (options: OpenItemDialogOptions) => {
             name: dialog.element.querySelector<HTMLInputElement>("#itemName").value.trim(),
             value: dialog.element.querySelector<HTMLInputElement>("#itemValue").value,
         };
+        if (isSecret) {
+            next.allowedHosts = (dialog.element.querySelector<HTMLInputElement>("#itemAllowedHosts")?.value ?? "")
+                .split(/[,\s;]+/)
+                .map((host) => host.trim())
+                .filter((host) => host !== "");
+        }
         if (!next.name) {
             showMessage(nameRequiredKey);
             return;
@@ -318,6 +374,13 @@ const openItemDialog = (options: OpenItemDialogOptions) => {
         const nextItems = isNew
             ? [...configItems, next]
             : configItems.map((item) => item.name !== existingName ? item : next);
+        if (mobile) {
+            void dialog.runPending(async () => {
+                await (isSecret ? saveSecrets(root, nextItems) : saveVariables(root, nextItems));
+                return true;
+            }, {close: true});
+            return;
+        }
         if (isSecret) {
             saveSecrets(root, nextItems);
         } else {
@@ -327,13 +390,19 @@ const openItemDialog = (options: OpenItemDialogOptions) => {
     });
 };
 
-const showDeleteConfirm = (title: string, onConfirm: () => void) => {
-    confirmDialog(
+const showDeleteConfirm = (title: string, onConfirm: () => Promise<unknown>) => {
+    mobileConfirmDialog(
         window.siyuan.languages.deleteOpConfirm,
-        window.siyuan.languages.confirmDeleteTip.replace("${x}", Lute.EscapeHTMLStr(title)),
-        onConfirm,
+        window.siyuan.languages.confirmDeleteTip.replace("${x}", escapeHtmlTextAndAttr(title)),
+        async () => {
+            await onConfirm();
+            return true;
+        },
         undefined,
         true,
+        undefined,
+        undefined,
+        {awaitConfirm: true},
     );
 };
 

@@ -1,3 +1,4 @@
+import {bindPanelSearch} from "../../layout/dock/panelSearch";
 import {Tree} from "../../util/Tree";
 import {fetchPost} from "../../util/fetch";
 import {Constants} from "../../constants";
@@ -6,6 +7,7 @@ import {openMobileFileById} from "../editor";
 import {openBookmarkMenu} from "../../menus/bookmark";
 import type {App} from "../../index";
 import {checkFold} from "../../util/noRelyPCFunction";
+import {showMobileFilterInput} from "./mobileFilterInput";
 
 export class MobileBookmarks {
     public element: HTMLElement;
@@ -16,40 +18,28 @@ export class MobileBookmarks {
     private updating = false;
     private updatePending = false;
 
-    constructor(app: App) {
-        this.element = document.querySelector('#sidebar [data-type="sidebar-bookmark"]');
-        this.element.innerHTML = `<div class="toolbar toolbar--border toolbar--dark">
+    constructor(app: App, element: HTMLElement) {
+        this.element = element;
+        this.element.innerHTML = `<div class="toolbar toolbar--dark">
     <div class="fn__space"></div>
     <div class="toolbar__text">
         ${window.siyuan.languages.bookmark}
     </div>
     <span class="fn__space"></span>
-    <input class="b3-text-field search__label fn__none fn__size200" placeholder="${window.siyuan.languages.filterKeywordEnter}" />
-    <svg data-type="search" class="toolbar__icon"><use xlink:href='#iconFilter'></use></svg>
+    <input spellcheck="false" class="b3-text-field search__label fn__none fn__size200" placeholder="${window.siyuan.languages.searchPlaceholder}" />
+    <svg data-type="search" class="toolbar__icon"><use xlink:href='#iconSearch'></use></svg>
     <span class="fn__space"></span>
     <svg data-type="expand" class="toolbar__icon"><use xlink:href="#iconExpand"></use></svg>
     <span class="fn__space"></span>
     <svg data-type="collapse" class="toolbar__icon"><use xlink:href="#iconContract"></use></svg>
 </div>
 <div class="fn__flex-1 bookmarkList"></div>
-<img style="position: absolute;top: 0;left: 0;height: 100%;width: 100%;padding: 30vw;box-sizing: border-box;" src="/stage/loading-pure.svg">`;
+<div class="fn__loading" style="left:0"><span class="b3-loading b3-loading--large" aria-hidden="true"></span></div>`;
         const inputElement = this.element.querySelector("input.b3-text-field.search__label") as HTMLInputElement;
-        inputElement.addEventListener("blur", () => {
-            inputElement.classList.add("fn__none");
-            const filterIconElement = inputElement.nextElementSibling as HTMLElement;
-            const value = inputElement.value;
-            if (value.trim()) {
-                filterIconElement.classList.add("toolbar__icon--active");
-            } else {
-                filterIconElement.classList.remove("toolbar__icon--active");
-            }
-        });
-        inputElement.addEventListener("input", (event: InputEvent) => {
-            if (!event.isComposing) {
-                this.filter();
-            }
-        });
-        inputElement.addEventListener("compositionend", () => this.filter());
+        bindPanelSearch(inputElement,
+            this.element.querySelector('[data-type="search"]'), () => this.filter(), {
+                activeClass: "toolbar__icon--active", updateLabel: false,
+            });
 
         this.tree = new Tree({
             element: this.element.querySelector(".bookmarkList") as HTMLElement,
@@ -64,7 +54,7 @@ export class MobileBookmarks {
                     }
                 }
                 checkFold(id, (zoomIn) => {
-                    openMobileFileById(app, id, zoomIn ? [Constants.CB_GET_HL, Constants.CB_GET_ALL] : [Constants.CB_GET_HL, Constants.CB_GET_CONTEXT, Constants.CB_GET_ROOTSCROLL]);
+                    openMobileFileById(app, id, zoomIn ? [Constants.CB_GET_HL, Constants.CB_GET_ALL] : [Constants.CB_GET_HL, Constants.CB_GET_CONTEXT, Constants.CB_GET_ROOTSCROLL], "start");
                 });
             },
             blockExtHTML: '<span class="b3-list-item__action"><svg><use xlink:href="#iconMore"></use></svg></span>',
@@ -86,8 +76,7 @@ export class MobileBookmarks {
                             this.tree.expandAll();
                             break;
                         case "search":
-                            inputElement.classList.remove("fn__none");
-                            inputElement.select();
+                            showMobileFilterInput(inputElement, target);
                             break;
                     }
                 }

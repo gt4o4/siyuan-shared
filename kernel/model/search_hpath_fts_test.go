@@ -1,20 +1,8 @@
-//go:build fts5
-
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+//go:build fts5
 
 package model
 
@@ -66,6 +54,9 @@ func TestFTSAndHPathMatchesIntegration(t *testing.T) {
 		ids = append(ids, id)
 		sources = append(sources, source)
 	}
+	if err = rows.Err(); err != nil {
+		t.Fatal(err)
+	}
 	if err = rows.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -101,5 +92,87 @@ func TestFTSAndHPathMatchesIntegration(t *testing.T) {
 	}
 	if err = snippetRows.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSiYuanFTSMatchesWhitespace(t *testing.T) {
+	testDB, err := gosql.Open("sqlite3_extended", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	testDB.SetMaxOpenConns(1)
+	t.Cleanup(func() {
+		testDB.Close()
+	})
+	if _, err = testDB.Exec(`CREATE VIRTUAL TABLE whitespace_fts USING fts5(content, tokenize="siyuan")`); err != nil {
+		t.Fatal(err)
+	}
+	for _, content := range []string{"你好", "你 好", "你  好"} {
+		if _, err = testDB.Exec("INSERT INTO whitespace_fts(content) VALUES (?)", content); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	assertMatches := func(query string, expected []string) {
+		t.Helper()
+		ftsQuery, hPathQuery := buildKeywordSearchQueries(query)
+		if "" != hPathQuery {
+			t.Fatalf("纯空白查询不应参与层级路径搜索：%q", hPathQuery)
+		}
+		matchQuery := "{content}:(" + ftsQuery + ")"
+		rows, queryErr := testDB.Query("SELECT content FROM whitespace_fts WHERE whitespace_fts MATCH ? ORDER BY rowid", matchQuery)
+		if queryErr != nil {
+			t.Fatal(queryErr)
+		}
+		var actual []string
+		for rows.Next() {
+			var content string
+			if queryErr = rows.Scan(&content); queryErr != nil {
+				rows.Close()
+				t.Fatal(queryErr)
+			}
+			actual = append(actual, content)
+		}
+		if queryErr = rows.Err(); queryErr != nil {
+			rows.Close()
+			t.Fatal(queryErr)
+		}
+		if queryErr = rows.Close(); queryErr != nil {
+			t.Fatal(queryErr)
+		}
+		if !slices.Equal(actual, expected) {
+			t.Fatalf("空白查询 %q 的匹配结果错误：got %v, want %v", query, actual, expected)
+		}
+	}
+
+	assertMatches(" ", []string{"你 好", "你  好"})
+	assertMatches("  ", []string{"你  好"})
+}
+
+func TestSiYuanFTSMatchesQuotedKeywords(t *testing.T) {
+	testDB, err := gosql.Open("sqlite3_extended", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { testDB.Close() })
+	if _, err = testDB.Exec(`CREATE VIRTUAL TABLE quoted_fts USING fts5(content, tokenize="siyuan")`); err != nil {
+		t.Fatal(err)
+	}
+	for _, content := range []string{"it's none", "O'Reilly books", `a"b text`} {
+		if _, err = testDB.Exec("INSERT INTO quoted_fts(content) VALUES (?)", content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, query := range []string{"it's", "it's none", "O'Reilly", `a"b`} {
+		t.Run(query, func(t *testing.T) {
+			ftsQuery, _ := buildKeywordSearchQueries(query)
+			var count int
+			if err = testDB.QueryRow("SELECT COUNT(*) FROM quoted_fts WHERE quoted_fts MATCH ?", ftsQuery).Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			if count != 1 {
+				t.Fatalf("关键词 %q 应命中一条记录，实际为 %d", query, count)
+			}
+		})
 	}
 }

@@ -1,20 +1,88 @@
-export const cellValueIsEmpty = (value: IAVCellValue) => {
+import {isAVDateType, isAVSelectType, isAVTextType} from "./capabilities";
+import type {IAVSelectedCell} from "./selectionState";
+import {createAVLocationReplacement, isAVLocationEmpty} from "./locationValue";
+
+// 编辑器按条目和原始字段验证目标，包含隐藏字段以及批量代理未携带分组标识的情况。
+export const hasAVCachedCellType = (view: IAVView, rowID: string, colID: string, type: TAVCol): boolean => {
+    const columns = (view as IAVTable).columns || (view as IAVGallery).fields || [];
+    const index = columns.findIndex(column => column.id === colID && column.type === type);
+    const items: Array<IAVRow | IAVGalleryItem> = (view as IAVTable).rows || (view as IAVGallery).cards || [];
+    if (index >= 0 && items.some(item => item.id === rowID &&
+        !!("cells" in item ? item.cells : item.values)[index])) {
+        return true;
+    }
+    return view.groups?.some(group => hasAVCachedCellType(group, rowID, colID, type)) || false;
+};
+
+// 按行和字段同步已加载的数据，供后续编辑读取，不依赖选区或单元格是否已渲染。
+export const updateAVCachedCellValue = (view: IAVView, rowID: string, colID: string, value: IAVCellValue) => {
+    const columns = (view as IAVTable).columns || (view as IAVGallery).fields || [];
+    const colIndex = columns.findIndex(column => column.id === colID);
+    const items: Array<IAVRow | IAVGalleryItem> = (view as IAVTable).rows || (view as IAVGallery).cards || [];
+    if (colIndex >= 0) {
+        items.filter(item => item.id === rowID).forEach(item => {
+            const cell = ("cells" in item ? item.cells : item.values)[colIndex];
+            if (cell) {
+                cell.id = value.id || "";
+                cell.value = cloneAVCellValueSnapshot(value);
+                cell.valueType = value.type;
+            }
+        });
+    }
+    view.groups?.forEach(group => updateAVCachedCellValue(group, rowID, colID, value));
+};
+
+export const getAVBlockRefSubtype = (value?: IAVCellValue): "s" | "d" => value?.block?.refSubtype === "d" ? "d" : "s";
+
+export const createEmptyAVValue = (keyID: string, type: TAVCol, blockID?: string) => ({
+    type,
+    keyID,
+    blockID,
+    block: {id: "", content: ""},
+    text: {content: ""},
+    number: {content: 0, isNotEmpty: false, formattedContent: ""},
+    url: {content: ""},
+    phone: {content: ""},
+    email: {content: ""},
+    ...(type === "location" ? {location: createAVLocationReplacement()} : {}),
+    template: {content: ""},
+    date: {isNotEmpty: false, isNotEmpty2: false},
+    created: {isNotEmpty: false},
+    updated: {isNotEmpty: false},
+    checkbox: {checked: false},
+    mSelect: [],
+    mAsset: [],
+    relation: {blockIDs: [], contents: []},
+    rollup: {contents: []},
+} as IAVCellValue);
+
+export const hasAVRenderTemplateResult = (value: IAVCellValue, renderTemplate?: string) =>
+    value.type !== "template" &&
+    (value.hasRenderTemplate || typeof value.renderedContent === "string" || Boolean(renderTemplate?.trim()));
+
+export const cellValueIsEmpty = (value: IAVCellValue, useRenderedContent = false, renderTemplate?: string) => {
+    if (useRenderedContent && hasAVRenderTemplateResult(value, renderTemplate)) {
+        return !value.renderedContent;
+    }
     if (value.type === "checkbox") {
         return false;
     }
-    if (["text", "block", "url", "phone", "email", "template"].includes(value.type)) {
+    if (value.type === "location") {
+        return isAVLocationEmpty(value.location);
+    }
+    if (isAVTextType(value.type)) {
         return !value[value.type as "text"]?.content;
     }
     if (value.type === "number") {
         return value.number ? !value.number.isNotEmpty : true;
     }
-    if (["mSelect", "mAsset", "select"].includes(value.type)) {
+    if ((isAVSelectType(value.type) || value.type === "mAsset")) {
         if (value[(value.type === "select" ? "mSelect" : value.type) as "mSelect"]?.length > 0) {
             return false;
         }
         return true;
     }
-    if (["date", "created", "updated"].includes(value.type)) {
+    if (isAVDateType(value.type)) {
         return !value[value.type as "date"]?.isNotEmpty &&
             !value[value.type as "date"]?.isNotEmpty2;
     }
@@ -36,12 +104,14 @@ export const genEmptyAVCellValue = (colType: TAVCol): IAVCellValue => {
     const cellValue: IAVCellValue = {
         type: colType,
     };
-    if (colType === "number") {
+    if (colType === "location") {
+        cellValue.location = createAVLocationReplacement();
+    } else if (colType === "number") {
         cellValue.number = {
             content: 0,
             isNotEmpty: false,
         };
-    } else if (["text", "block", "url", "phone", "email", "template"].includes(colType)) {
+    } else if (isAVTextType(colType)) {
         cellValue[colType as "text"] = {
             content: "",
         };
@@ -49,7 +119,7 @@ export const genEmptyAVCellValue = (colType: TAVCol): IAVCellValue => {
         cellValue.mSelect = [];
     } else if (colType === "mAsset") {
         cellValue.mAsset = [];
-    } else if (["date", "created", "updated"].includes(colType)) {
+    } else if (isAVDateType(colType)) {
         cellValue[colType as "date"] = {
             content: null,
             isNotEmpty: false,
@@ -77,6 +147,71 @@ export const genEmptyAVCellValue = (colType: TAVCol): IAVCellValue => {
     }
     return cellValue;
 };
+
+export const cloneAVCellValueSnapshot = (value: IAVCellValue): IAVCellValue => {
+    const snapshot = JSON.parse(JSON.stringify(value, (key, item) =>
+        ["renderedContent", "hasRenderTemplate"].includes(key) ? undefined : item)) as IAVCellValue;
+    if ((snapshot.type === "mSelect" || snapshot.type === "select") && !snapshot.mSelect) {
+        snapshot.mSelect = [];
+    } else if (snapshot.type === "mAsset" && !snapshot.mAsset) {
+        snapshot.mAsset = [];
+    } else if (snapshot.type === "location") {
+        snapshot.location = createAVLocationReplacement(snapshot.location);
+    }
+    return snapshot;
+};
+
+export const createAVStableTextCell = (options: {
+    groupID?: string;
+    rowID?: string;
+    colID?: string;
+    rowIndex?: number;
+    colIndex?: number;
+    cellID?: string;
+    value: IAVCellValue;
+}): IAVSelectedCell | undefined => {
+    const rowID = options.rowID || "";
+    const colID = options.colID || "";
+    if (!rowID || !colID) {
+        return;
+    }
+    const value = cloneAVCellValueSnapshot(options.value);
+    return {
+        groupID: options.groupID || "",
+        rowID,
+        colID,
+        rowIndex: options.rowIndex ?? 0,
+        colIndex: options.colIndex ?? -1,
+        cell: {
+            id: value.id || options.cellID || "",
+            color: "",
+            bgColor: "",
+            value,
+            valueType: "text",
+        },
+        column: {
+            id: colID,
+            type: "text",
+        } as IAVColumn,
+    };
+};
+
+export const createAVCellUpdateOperation = (options: {
+    valueID?: string;
+    avID?: string;
+    blockID?: string;
+    keyID: string;
+    rowID: string;
+    data: IAVCellValue;
+}): IOperation => ({
+    action: "updateAttrViewCell",
+    id: options.valueID || "",
+    avID: options.avID,
+    ...(options.blockID ? {blockID: options.blockID} : {}),
+    keyID: options.keyID,
+    rowID: options.rowID,
+    data: options.data,
+});
 
 export const getConvertedEmptyAVCellValue = (colType: TAVCol, value: IAVCellValue) => {
     if (colType === value.type || !cellValueIsEmpty(value)) {

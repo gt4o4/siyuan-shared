@@ -1,10 +1,14 @@
-import {fetchPost, fetchSyncPost} from "../../util/fetch";
+import {mobileConfirmDialog} from "../../dialog/mobileConfirmDialog";
+import {config as configApi} from "../util/configApi";
+import {fetchSyncPost} from "../../util/fetch";
+import {escapeHtml} from "../../util/escape";
 import {processSync} from "../../dialog/processSystem";
+import {progressLoading} from "../../dialog/progress";
+import {updateAccountPanelVisibility} from "./accountUi";
+import {hideMessage, showMessage} from "../../dialog/message";
+import {refreshSyncCloudDirBlock} from "../../sync/syncGuide";
 import {
-    onSetaccount,
-    updateAccountSwitchesVisibility,
-} from "./accountUi";
-import {
+    refreshLANSyncConfigItemVisibility,
     refreshSyncModeRelatedItems,
     refreshSyncTabPanels,
 } from "./syncUi";
@@ -12,16 +16,105 @@ import {
 /** 账号同步 Tab 根节点 */
 export let syncTabElement: HTMLElement | undefined;
 
-/** 设置对话框关闭后释放 Tab 根节点引用，避免持有已脱离文档的 DOM */
-export const clearSyncTabElement = () => {
-    syncTabElement = undefined;
+let syncAssetDownloadModePending = false;
+let pendingSyncProvider: Config.ISync["provider"] | undefined;
+
+/** 同步提供商控件显示已确认值或正在提交的值，请求期间禁止重复切换 */
+export const mountSyncProvider = (root: ParentNode) => {
+    root.querySelectorAll<HTMLSelectElement>('[id="sync.provider"]').forEach((element) => {
+        element.disabled = pendingSyncProvider !== undefined || window.siyuan.config.readonly;
+        element.setAttribute("aria-busy", String(pendingSyncProvider !== undefined));
+        element.value = String(pendingSyncProvider ?? window.siyuan.config.sync.provider);
+    });
+};
+
+const setSyncProvider = async (provider: Config.ISync["provider"]) => {
+    if (pendingSyncProvider !== undefined || provider === window.siyuan.config.sync.provider) {
+        mountSyncProvider(document);
+        return;
+    }
+    pendingSyncProvider = provider;
+    mountSyncProvider(document);
+    let started = false;
+    try {
+        const confirmed = await new Promise<boolean>((resolve) => {
+            mobileConfirmDialog(window.siyuan.languages.syncProvider, window.siyuan.languages.syncProviderChangeConfirm,
+                () => resolve(true), () => resolve(false), false, undefined, window.siyuan.languages.syncProviderChangeContinue);
+        });
+        if (!confirmed) {
+            return;
+        }
+        started = true;
+        progressLoading({code: 1, msg: window.siyuan.languages._kernel[398]});
+        const response = await fetchSyncPost("/api/sync/setSyncProvider", {provider, completeAssets: true});
+        if (response.code === 0) {
+            window.siyuan.config.sync.provider = provider;
+            if (syncTabElement) {
+                refreshSyncCloudSpaceGroup(syncTabElement);
+            }
+        }
+    } catch (error) {
+        console.warn("[config] failed to update sync provider", error);
+        showMessage(window.siyuan.languages.syncProviderChangeFailed, 7000, "error");
+    } finally {
+        if (started) {
+            progressLoading({code: 2, msg: ""});
+        }
+        pendingSyncProvider = undefined;
+        mountSyncProvider(document);
+    }
+};
+
+/** 切换资源下载模式时同步控件状态，并阻止重复提交 */
+export const mountSyncAssetDownloadMode = (root: ParentNode) => {
+    root.querySelectorAll<HTMLSelectElement>('[id="sync.assetDownloadMode"]').forEach((element) => {
+        element.disabled = syncAssetDownloadModePending || window.siyuan.config.readonly;
+        element.setAttribute("aria-busy", String(syncAssetDownloadModePending));
+        if (!syncAssetDownloadModePending) {
+            element.value = String(window.siyuan.config.sync.assetDownloadMode ?? 0);
+        }
+    });
+};
+
+const setSyncAssetDownloadMode = async (mode: Config.ISync["assetDownloadMode"]) => {
+    if (syncAssetDownloadModePending || (mode !== 0 && mode !== 1)) {
+        mountSyncAssetDownloadMode(document);
+        return;
+    }
+    syncAssetDownloadModePending = true;
+    mountSyncAssetDownloadMode(document);
+    let messageId: string | undefined;
+    const progressTimeout = window.setTimeout(() => {
+        messageId = showMessage(window.siyuan.languages.syncAssetDownloadModeUpdating, -1);
+    }, 300);
+    try {
+        await configApi.set("sync.assetDownloadMode", mode);
+    } catch (error) {
+        console.warn("[config] failed to update asset download mode", error);
+        showMessage(error instanceof Error && error.message ? escapeHtml(error.message) :
+            window.siyuan.languages.syncAssetDownloadModeFailed, 7000, "error");
+    } finally {
+        window.clearTimeout(progressTimeout);
+        if (messageId) {
+            hideMessage(messageId);
+        }
+        syncAssetDownloadModePending = false;
+        mountSyncAssetDownloadMode(document);
+    }
+};
+
+/** 释放 Tab 根节点引用；传入 root 时仅释放对应挂载，避免影响其他设置入口 */
+export const clearSyncTabElement = (root?: HTMLElement) => {
+    if (!root || syncTabElement === root) {
+        syncTabElement = undefined;
+    }
 };
 
 /** 账号同步 Tab 挂载后的额外初始化（注册表 mount 之后调用） */
 export const mountSyncTabExtras = (root: HTMLElement) => {
     syncTabElement = root;
     refreshSyncTabPanels(root);
-    updateAccountSwitchesVisibility(root);
+    updateAccountPanelVisibility(root);
 };
 
 export const refreshLANSyncStatus = (root: Element) => {
@@ -29,7 +122,15 @@ export const refreshLANSyncStatus = (root: Element) => {
     if (!statusElement) {
         return;
     }
+    if (!window.siyuan.config.sync.enabled) {
+        statusElement.textContent = "";
+        return;
+    }
     fetchSyncPost("/api/sync/getSyncLANStatus", {}).then((response) => {
+        if (!window.siyuan.config.sync.enabled) {
+            statusElement.textContent = "";
+            return;
+        }
         if (response.code === 0 && response.data) {
             if (!response.data.active) {
                 statusElement.textContent = window.siyuan.languages.lanSyncInactive;
@@ -59,67 +160,37 @@ export const mountLANSyncStatus = (root: HTMLElement) => {
 /** 切换同步提供商等场景：刷新云空间相关区块并重置云目录列表 */
 export const refreshSyncCloudSpaceGroup = (root: Element) => {
     refreshSyncTabPanels(root);
-    const syncConfigElement = root.querySelector("#syncCloudList");
-    if (syncConfigElement) {
-        syncConfigElement.innerHTML = "";
-        syncConfigElement.classList.add("fn__none");
-    }
+    refreshSyncCloudDirBlock(root);
 };
 
 /** 账号同步 Tab：按控件 id 提交配置并更新本地运行时 */
 export const patchSyncConfig = (controlId: string, value: unknown) => {
     switch (controlId) {
-        case "account.displayTitle": {
-            const displayTitle = Boolean(value) as Config.IAccount["displayTitle"];
-            fetchPost("/api/setting/setAccount", {
-                ...window.siyuan.config.account,
-                displayTitle,
-            }, (response) => {
-                window.siyuan.config.account = response.data;
-                onSetaccount();
-            });
-            break;
-        }
-        case "account.displayVIP": {
-            const displayVIP = Boolean(value) as Config.IAccount["displayVIP"];
-            fetchPost("/api/setting/setAccount", {
-                ...window.siyuan.config.account,
-                displayVIP,
-            }, (response) => {
-                window.siyuan.config.account = response.data;
-                onSetaccount();
-            });
-            break;
-        }
-
         case "sync.provider": {
-            const provider = value as Config.ISync["provider"];
-            fetchPost("/api/sync/setSyncProvider", {provider}, () => {
-                window.siyuan.config.sync.provider = provider;
-                if (syncTabElement) {
-                    refreshSyncCloudSpaceGroup(syncTabElement);
-                }
-            });
-            break;
+            return setSyncProvider(value as Config.ISync["provider"]);
         }
         case "sync.enabled": {
             const enabled = Boolean(value) as Config.ISync["enabled"];
-            fetchPost("/api/sync/setSyncEnable", {enabled}, () => {
+            configApi.set("sync.enabled", enabled, () => {
                 window.siyuan.config.sync.enabled = enabled;
+                if (syncTabElement) {
+                    refreshLANSyncConfigItemVisibility(syncTabElement);
+                    refreshLANSyncStatus(syncTabElement);
+                }
                 processSync();
             });
             break;
         }
         case "sync.generateConflictDoc": {
             const generateConflictDoc = Boolean(value) as Config.ISync["generateConflictDoc"];
-            fetchPost("/api/sync/setSyncGenerateConflictDoc", {enabled: generateConflictDoc}, () => {
+            configApi.set("sync.generateConflictDoc", generateConflictDoc, () => {
                 window.siyuan.config.sync.generateConflictDoc = generateConflictDoc;
             });
             break;
         }
         case "sync.mode": {
             const mode = value as Config.ISync["mode"];
-            fetchPost("/api/sync/setSyncMode", {mode}, () => {
+            configApi.set("sync.mode", mode, () => {
                 window.siyuan.config.sync.mode = mode;
                 if (syncTabElement) {
                     refreshSyncModeRelatedItems(syncTabElement);
@@ -127,9 +198,12 @@ export const patchSyncConfig = (controlId: string, value: unknown) => {
             });
             break;
         }
+        case "sync.assetDownloadMode": {
+            return setSyncAssetDownloadMode(value as Config.ISync["assetDownloadMode"]);
+        }
         case "sync.interval": {
             const interval = value as Config.ISync["interval"];
-            fetchPost("/api/sync/setSyncInterval", {interval}, () => {
+            configApi.set("sync.interval", interval, () => {
                 window.siyuan.config.sync.interval = interval;
                 processSync();
             });
@@ -137,7 +211,7 @@ export const patchSyncConfig = (controlId: string, value: unknown) => {
         }
         case "sync.perception": {
             const perception = Boolean(value) as Config.ISync["perception"];
-            fetchPost("/api/sync/setSyncPerception", {enabled: perception}, () => {
+            configApi.set("sync.perception", perception, () => {
                 window.siyuan.config.sync.perception = perception;
                 processSync();
             });
@@ -145,10 +219,7 @@ export const patchSyncConfig = (controlId: string, value: unknown) => {
         }
         case "sync.lan.enabled": {
             const enabled = Boolean(value) as Config.ISyncLAN["enabled"];
-            fetchPost("/api/sync/setSyncLAN", {
-                enabled,
-                maxConcurrentReqs: window.siyuan.config.sync.lan.maxConcurrentReqs,
-            }, () => {
+            configApi.set("sync.lan.enabled", enabled, () => {
                 window.siyuan.config.sync.lan.enabled = enabled;
                 if (syncTabElement) {
                     refreshLANSyncStatus(syncTabElement);
@@ -159,14 +230,14 @@ export const patchSyncConfig = (controlId: string, value: unknown) => {
 
         case "repo.indexRetentionDays": {
             const indexRetentionDays = value as Config.IRepo["indexRetentionDays"];
-            fetchPost("/api/repo/setRepoIndexRetentionDays", {days: indexRetentionDays}, () => {
+            configApi.set("repo.indexRetentionDays", indexRetentionDays, () => {
                 window.siyuan.config.repo.indexRetentionDays = indexRetentionDays;
             });
             break;
         }
         case "repo.retentionIndexesDaily": {
             const retentionIndexesDaily = value as Config.IRepo["retentionIndexesDaily"];
-            fetchPost("/api/repo/setRetentionIndexesDaily", {indexes: retentionIndexesDaily}, () => {
+            configApi.set("repo.retentionIndexesDaily", retentionIndexesDaily, () => {
                 window.siyuan.config.repo.retentionIndexesDaily = retentionIndexesDaily;
             });
             break;

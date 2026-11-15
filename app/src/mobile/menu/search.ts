@@ -1,4 +1,13 @@
+import {removeSearchCriterion} from "../../config/util/resourceConfig";
+import {toggleMenu} from "../../menus/menuToggle";
 import {closePanel} from "../util/closePanel";
+import {updateSearchMethodControls} from "../../search/methodCapabilities";
+import {buildSearchRequest, refreshSearchConfigHPath} from "../../search/config";
+import {resolveCurrentSearchHPath} from "../../search/path";
+import {focusSearchInput} from "../../search/focus";
+import {applySearchOpenOptions, SearchOpenOptions} from "../../search/openOptions";
+import {getAttr} from "../../search/attrs";
+import type {APICallbackResponse, APIPOSTRoutes} from "../../types/api";
 import {getCurrentEditor, openMobileFileById} from "../editor";
 import {Constants} from "../../constants";
 import {fetchPost} from "../../util/fetch";
@@ -6,14 +15,16 @@ import {getIconByType} from "../../editor/getIcon";
 import {preventScroll} from "../../protyle/scroll/preventScroll";
 import {openModel} from "./model";
 import {getDisplayName, getNotebookIcon, getNotebookName, isEncryptedBox, movePathTo, pathPosix} from "../../util/pathName";
-import {getKeyByLiElement, initCriteriaMenu, moreMenu} from "../../search/menu";
-import {setStorageVal} from "../../protyle/util/compatibility";
+import {getKeyByLiElement, getKeysByLiElement, initCriteriaMenu, moreMenu} from "../../search/menu";
+import {isDisabledFeature, isInIOS, setStorageVal} from "../../protyle/util/compatibility";
 import {escapeHtml} from "../../util/escape";
 import {unicode2Emoji} from "../../emoji";
+import {getFileTreeIconHTML} from "../../emoji/fileTreeIcon";
 import {newFile} from "../../util/newFile";
 import {showMessage} from "../../dialog/message";
 import {reloadProtyle} from "../../protyle/util/reload";
 import {activeBlur} from "../util/keyboardToolbar";
+import {callMobileAppShowKeyboard} from "../util/mobileAppUtil";
 import type {App} from "../../index";
 import {
     assetFilterMenu,
@@ -34,9 +45,38 @@ import {
     toggleSearchHistory
 } from "../../search/toggleHistory";
 import {cancelSearchRequest, scheduleSearchRequest} from "../../search/request";
+import {highlightMobileSearchResult} from "./searchHighlight";
+
+let searchOpenVersion = 0;
+
+const openSearchResult = (app: App, target: HTMLElement) => {
+    const id = target.dataset.nodeId;
+    const keywords = getKeysByLiElement(target);
+    const notebookId = target.dataset.notebookId;
+    const version = ++searchOpenVersion;
+    if (window.siyuan.mobile.editor?.protyle) {
+        preventScroll(window.siyuan.mobile.editor.protyle);
+    }
+    checkFold(id, zoomIn => {
+        if (version !== searchOpenVersion) {
+            return;
+        }
+        void openMobileFileById(app, id, zoomIn ? [Constants.CB_GET_ALL, Constants.CB_GET_HL] :
+            [Constants.CB_GET_HL, Constants.CB_GET_CONTEXT, Constants.CB_GET_ROOTSCROLL], "start", notebookId,
+            protyle => {
+                if (version === searchOpenVersion) {
+                    highlightMobileSearchResult(protyle, id, keywords);
+                }
+            });
+    });
+    closePanel();
+};
 
 const replace = (element: Element, config: Config.IUILayoutTabSearchConfig, isAll: boolean) => {
-    if (config.method === 2) {
+    if (window.siyuan.isPublish) {
+        return;
+    }
+    if (config.method === 2 || config.method === 4) {
         showMessage(window.siyuan.languages._kernel[132]);
         return;
     }
@@ -56,13 +96,13 @@ const replace = (element: Element, config: Config.IUILayoutTabSearchConfig, isAl
     loadElement.nextElementSibling.classList.add("fn__none");
     const currentId = currentLiElement.getAttribute("data-node-id");
     fetchPost("/api/search/findReplace", {
-        k: config.method === 0 || config.method === 1 ? getKeyByLiElement(currentLiElement) : (document.querySelector("#toolbarSearch") as HTMLInputElement).value,
+        k: config.method === 0 || config.method === 1 ? getKeyByLiElement(currentLiElement) : (document.querySelector("#toolbarSearch") as HTMLTextAreaElement).value,
         r: replaceInputElement.value,
         ids: isAll ? [] : [currentId],
-        types: config.types,
+        types: {...config.types},
         subTypes: config.subTypes,
         method: config.method,
-        replaceTypes: config.replaceTypes,
+        replaceTypes: {...config.replaceTypes},
         paths: config.idPath || [],
         groupBy: config.group,
         orderBy: config.sort,
@@ -102,6 +142,9 @@ const replace = (element: Element, config: Config.IUILayoutTabSearchConfig, isAl
 
 const updateConfig = (element: Element, newConfig: Config.IUILayoutTabSearchConfig, config: Config.IUILayoutTabSearchConfig,
                       clear = false) => {
+    if (window.siyuan.isPublish) {
+        newConfig = {...newConfig, hasReplace: false};
+    }
     if (config.hasReplace !== newConfig.hasReplace) {
         if (newConfig.hasReplace) {
             element.querySelector('[data-type="toggle-replace"]').classList.add("toolbar__icon--active");
@@ -148,10 +191,12 @@ const updateConfig = (element: Element, newConfig: Config.IUILayoutTabSearchConf
     } else {
         searchIncludeElement.setAttribute("disabled", "disabled");
     }
-    if (newConfig.k || clear) {
-        (document.querySelector("#toolbarSearch") as HTMLInputElement).value = newConfig.k;
+    if (newConfig.k !== undefined || clear) {
+        (document.querySelector("#toolbarSearch") as HTMLTextAreaElement).value = newConfig.k;
+        document.querySelector("#toolbarSearch").dispatchEvent(new Event("change"));
     }
     (element.querySelector("#toolbarReplace") as HTMLInputElement).value = newConfig.r;
+    element.querySelector("#toolbarReplace").dispatchEvent(new Event("change"));
     config = JSON.parse(JSON.stringify(newConfig));
     window.siyuan.storage[Constants.LOCAL_SEARCHDATA] = Object.assign({}, config);
     setStorageVal(Constants.LOCAL_SEARCHDATA, window.siyuan.storage[Constants.LOCAL_SEARCHDATA]);
@@ -176,7 +221,7 @@ const onRecentBlocks = (data: IBlock[], config: Config.IUILayoutTabSearchConfig,
 <span class="b3-list-item__toggle b3-list-item__toggle--hl">
     <svg class="b3-list-item__arrow b3-list-item__arrow--open"><use xlink:href="#iconRight"></use></svg>
 </span>
-${unicode2Emoji(getNotebookIcon(item.box) || window.siyuan.storage[Constants.LOCAL_IMAGES].note, "b3-list-item__graphic", true)}
+${getFileTreeIconHTML(getNotebookIcon(item.box), "notebook", "b3-list-item__graphic", true)}
 <span class="b3-list-item__text" style="color: var(--b3-theme-on-surface)">${escapeHtml(title)}</span>
 </div><div>`;
             item.children.forEach((childItem) => {
@@ -188,10 +233,11 @@ ${unicode2Emoji(getNotebookIcon(item.box) || window.siyuan.storage[Constants.LOC
                         newData = childItem;
                     }
                 }
-                resultHTML += `<div style="padding-left: 36px" data-type="search-item" class="b3-list-item" data-node-id="${childItem.id}">
+                resultHTML += `<div style="padding-left: 36px" data-type="search-item" class="b3-list-item" data-node-id="${childItem.id}" data-notebook-id="${childItem.box}">
 <svg class="b3-list-item__graphic"><use xlink:href="#${getIconByType(childItem.type)}"></use></svg>
 ${unicode2Emoji(childItem.ial.icon, "b3-list-item__graphic", true)}
-<span class="b3-list-item__text">${childItem.content}</span>
+<span class="b3-list-item__text${childItem.type === "NodeAttributeView" ? " search__av-content" : ""}">${childItem.content}</span>
+${getAttr(childItem)}
 ${childItem.tag ? `<span class="b3-list-item__meta b3-list-item__meta--ellipsis">${childItem.tag.replace(/#/g, "")}</span>` : ""}
 </div>`;
             });
@@ -205,11 +251,12 @@ ${childItem.tag ? `<span class="b3-list-item__meta b3-list-item__meta--ellipsis"
                     newData = item;
                 }
             }
-            resultHTML += `<div class="b3-list-item b3-list-item--two" data-type="search-item" data-node-id="${item.id}">
+            resultHTML += `<div class="b3-list-item b3-list-item--two" data-type="search-item" data-node-id="${item.id}" data-notebook-id="${item.box}">
     <div class="b3-list-item__first">
         <svg class="b3-list-item__graphic"><use xlink:href="#${getIconByType(item.type)}"></use></svg>
         ${unicode2Emoji(item.ial.icon, "b3-list-item__graphic", true)}
-        <span class="b3-list-item__text">${item.content}</span>
+        <span class="b3-list-item__text${item.type === "NodeAttributeView" ? " search__av-content" : ""}">${item.content}</span>
+        ${getAttr(item)}
     </div>
     <div class="fn__flex">
         ${item.tag ? `<span class="b3-list-item__meta b3-list-item__meta--ellipsis">${item.tag.replace(/#/g, "")}</span><span class="fn__space"></span>` : ""}
@@ -220,9 +267,9 @@ ${childItem.tag ? `<span class="b3-list-item__meta b3-list-item__meta--ellipsis"
     });
     listElement.innerHTML = resultHTML ||
         `<div class="b3-list-item b3-list-item--focus" data-type="search-new">
-    <svg class="b3-list-item__graphic"><use xlink:href="#iconFile"></use></svg>
+    <svg class="b3-list-item__graphic"><use xlink:href="#iconAddDoc"></use></svg>
     <span class="b3-list-item__text">
-        ${window.siyuan.languages.newFile} <mark>${(document.querySelector("#toolbarSearch") as HTMLInputElement).value}</mark>
+        ${window.siyuan.languages.newFile} <mark>${(document.querySelector("#toolbarSearch") as HTMLTextAreaElement).value}</mark>
     </span>
 </div>`;
     listElement.scrollTop = 0;
@@ -261,6 +308,7 @@ export const updateSearchResult = (config: Config.IUILayoutTabSearchConfig, elem
                                        currentId?: string,
                                        newId?: string
                                    }) => {
+    updateSearchMethodControls(element, config, true);
     if (rmCurrentCriteria) {
         element.querySelector("#criteria .b3-chip--current")?.classList.remove("b3-chip--current");
         element.querySelector("#searchList").innerHTML = "";
@@ -282,7 +330,7 @@ export const updateSearchResult = (config: Config.IUILayoutTabSearchConfig, elem
             loadingElement.style.top = element.querySelector(".b3-list--background").getBoundingClientRect().top + "px";
             const previousElement = element.querySelector('[data-type="previous"]');
             const nextElement = element.querySelector('[data-type="next"]');
-            const inputElement = document.getElementById("toolbarSearch") as HTMLInputElement;
+            const inputElement = document.getElementById("toolbarSearch") as HTMLTextAreaElement;
             config.query = inputElement.value;
             if (!config.page) {
                 config.page = 1;
@@ -291,7 +339,6 @@ export const updateSearchResult = (config: Config.IUILayoutTabSearchConfig, elem
             const requestFocusId = focusId ? Object.assign({}, focusId) : undefined;
             if (requestConfig.query === "" && (!requestConfig.idPath || requestConfig.idPath.length === 0)) {
                 return {
-                    method: requestConfig.method,
                     version,
                     run(signal: AbortSignal, isCurrent: () => boolean) {
                         return fetchPost("/api/block/getRecentUpdatedBlocks", {}, (response) => {
@@ -311,17 +358,7 @@ export const updateSearchResult = (config: Config.IUILayoutTabSearchConfig, elem
                 previousElement.setAttribute("disabled", "disabled");
             }
             const endpoint = requestConfig.method === 4 ? "/api/search/semanticSearchBlock" : "/api/search/fullTextSearchBlock";
-            const searchParam: Record<string, any> = {
-                query: requestConfig.query,
-                method: requestConfig.method,
-                types: requestConfig.types,
-                subTypes: requestConfig.subTypes,
-                paths: requestConfig.idPath || [],
-                groupBy: requestConfig.group,
-                orderBy: requestConfig.sort,
-                page: requestConfig.page,
-                pageSize: 32,
-            };
+            const searchParam = buildSearchRequest(requestConfig);
             // 限定在单个加密 box 内搜索时带 notebook，让内核走加密 db；跨 box 或全局搜索走原函数
             const idPaths = requestConfig.idPath || [];
             if (idPaths.length > 0) {
@@ -331,10 +368,10 @@ export const updateSearchResult = (config: Config.IUILayoutTabSearchConfig, elem
                 }
             }
             return {
-                method: requestConfig.method,
                 version,
+                abortable: requestConfig.method !== 4,
                 run(signal: AbortSignal, isCurrent: () => boolean) {
-                    return fetchPost(endpoint, searchParam, (response) => {
+                    return fetchPost(endpoint, searchParam, (response: APICallbackResponse<APIPOSTRoutes[typeof endpoint]["response"]>) => {
                         if (!isCurrent()) {
                             return;
                         }
@@ -352,8 +389,14 @@ export const updateSearchResult = (config: Config.IUILayoutTabSearchConfig, elem
 };
 
 const initSearchEvent = (app: App, element: Element, config: Config.IUILayoutTabSearchConfig) => {
-    const searchInputElement = document.getElementById("toolbarSearch") as HTMLInputElement;
+    let focusTimeout = 0;
+    const searchInputElement = document.getElementById("toolbarSearch") as HTMLTextAreaElement;
     searchInputElement.value = config.k || "";
+    searchInputElement.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && config.method !== 2) {
+            event.preventDefault();
+        }
+    });
     searchInputElement.addEventListener("compositionend", (event: InputEvent) => {
         if (event && event.isComposing) {
             return;
@@ -379,16 +422,27 @@ const initSearchEvent = (app: App, element: Element, config: Config.IUILayoutTab
     addClearButton({
         inputElement: searchInputElement,
         className: "toolbar__icon",
+        icon: "iconClear",
         clearCB() {
             config.page = 1;
             updateSearchResult(config, element, true);
         }
     });
+    if (window.JSAndroid?.showKeyboard || window.JSHarmony?.showKeyboard) {
+        callMobileAppShowKeyboard();
+        focusTimeout = window.setTimeout(() => {
+            focusTimeout = 0;
+            searchInputElement.focus();
+        }, Constants.TIMEOUT_TRANSITION);
+    } else {
+        searchInputElement.focus();
+    }
     const replaceInputElement = element.querySelector(".toolbar .toolbar__title") as HTMLInputElement;
     replaceInputElement.value = config.r || "";
     addClearButton({
         inputElement: replaceInputElement,
         className: "toolbar__icon",
+        icon: "iconClear",
     });
     const criteriaData: Config.IUILayoutTabSearchConfig[] = [];
     initCriteriaMenu(element.querySelector("#criteria"), criteriaData, config);
@@ -443,7 +497,7 @@ const initSearchEvent = (app: App, element: Element, config: Config.IUILayoutTab
                 break;
             } else if (type === "remove-criteria") {
                 const name = target.parentElement.innerText.trim();
-                fetchPost("/api/storage/removeCriterion", {name});
+                removeSearchCriterion(name);
                 criteriaData.find((item, index) => {
                     if (item.name === name) {
                         criteriaData.splice(index, 1);
@@ -474,7 +528,7 @@ const initSearchEvent = (app: App, element: Element, config: Config.IUILayoutTab
                 event.stopPropagation();
                 event.preventDefault();
                 break;
-            } else if (type === "remove-path") {
+            } else if (type === "remove-path" && !target.hasAttribute("disabled")) {
                 config.idPath = [];
                 config.hPath = "";
                 element.querySelector("#searchPath").classList.add("fn__none");
@@ -527,7 +581,7 @@ const initSearchEvent = (app: App, element: Element, config: Config.IUILayoutTab
                 event.stopPropagation();
                 event.preventDefault();
                 break;
-            } else if (type === "path") {
+            } else if (type === "path" && !target.hasAttribute("disabled")) {
                 movePathTo({
                     cb: (toPath, toNotebook) => {
                         fetchPost("/api/filetree/getHPathsByPaths", {paths: toPath}, (response) => {
@@ -589,7 +643,10 @@ const initSearchEvent = (app: App, element: Element, config: Config.IUILayoutTab
                 event.stopPropagation();
                 event.preventDefault();
                 break;
-            } else if (type === "toggle-replace") {
+            } else if (type === "toggle-replace" && !target.hasAttribute("disabled")) {
+                if (window.siyuan.isPublish) {
+                    return;
+                }
                 config.hasReplace = !config.hasReplace;
                 replaceInputElement.parentElement.classList.toggle("fn__none");
                 target.classList.toggle("toolbar__icon--active");
@@ -597,29 +654,35 @@ const initSearchEvent = (app: App, element: Element, config: Config.IUILayoutTab
                 event.preventDefault();
                 break;
             } else if (type === "more") {
-                moreMenu(config, criteriaData, element, () => {
-                    config.page = 1;
-                    updateSearchResult(config, element, true);
-                }, () => {
-                    config = updateConfig(element, {
-                        removed: true,
-                        sort: 0,
-                        group: 0,
-                        hasReplace: false,
-                        method: 0,
-                        hPath: "",
-                        idPath: [],
-                        k: "",
-                        r: "",
-                        page: 1,
-                        types: getDefaultType(),
-                        subTypes: getDefaultSubType(),
-                        replaceTypes: Object.assign({}, Constants.SIYUAN_DEFAULT_REPLACETYPES),
-                    }, config, true);
-                    element.querySelector("#criteria .b3-chip--current")?.classList.remove("b3-chip--current");
+                toggleMenu({
+                    target: target,
+                    build: (_menu, session) => {
+                        moreMenu(config, criteriaData, element, () => {
+                            config.page = 1;
+                            updateSearchResult(config, element, true);
+                        }, () => {
+                            config = updateConfig(element, {
+                                removed: true,
+                                sort: 0,
+                                group: 0,
+                                hasReplace: false,
+                                method: 0,
+                                hPath: "",
+                                idPath: [],
+                                k: "",
+                                r: "",
+                                page: 1,
+                                types: getDefaultType(),
+                                subTypes: getDefaultSubType(),
+                                replaceTypes: Object.assign({}, Constants.SIYUAN_DEFAULT_REPLACETYPES),
+                            }, config, true);
+                            element.querySelector("#criteria .b3-chip--current")?.classList.remove("b3-chip--current");
+                        });
+                        session.show(() => window.siyuan.menus.menu.fullscreen());
+
+                    },
                 });
-                window.siyuan.menus.menu.fullscreen();
-                event.stopPropagation();
+            event.stopPropagation();
                 event.preventDefault();
                 break;
             } else if (type === "replace-all") {
@@ -716,13 +779,7 @@ const initSearchEvent = (app: App, element: Element, config: Config.IUILayoutTab
                 } else if (target.getAttribute("data-type") === "search-item") {
                     const id = target.getAttribute("data-node-id");
                     if (id) {
-                        if (window.siyuan.mobile.editor?.protyle) {
-                            preventScroll(window.siyuan.mobile.editor.protyle);
-                        }
-                        checkFold(id, (zoomIn) => {
-                            openMobileFileById(app, id, zoomIn ? [Constants.CB_GET_ALL] : [Constants.CB_GET_HL, Constants.CB_GET_CONTEXT, Constants.CB_GET_ROOTSCROLL]);
-                        });
-                        closePanel();
+                        openSearchResult(app, target);
                     } else {
                         if (!target.classList.contains("b3-list-item--focus")) {
                             element.querySelector("#searchAssetList .b3-list-item--focus").classList.remove("b3-list-item--focus");
@@ -743,15 +800,17 @@ const initSearchEvent = (app: App, element: Element, config: Config.IUILayoutTab
             target = target.parentElement;
         }
     }, false);
+    return () => clearTimeout(focusTimeout);
 };
 
-export const popSearch = (app: App, searchConfig?: Config.IUILayoutTabSearchConfig) => {
+export const popSearch = (app: App, searchConfig?: Config.IUILayoutTabSearchConfig, focusInput = false,
+                          options?: SearchOpenOptions) => {
     const config: Config.IUILayoutTabSearchConfig = JSON.parse(JSON.stringify(window.siyuan.storage[Constants.LOCAL_SEARCHDATA]));
     const currentEditor = getCurrentEditor();
     if (currentEditor && isEncryptedBox(currentEditor.protyle.notebookId)) {
         config.sensitive = true;
     }
-    if (config.method === 4 && !window.siyuan.config.ai.embedding.enabled) {
+    if (config.method === 4 && (isDisabledFeature("ai") || !window.siyuan.config.ai.embedding.enabled)) {
         config.method = 0;
     }
     const rangeText = (currentEditor?.protyle.toolbar.range ||
@@ -768,7 +827,13 @@ export const popSearch = (app: App, searchConfig?: Config.IUILayoutTabSearchConf
             }
         });
     }
+    if (options) {
+        applySearchOpenOptions(config, options);
+    }
 
+    if (window.siyuan.isPublish) {
+        config.hasReplace = false;
+    }
     activeBlur();
     let includeChild = true;
     let enableIncludeChild = false;
@@ -781,14 +846,16 @@ export const popSearch = (app: App, searchConfig?: Config.IUILayoutTabSearchConf
         }
     });
 
+    let destroySearchEvent: (() => void) | undefined;
+    let destroyed = false;
     openModel({
-        title: `<div class="fn__flex">
+        title: `<div class="toolbar__search">
     <span data-menu="true" class="toolbar__icon toolbar__icon--history" data-type="history">
         <svg class="svg--mid"><use xlink:href="#iconSearch"></use></svg>
         <svg class="svg--smaller"><use xlink:href="#iconDown"></use></svg>
     </span>
-    <input id="toolbarSearch" placeholder="${window.siyuan.languages.showRecentUpdatedBlocks}" class="toolbar__title fn__block" autocomplete="off" autocorrect="off" spellcheck="false">
-    <svg id="toolbarSearchNew" class="toolbar__icon"><use xlink:href="#iconFile"></use></svg>
+    <textarea id="toolbarSearch" rows="1" placeholder="${window.siyuan.languages.showRecentUpdatedBlocks}" class="toolbar__title fn__block search__input" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+    <svg id="toolbarSearchNew" class="toolbar__icon"><use xlink:href="#iconAddDoc"></use></svg>
 </div>`,
         html: `<div class="fn__flex-column" style="height: 100%">
     <div class="toolbar toolbar--border${config.hasReplace ? "" : " fn__none"}">
@@ -819,9 +886,9 @@ export const popSearch = (app: App, searchConfig?: Config.IUILayoutTabSearchConf
             <svg data-type="remove-path" class="b3-chip__close"><use xlink:href="#iconClose"></use></svg>
         </div>
     </div>
-    <div class="toolbar">
+    <div class="toolbar toolbar--bottom">
         <span class="fn__flex-1"></span>
-        <svg data-type="toggle-replace" class="toolbar__icon${config.hasReplace ? " toolbar__icon--active" : ""}"><use xlink:href="#iconReplace"></use></svg>
+        <svg data-type="toggle-replace" class="toolbar__icon${window.siyuan.isPublish ? " fn__none" : ""}${config.hasReplace ? " toolbar__icon--active" : ""}"><use xlink:href="#iconReplace"></use></svg>
         <svg ${enableIncludeChild ? "" : "disabled"} data-type="include" class="toolbar__icon${includeChild ? " toolbar__icon--active" : ""}"><use xlink:href="#iconInclude"></use></svg>
         <svg data-type="path" class="toolbar__icon"><use xlink:href="#iconFolder"></use></svg>
         <svg ${document.querySelector("#empty").classList.contains("fn__none") ? "" : "disabled"} data-type="currentPath" class="toolbar__icon"><use xlink:href="#iconFocus"></use></svg>
@@ -837,7 +904,7 @@ export const popSearch = (app: App, searchConfig?: Config.IUILayoutTabSearchConf
                 <svg class="svg--mid"><use xlink:href="#iconSearch"></use></svg>
                 <svg class="svg--smaller"><use xlink:href="#iconDown"></use></svg>
             </span>
-            <input id="searchAssetInput" placeholder="${window.siyuan.languages.keyword}" class="toolbar__title fn__block">
+            <input spellcheck="false" id="searchAssetInput" placeholder="${window.siyuan.languages.keyword}" class="toolbar__title fn__block">
         </div>
         <div class="toolbar">
             <span class="fn__space"></span>
@@ -848,7 +915,7 @@ export const popSearch = (app: App, searchConfig?: Config.IUILayoutTabSearchConf
         </div>
         <div id="searchAssetList" style="overflow:auto;" class="fn__flex-1 b3-list b3-list--background"></div>
         <div id="searchAssetPreview" class="fn__flex-1 search__preview b3-typography" style="padding: 8px;border-bottom: 1px solid var(--b3-border-color);"></div>
-        <div class="toolbar">
+        <div class="toolbar toolbar--bottom">
             <span class="fn__flex-1"></span>
             <svg data-type="queryAsset" class="toolbar__icon"><use xlink:href="#iconRegex"></use></svg>
             <svg data-type="filterAsset" class="toolbar__icon"><use xlink:href="#iconFilter"></use></svg>
@@ -866,27 +933,44 @@ export const popSearch = (app: App, searchConfig?: Config.IUILayoutTabSearchConf
             <svg data-type="unRefNext" disabled="disabled" class="toolbar__icon"><use xlink:href="#iconRight"></use></svg>
         </div>
         <div id="searchUnRefList" style="overflow:auto;" class="fn__flex-1 b3-list b3-list--background"></div>
-        <div class="toolbar">
+        <div class="toolbar toolbar--bottom">
             <span class="fn__flex-1"></span>
             <svg data-type="refreshUnRef" class="toolbar__icon"><use xlink:href="#iconRefresh"></use></svg>
             <svg data-type="goSearch" class="toolbar__icon"><use xlink:href="#iconBack"></use></svg>
             <span class="fn__flex-1"></span>
          </div>
     </div>
-     <div class="fn__loading"><img width="120px" src="/stage/loading-pure.svg"></div>
+     <div class="fn__loading"><span class="b3-loading b3-loading--large" aria-hidden="true"></span></div>
 </div>`,
         destroyCallback() {
+            destroyed = true;
+            destroySearchEvent?.();
+            activeBlur(true);
             cancelSearchRequest(document.getElementById("modelMain"));
         },
         bindEvent(element) {
             document.querySelector("#toolbarSearchNew").addEventListener("click", () => {
-                newFile(app, (document.querySelector("#toolbarSearch") as HTMLInputElement).value);
+                newFile(app, (document.querySelector("#toolbarSearch") as HTMLTextAreaElement).value);
             });
             const historyElement = document.querySelector('.toolbar [data-type="history"]');
             historyElement.addEventListener("click", () => {
                 toggleSearchHistory(document.querySelector("#model"), config, undefined, element);
             });
-            initSearchEvent(app, element, config);
+            destroySearchEvent = initSearchEvent(app, element, config);
+            if (focusInput && isInIOS()) {
+                focusSearchInput(document.querySelector("#toolbarSearch"));
+                // 快捷键先同步打开搜索，路径名称随后补全，保留用户已经切换的搜索范围。
+                void refreshSearchConfigHPath({
+                    config,
+                    resolveHPath: resolveCurrentSearchHPath,
+                    isCurrent: () => !destroyed && element.isConnected,
+                    render: hPath => {
+                        const pathElement = element.querySelector("#searchPath");
+                        pathElement.classList.remove("fn__none");
+                        pathElement.innerHTML = `<div class="b3-chip b3-chip--middle">${escapeHtml(hPath)}<svg data-type="remove-path" class="b3-chip__close"><use xlink:href="#iconClose"></use></svg></div>`;
+                    },
+                });
+            }
             updateSearchResult(config, element);
         }
     });
@@ -921,6 +1005,7 @@ const goAsset = () => {
     addClearButton({
         inputElement,
         className: "toolbar__icon",
+        icon: "iconClear",
         clearCB() {
             assetInputEvent(assetsElement, localSearch);
         }

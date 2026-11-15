@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
@@ -93,6 +81,24 @@ func TestDecodeDocTextMarkContentPreservesEntities(t *testing.T) {
 	}
 	if "a" != stored[0] || "&lt;" != stored[1] || "b" != stored[2] {
 		t.Fatalf("unexpected stored rune mapping: %v", stored)
+	}
+}
+
+func TestDocDiffCustomBlockSignature(t *testing.T) {
+	newCustomBlock := func(info, content string) *ast.Node {
+		return &ast.Node{
+			Type:            ast.NodeCustomBlock,
+			CustomBlockInfo: info,
+			Tokens:          []byte(content),
+		}
+	}
+
+	base := docDiffBlockSignature(newCustomBlock("example-plugin/chart", "data"))
+	if base == docDiffBlockSignature(newCustomBlock("example-plugin/table", "data")) {
+		t.Fatal("custom block info must affect the history diff signature")
+	}
+	if base == docDiffBlockSignature(newCustomBlock("example-plugin/chart", "changed")) {
+		t.Fatal("custom block content must affect the history diff signature")
 	}
 }
 
@@ -232,8 +238,8 @@ func TestRenderFallbackDocVersionUsesRawContent(t *testing.T) {
 func TestParseDocVersionTreeNormalizesSpecAndRootID(t *testing.T) {
 	oldConf := Conf
 	Conf = NewAppConf()
-	Conf.Editor = conf.NewEditor()
-	Conf.Export = conf.NewExport()
+	Conf.Editor.Store(conf.NewEditor())
+	Conf.Export.Store(conf.NewExport())
 	defer func() {
 		Conf = oldConf
 	}()
@@ -248,8 +254,8 @@ func TestParseDocVersionTreeNormalizesSpecAndRootID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected document version normalization to succeed: %s", err)
 	}
-	if treenode.CurrentSpec != normalized.Root.Spec {
-		t.Fatalf("expected spec [%s], got [%s]", treenode.CurrentSpec, normalized.Root.Spec)
+	if treenode.BaseSpec != normalized.Root.Spec {
+		t.Fatalf("expected spec [%s], got [%s]", treenode.BaseSpec, normalized.Root.Spec)
 	}
 	if "20260729000000-newroot" != normalized.Root.ID {
 		t.Fatalf("expected normalized root ID, got [%s]", normalized.Root.ID)

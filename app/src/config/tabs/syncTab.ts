@@ -1,17 +1,70 @@
+import {mobileInputDialog} from "../../dialog/mobileInputDialog";
+import {mobileConfirmDialog} from "../../dialog/mobileConfirmDialog";
 import type {SettingTabBuilder} from "../setting/builder";
 import {registerAccountGroup} from "./accountUi";
 import {Constants} from "../../constants";
-import {fetchPost} from "../../util/fetch";
-import {confirmDialog} from "../../dialog/confirmDialog";
+import {fetchPost, fetchSyncPost} from "../../util/fetch";
 import {showMessage} from "../../dialog/message";
 import {processSync} from "../../dialog/processSystem";
 import {writeText} from "../../protyle/util/compatibility";
-import {bindSyncCloudListEvent, renderSyncCloudList, setKey} from "../../sync/syncGuide";
-import {Dialog} from "../../dialog";
+import {bindSyncCloudListEvent, refreshSyncCloudDirBlock, renderSyncCloudList, setKey} from "../../sync/syncGuide";
 import {genConfigItemMainHtml, genConfigItemName} from "../render/fragments";
-import {getSyncProviderConfigKeywords} from "./syncUi";
-import {mountLANSyncStatus, patchSyncConfig} from "./syncRuntime";
+import {getLANSyncSearchAvailability, getSyncProviderConfigKeywords, getSyncProviderConfigRowKeywords} from "./syncUi";
+import {mountLANSyncStatus, mountSyncAssetDownloadMode, mountSyncProvider} from "./syncRuntime";
 import {openHistory} from "../../history/history";
+import {canPurgeRepo} from "../../history/repoPurge";
+import {ensureLute} from "../../protyle/util/lute";
+/// #if !MOBILE && !BROWSER
+import {getSettingsWindowHost, isSettingsWindow} from "../setting/windowContext";
+/// #endif
+
+const mountSyncCloudBackup = (root: HTMLElement) => {
+    const button = root.querySelector<HTMLButtonElement>("#openCloudBackup");
+    if (!button) {
+        return;
+    }
+    let pending = false;
+    const isMounted = () => {
+        /// #if !MOBILE && !BROWSER
+        if (isSettingsWindow() && !getSettingsWindowHost()?.isActive()) {
+            return false;
+        }
+        /// #endif
+        const dialog = root.closest(`[data-key="${Constants.DIALOG_SETTING}"]`);
+        return !window.closed && root.isConnected && button.isConnected && root.contains(button) &&
+            (!dialog || dialog.classList.contains("b3-dialog--open"));
+    };
+    button.addEventListener("click", async () => {
+        if (pending || !isMounted()) {
+            return;
+        }
+        pending = true;
+        button.disabled = true;
+        try {
+            const dependencies: Promise<void>[] = [];
+            let luteOptions: {reloadOnFailure: boolean};
+            /// #if !MOBILE && !BROWSER
+            if (isSettingsWindow()) {
+                luteOptions = {reloadOnFailure: false};
+                dependencies.push(import("../setting/windowRuntime").then(runtime => runtime.refreshSettingsWindowNotebooks()));
+            }
+            /// #endif
+            dependencies.push(ensureLute(luteOptions));
+            await Promise.all(dependencies);
+            if (isMounted()) {
+                openHistory(window.siyuan.ws.app, "repo", true);
+            }
+        } catch (error) {
+            if (isMounted()) {
+                console.error("Could not initialize snapshot history", error);
+                showMessage(window.siyuan.languages._kernel["258"], 6000, "error");
+            }
+        } finally {
+            pending = false;
+            button.disabled = false;
+        }
+    });
+};
 
 const registerSyncGroup = (tab: SettingTabBuilder) => {
     const group = tab.group("sync", window.siyuan.languages.configGroupSync);
@@ -19,13 +72,13 @@ const registerSyncGroup = (tab: SettingTabBuilder) => {
     group.select("sync.provider", {
         title: window.siyuan.languages.syncProvider,
         desc: window.siyuan.languages.syncProviderTip,
+        afterMount: mountSyncProvider,
         options: [
             {value: 0, label: "SiYuan"},
             {value: 2, label: "S3"},
             {value: 3, label: "WebDAV"},
             ...(["std", "docker"].includes(window.siyuan.config.system.container) ? [{value: 4, label: window.siyuan.languages.localFileSystem}] : []),
         ],
-        save: (value) => patchSyncConfig("sync.provider", value),
     });
     group.slot({
         key: "syncProviderConfig",
@@ -33,19 +86,23 @@ const registerSyncGroup = (tab: SettingTabBuilder) => {
         html: () => '<div id="syncProviderConfig" class="b3-label config-item"></div>',
     });
     group.slot({
+        key: "syncProviderConfigRow",
+        keywords: getSyncProviderConfigRowKeywords(),
+        // 初始隐藏：渲染时按与配置区相同的条件决定是否显示，避免首帧闪烁
+        html: () => '<div id="syncProviderConfigRow" class="b3-label config-item fn__none"></div>',
+    });
+    group.slot({
         key: "cloudSpace",
         keywords: [window.siyuan.languages.cloudStorage, window.siyuan.languages.trafficStat, window.siyuan.languages.backup],
         html: () => '<div id="cloudSpace" class="b3-label config-item"></div>',
     });
     group.switch("sync.enabled", {
-        title: window.siyuan.languages.openSyncTip1,
+        title: window.siyuan.languages.cloudSync,
         desc: window.siyuan.languages.openSyncTip2,
-        save: (value) => patchSyncConfig("sync.enabled", value),
     });
     group.switch("sync.generateConflictDoc", {
         title: window.siyuan.languages.generateConflictDoc,
         desc: window.siyuan.languages.generateConflictDocTip,
-        save: (value) => patchSyncConfig("sync.generateConflictDoc", value),
     });
     group.select("sync.mode", {
         title: window.siyuan.languages.syncMode,
@@ -55,7 +112,15 @@ const registerSyncGroup = (tab: SettingTabBuilder) => {
             {value: 2, label: window.siyuan.languages.syncMode2},
             {value: 3, label: window.siyuan.languages.syncMode3},
         ],
-        save: (value) => patchSyncConfig("sync.mode", value),
+    });
+    group.select("sync.assetDownloadMode", {
+        title: window.siyuan.languages.syncAssetDownloadMode,
+        desc: window.siyuan.languages.syncAssetDownloadModeTip,
+        options: [
+            {value: 0, label: window.siyuan.languages.syncAssetDownloadAll},
+            {value: 1, label: window.siyuan.languages.syncAssetDownloadOnDemand},
+        ],
+        afterMount: mountSyncAssetDownloadMode,
     });
     group.number("sync.interval", {
         title: window.siyuan.languages.syncInterval,
@@ -63,24 +128,22 @@ const registerSyncGroup = (tab: SettingTabBuilder) => {
         min: 30,
         max: 43200,
         unit: window.siyuan.languages.second,
-        save: (value) => patchSyncConfig("sync.interval", value),
     });
     group.switch("sync.perception", {
         title: window.siyuan.languages.syncPerception,
         desc: window.siyuan.languages.syncPerceptionTip,
-        save: (value) => patchSyncConfig("sync.perception", value),
     });
     group.switch("sync.lan.enabled", {
         title: window.siyuan.languages.lanSync,
         desc: `${window.siyuan.languages.lanSyncTip}<div data-type="lanSyncStatus"></div>`,
-        save: (value) => patchSyncConfig("sync.lan.enabled", value),
         afterMount: mountLANSyncStatus,
+        searchAvailability: getLANSyncSearchAvailability,
     });
     group.slot({
         key: "syncCloudDir",
         keywords: [window.siyuan.languages.cloudSyncDir, window.siyuan.languages.cloudSyncDirTip, window.siyuan.languages.config],
         html: () => `<div class="b3-label config-item" id="syncCloudDirBlock">
-    <div class="fn__flex config-wrap">
+    <div class="fn__flex">
         ${genConfigItemMainHtml(window.siyuan.languages.cloudSyncDir, window.siyuan.languages.cloudSyncDirTip)}
         <div class="fn__space"></div>
         <button class="b3-button b3-button--outline fn__flex-center fn__size200" data-action="config">
@@ -99,7 +162,7 @@ const registerSyncGroup = (tab: SettingTabBuilder) => {
             window.siyuan.languages.dataSnapshot,
         ],
         html: () => `<div class="b3-label config-item" id="syncCloudBackupBlock">
-    <div class="fn__flex config-wrap">
+    <div class="fn__flex">
         ${genConfigItemMainHtml(window.siyuan.languages.cloudBackup, window.siyuan.languages.cloudBackupTip)}
         <div class="fn__space"></div>
         <button class="b3-button b3-button--outline fn__flex-center fn__size200" id="openCloudBackup">
@@ -107,11 +170,7 @@ const registerSyncGroup = (tab: SettingTabBuilder) => {
         </button>
     </div>
 </div>`,
-        afterMount: (root) => {
-            root.querySelector("#openCloudBackup")?.addEventListener("click", () => {
-                openHistory(window.siyuan.ws.app, "repo");
-            });
-        },
+        afterMount: mountSyncCloudBackup,
     });
 };
 
@@ -125,11 +184,12 @@ const mountSyncCloudDir = (root: HTMLElement) => {
                 renderSyncCloudList(cloudListElement, true);
             }
         });
+        refreshSyncCloudDirBlock(root);
     }
 };
 
 const registerRepoGroup = (tab: SettingTabBuilder) => {
-    const group = tab.group("repo", window.siyuan.languages.configGroupLocalDataRepo);
+    const group = tab.group("repo", window.siyuan.languages.dataRepo);
 
     group.slot({
         key: "repoKey",
@@ -143,7 +203,7 @@ const registerRepoGroup = (tab: SettingTabBuilder) => {
             window.siyuan.languages.copyKey,
             window.siyuan.languages.resetRepo,
         ],
-        html: () => `<div class="fn__flex b3-label config-item config-wrap">
+        html: () => `<div class="fn__flex b3-label config-item">
     <div class="fn__flex-1 fn__flex-center">
         ${genConfigItemName(window.siyuan.languages.dataRepoKey)}
         <div class="fn__hr--small"></div>
@@ -155,7 +215,7 @@ const registerRepoGroup = (tab: SettingTabBuilder) => {
     </div>
     <div class="fn__space"></div>
     <div class="fn__size200 fn__flex-center fn__none" id="repoKeyActionsEmpty">
-        <button class="b3-button b3-button--outline fn__block" id="importKey"><svg><use xlink:href="#iconDownload"></use></svg>${window.siyuan.languages.importKey}</button>
+        <button class="b3-button b3-button--outline fn__block" id="importKey"><svg><use xlink:href="#iconUpload"></use></svg>${window.siyuan.languages.importKey}</button>
         <div class="fn__hr"></div>
         <button class="b3-button b3-button--outline fn__block" id="initKey"><svg><use xlink:href="#iconLock"></use></svg>${window.siyuan.languages.genKey}</button>
         <div class="fn__hr"></div>
@@ -179,7 +239,7 @@ const registerRepoGroup = (tab: SettingTabBuilder) => {
         ],
         afterMount: (root) => {
             root.querySelector("#purgeRepo")?.addEventListener("click", () => {
-                confirmDialog("♻️ " + window.siyuan.languages.dataRepoPurge, window.siyuan.languages.dataRepoPurgeConfirm, () => {
+                mobileConfirmDialog("♻️ " + window.siyuan.languages.dataRepoPurge, window.siyuan.languages.dataRepoPurgeConfirm, () => {
                     fetchPost("/api/repo/purgeRepo");
                 });
             });
@@ -201,6 +261,31 @@ const registerRepoGroup = (tab: SettingTabBuilder) => {
             min: 1,
         });
     });
+    group.slot({
+        key: "cloudRepoPurge",
+        keywords: [
+            window.siyuan.languages.dataRepoPurgeCloud,
+            window.siyuan.languages.dataRepoPurgeCloudTip,
+            window.siyuan.languages.cloudStoragePurge,
+        ],
+        // 与「数据历史」云端栏同一可见规则：官方云端不支持手动清理，不显示该入口
+        html: () => `<div class="b3-label config-item${canPurgeRepo("cloud", window.siyuan.config.sync.provider) ? "" : " fn__none"}" id="cloudRepoPurgeBlock">
+    <div class="fn__flex">
+        ${genConfigItemMainHtml(window.siyuan.languages.dataRepoPurgeCloud, window.siyuan.languages.dataRepoPurgeCloudTip)}
+        <div class="fn__space"></div>
+        <button class="b3-button b3-button--outline fn__flex-center fn__size200" id="purgeCloudData"${window.siyuan.config.readonly ? " disabled" : ""}>
+            <svg><use xlink:href="#iconTrashcan"></use></svg>${window.siyuan.languages.cloudStoragePurge}
+        </button>
+    </div>
+</div>`,
+        afterMount: (root) => {
+            root.querySelector("#purgeCloudData")?.addEventListener("click", () => {
+                mobileConfirmDialog("♻️ " + window.siyuan.languages.cloudStoragePurge, `<div class="b3-typography">${window.siyuan.languages.cloudStoragePurgeConfirm}</div>`, () => {
+                    fetchPost("/api/repo/purgeCloudRepo");
+                });
+            });
+        },
+    });
 };
 
 const mountRepoKey = (root: HTMLElement) => {
@@ -213,34 +298,24 @@ const mountRepoKey = (root: HTMLElement) => {
     };
     toggleRepoKeyActions();
     root.querySelector("#importKey")?.addEventListener("click", () => {
-        const passwordDialog = new Dialog({
+        const passwordDialog = mobileInputDialog({
+            awaitConfirm: true,
             title: "🔑 " + window.siyuan.languages.key,
-            content: `<div class="b3-dialog__content">
-    <input type="text" spellcheck="false" class="b3-text-field fn__block" placeholder="${window.siyuan.languages.keyPlaceholder}">
-</div>
-<div class="b3-dialog__action">
-    <button class="b3-button b3-button--cancel">${window.siyuan.languages.cancel}</button><div class="fn__space"></div>
-    <button class="b3-button b3-button--text">${window.siyuan.languages.confirm}</button>
-</div>`,
+            value: "",
+            placeholder: window.siyuan.languages.keyPlaceholder,
             width: "520px",
-        });
-        passwordDialog.element.setAttribute("data-key", Constants.DIALOG_PASSWORD);
-        const inputElement = passwordDialog.element.querySelector("input");
-        inputElement.focus();
-        const btnsElement = passwordDialog.element.querySelectorAll(".b3-button");
-        btnsElement[0].addEventListener("click", () => {
-            passwordDialog.destroy();
-        });
-        btnsElement[1].addEventListener("click", () => {
-            fetchPost("/api/repo/importRepoKey", {key: inputElement.value}, (response) => {
+            onConfirm: async (value) => {
+                const response = await fetchSyncPost("/api/repo/importRepoKey", {key: value});
+                if (response.code !== 0) return false;
                 window.siyuan.config.repo.key = response.data.key;
                 toggleRepoKeyActions();
-                passwordDialog.destroy();
-            });
+                return true;
+            },
         });
+        passwordDialog.element.setAttribute("data-key", Constants.DIALOG_PASSWORD);
     });
     root.querySelector("#initKey")?.addEventListener("click", () => {
-        confirmDialog("🔑 " + window.siyuan.languages.genKey, window.siyuan.languages.initRepoKeyTip, () => {
+        mobileConfirmDialog("🔑 " + window.siyuan.languages.genKey, window.siyuan.languages.initRepoKeyTip, () => {
             fetchPost("/api/repo/initRepoKey", {}, (response) => {
                 window.siyuan.config.repo.key = response.data.key;
                 toggleRepoKeyActions();
@@ -257,7 +332,7 @@ const mountRepoKey = (root: HTMLElement) => {
         showMessage(window.siyuan.languages.copied);
     });
     root.querySelector("#resetRepo")?.addEventListener("click", () => {
-        confirmDialog("⚠️ " + window.siyuan.languages.resetRepo, window.siyuan.languages.resetRepoTip, () => {
+        mobileConfirmDialog("⚠️ " + window.siyuan.languages.resetRepo, window.siyuan.languages.resetRepoTip, () => {
             fetchPost("/api/repo/resetRepo", {}, () => {
                 window.siyuan.config.repo.key = "";
                 window.siyuan.config.sync.enabled = false;

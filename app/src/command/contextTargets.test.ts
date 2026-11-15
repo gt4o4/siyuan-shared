@@ -1,0 +1,131 @@
+import {describe, it} from "node:test";
+import * as assert from "node:assert/strict";
+import {getCommandBlocks, getCommandDocument, hasCommandEditorTarget, hasCommandFileTreeTarget} from "./contextTargets";
+import type {ICommandContextSnapshot} from "./types";
+import type {DocTreeController} from "../layout/dock/docTree/DocTreeController";
+import type {IDocTreeItem} from "../layout/dock/docTree/types";
+
+const createEditorContext = () => {
+    const block = (id: string) => ({isConnected: true, nodeType: 1, tagName: "DIV",
+        classList: {contains: () => false}, hasAttribute: () => true, closest: (): null => null,
+        getAttribute: (name: string) => name === "data-type" ? "NodeParagraph" : id}) as unknown as HTMLElement;
+    const first = block("first");
+    const second = block("second");
+    const state = {selected: [] as HTMLElement[], nodes: [first, second]};
+    const element = {
+        isConnected: true,
+        contains: (node: HTMLElement) => state.nodes.includes(node),
+        querySelectorAll: () => state.selected,
+    } as unknown as HTMLElement;
+    const context: ICommandContextSnapshot = {
+        app: {}, source: "commandPanel", environment: "desktop", focus: "editor",
+        selectedBlocks: [], block: {id: "first", element: first},
+        range: {startContainer: first, endContainer: first} as unknown as Range,
+        document: {rootId: "doc", notebookId: "box", path: "/doc.sy"},
+        protyle: {
+            element, wysiwyg: {element}, block: {rootID: "doc"}, notebookId: "box", path: "/doc.sy",
+        } as unknown as IProtyle,
+    };
+    return {context, state, first, second};
+};
+
+describe("context command targets", () => {
+    it("keeps virtual file tree command targets across DOM recycling and rejects changed selections", () => {
+        const {context} = createEditorContext();
+        const item = {id: "far", notebookId: "box", path: "/far.sy", occurrenceKey: "box/far",
+            kind: "document"} as IDocTreeItem;
+        let version = 4;
+        let currentPath = item.path;
+        const controller = {validateSelection: (captured: number, items: IDocTreeItem[]) =>
+            captured === version && items.length === 1 && items[0].path === currentPath} as DocTreeController;
+        context.focus = "fileTree";
+        context.fileTree = {controller, selectionVersion: version, items: [{...item}],
+            elements: [{isConnected: false} as HTMLElement], ids: [item.id], paths: [item.path]};
+        assert.equal(hasCommandFileTreeTarget(context), true);
+        assert.deepEqual(getCommandDocument(context), {id: "far", notebookId: "box", path: "/far.sy"});
+        version++;
+        assert.equal(getCommandDocument(context), undefined);
+        version--;
+        currentPath = "/moved/far.sy";
+        assert.equal(getCommandDocument(context), undefined);
+    });
+    it("prioritizes selected blocks over the current block", () => {
+        const {context, state, second} = createEditorContext();
+        context.selectedBlocks = [{id: "second", element: second}];
+        state.selected = [second];
+        assert.equal(hasCommandEditorTarget(context), true);
+        assert.deepEqual(getCommandBlocks(context), context.selectedBlocks);
+        context.selectedBlocks = [];
+        state.selected = [];
+        assert.deepEqual(getCommandBlocks(context), [context.block]);
+    });
+
+    it("retains the captured editor target after palette focus changes", () => {
+        const {context} = createEditorContext();
+        context.activeElement = {} as HTMLElement;
+        assert.equal(hasCommandEditorTarget(context), true);
+        assert.deepEqual(getCommandDocument(context), {id: "doc", notebookId: "box", path: "/doc.sy"});
+        assert.deepEqual(getCommandBlocks(context), [context.block]);
+    });
+
+    it("does not fall back to an editor when the file tree or dock owns focus", () => {
+        const {context} = createEditorContext();
+        for (const focus of ["fileTree", "dock", "global"] as const) {
+            context.focus = focus;
+            assert.equal(hasCommandEditorTarget(context), false);
+            assert.equal(getCommandDocument(context), undefined);
+        }
+    });
+
+    it("rejects detached, replaced, or cross-editor targets", () => {
+        const {context, state, second} = createEditorContext();
+        state.nodes = [second];
+        assert.equal(hasCommandEditorTarget(context), false);
+        state.nodes = [context.block.element, second];
+        context.block.id = "replacement";
+        assert.equal(hasCommandEditorTarget(context), false);
+        context.block.id = "first";
+        context.range = {startContainer: context.block.element, endContainer: {}} as unknown as Range;
+        assert.equal(hasCommandEditorTarget(context), false);
+    });
+
+    it("requires the entire captured block selection to remain unchanged", () => {
+        const {context, state, first, second} = createEditorContext();
+        context.selectedBlocks = [{id: "first", element: first}, {id: "second", element: second}];
+        state.selected = [first, second];
+        assert.equal(hasCommandEditorTarget(context), true);
+        assert.deepEqual(getCommandBlocks(context), context.selectedBlocks);
+        state.selected = [first];
+        assert.equal(hasCommandEditorTarget(context), false);
+        context.selectedBlocks = [];
+        assert.equal(hasCommandEditorTarget(context), false);
+    });
+
+    it("rejects an editor that has navigated to another document", () => {
+        const {context} = createEditorContext();
+        context.protyle.block.rootID = "other";
+        assert.equal(hasCommandEditorTarget(context), false);
+        assert.equal(getCommandDocument(context), undefined);
+        context.protyle.block.rootID = "doc";
+        context.protyle.path = "/moved/doc.sy";
+        assert.equal(getCommandDocument(context), undefined);
+    });
+
+    it("uses only a single unchanged document tree item", () => {
+        const {context} = createEditorContext();
+        context.focus = "fileTree";
+        const item = {id: "tree-doc", notebookId: "tree-box", path: "/tree-doc.sy", kind: "document"};
+        let current = true;
+        context.fileTree = {elements: [], ids: [item.id], paths: [item.path], items: [item],
+            controller: {validateSelection: () => current}} as unknown as typeof context.fileTree;
+        assert.deepEqual(getCommandDocument(context), {id: item.id, path: item.path, notebookId: item.notebookId});
+        context.fileTree.items.push({...item, id: "second"} as typeof context.fileTree.items[number]);
+        assert.equal(getCommandDocument(context), undefined);
+        context.fileTree.items.pop();
+        current = false;
+        assert.equal(getCommandDocument(context), undefined);
+        current = true;
+        item.kind = "notebook";
+        assert.equal(getCommandDocument(context), undefined);
+    });
+});

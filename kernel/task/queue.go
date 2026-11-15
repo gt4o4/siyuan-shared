@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package task
 
@@ -28,8 +16,9 @@ import (
 )
 
 var (
-	taskQueue []*Task
-	queueLock = sync.Mutex{}
+	taskQueue    []*Task
+	queueLock    = sync.Mutex{}
+	runningTasks = map[*Task]struct{}{}
 )
 
 type Task struct {
@@ -50,6 +39,7 @@ func AppendAsyncTaskWithDelay(action string, delay time.Duration, handler any, a
 	appendTaskWithDelayTimeout(action, true, delay, 24*time.Hour, handler, args...)
 }
 
+// AppendTaskWithTimeout 限制队列等待处理器的时间，不强制中止处理器；超时后仍跟踪运行实例并参与去重。
 func AppendTaskWithTimeout(action string, timeout time.Duration, handler any, args ...any) {
 	appendTaskWithDelayTimeout(action, false, 0, timeout, handler, args...)
 }
@@ -70,28 +60,29 @@ func appendTaskWithDelayTimeout(action string, async bool, delay, timeout time.D
 		Timeout: timeout,
 	}
 
+	queueLock.Lock()
+	defer queueLock.Unlock()
 	if gulu.Str.Contains(action, uniqueActions) {
-		if currentTasks := getCurrentTasks(); containTask(task, currentTasks) {
+		if currentTasks := getCurrentTasksLocked(); containTask(task, currentTasks) {
 			//logging.LogWarnf("task [%s] is already in queue, will be ignored", action)
 			return
 		}
 	}
 
-	queueLock.Lock()
-	defer queueLock.Unlock()
 	taskQueue = append(taskQueue, task)
 }
 
 func containTask(task *Task, tasks []*Task) bool {
+nextTask:
 	for _, t := range tasks {
 		if t.Action == task.Action {
 			if len(t.Args) != len(task.Args) {
-				return false
+				continue nextTask
 			}
 
 			for i, arg := range t.Args {
 				if !areArgsEqual(arg, task.Args[i]) {
-					return false
+					continue nextTask
 				}
 			}
 			return true
@@ -100,96 +91,37 @@ func containTask(task *Task, tasks []*Task) bool {
 	return false
 }
 
-// areArgsEqual 比较两个参数是否相等
 func areArgsEqual(a, b any) bool {
-
-	// 如果两个参数都为 nil
-	if a == nil && b == nil {
-		return true
-	}
 	if a == nil || b == nil {
-		return false
+		return a == nil && b == nil
 	}
 
-	// 快速处理常见的基本类型
-	switch av := a.(type) {
-	case string:
-		if bv, ok := b.(string); ok {
-			return av == bv
-		}
-	case int:
-		if bv, ok := b.(int); ok {
-			return av == bv
-		}
-	case int64:
-		if bv, ok := b.(int64); ok {
-			return av == bv
-		}
-	case int32:
-		if bv, ok := b.(int32); ok {
-			return av == bv
-		}
-	case bool:
-		if bv, ok := b.(bool); ok {
-			return av == bv
-		}
-	case float64:
-		if bv, ok := b.(float64); ok {
-			return av == bv
-		}
-	case float32:
-		if bv, ok := b.(float32); ok {
-			return av == bv
-		}
-	case uint:
-		if bv, ok := b.(uint); ok {
-			return av == bv
-		}
-	case uint64:
-		if bv, ok := b.(uint64); ok {
-			return av == bv
-		}
-	case uint32:
-		if bv, ok := b.(uint32); ok {
-			return av == bv
-		}
-	case []string:
-		if bv, ok := b.([]string); ok {
-			if len(av) != len(bv) {
-				return false
-			}
-			for i := range av {
-				if av[i] != bv[i] {
-					return false
-				}
-			}
-			return true
-		}
-	case []int:
-		if bv, ok := b.([]int); ok {
-			if len(av) != len(bv) {
-				return false
-			}
-			for i := range av {
-				if av[i] != bv[i] {
-					return false
-				}
-			}
-			return true
-		}
+	// 处理器和调用方可并发修改引用内容；只按值比较不可变标量，其他参数的任务独立入队。
+	switch reflect.TypeOf(a).Kind() {
+	case reflect.Bool, reflect.String,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
+		reflect.Float32, reflect.Float64, reflect.Complex64, reflect.Complex128:
+		return a == b
 	}
-
-	// 未处理的复杂类型，回退到 reflect.DeepEqual
-	return reflect.DeepEqual(a, b)
+	return false
 }
 
 func getCurrentTasks() (ret []*Task) {
 	queueLock.Lock()
 	defer queueLock.Unlock()
+	return getCurrentTasksLocked()
+}
 
+func getCurrentTasksLocked() (ret []*Task) {
 	currentTaskLock.Lock()
 	if nil != currentTask {
 		ret = append(ret, currentTask)
+	}
+	for task := range runningTasks {
+		if task != currentTask {
+			ret = append(ret, task)
+		}
 	}
 	currentTaskLock.Unlock()
 
@@ -225,6 +157,7 @@ const (
 	ReloadFiletree                    = "task.reload.filetree"                      // 重新加载文档树面板
 	SetRefDynamicText                 = "task.ref.setDynamicText"                   // 设置引用的动态锚文本
 	SetDefRefCount                    = "task.def.setRefCount"                      // 设置定义的引用计数
+	RefreshCrossTreeMoveRefs          = "task.ref.refreshCrossTreeMove"             // 刷新跨文档移动块的引用索引
 	UpdateIDs                         = "task.update.ids"                           // 更新 ID
 	PushMsg                           = "task.push.msg"                             // 推送消息
 )
@@ -250,6 +183,7 @@ var uniqueActions = []string{
 	ReloadFiletree,
 	SetRefDynamicText,
 	SetDefRefCount,
+	RefreshCrossTreeMoveRefs,
 	UpdateIDs,
 }
 
@@ -268,8 +202,7 @@ func StatusJob() {
 	count := map[string]int{}
 	actionLangs := util.TaskActionLangs[util.Lang]
 
-	queueLock.Lock()
-	for _, task := range taskQueue {
+	for _, task := range getCurrentTasks() {
 		action := task.Action
 		if c := count[action]; 7 < c {
 			logging.LogWarnf("too many tasks [%s], ignore show its status", action)
@@ -292,16 +225,6 @@ func StatusJob() {
 		item := map[string]any{"action": action}
 		items = append(items, item)
 	}
-	defer queueLock.Unlock()
-
-	currentTaskLock.Lock()
-	if nil != currentTask && nil != actionLangs && !skipPushTaskAction(currentTask.Action) {
-		if label := actionLangs[currentTask.Action]; nil != label {
-			items = append([]map[string]any{{"action": label.(string)}}, items...)
-		}
-	}
-	currentTaskLock.Unlock()
-
 	if 1 > len(items) {
 		items = []map[string]any{}
 	}
@@ -313,13 +236,13 @@ func StatusJob() {
 func skipPushTaskAction(action string) bool {
 	switch action {
 	case DatabaseIndexCommit:
-		return util.StatusBarCfg.MsgTaskDatabaseIndexCommitDisabled
+		return util.StatusBarCfg.Load().MsgTaskDatabaseIndexCommitDisabled
 	case HistoryDatabaseIndexCommit:
-		return util.StatusBarCfg.MsgTaskHistoryDatabaseIndexCommitDisabled
+		return util.StatusBarCfg.Load().MsgTaskHistoryDatabaseIndexCommitDisabled
 	case AssetContentDatabaseIndexCommit:
-		return util.StatusBarCfg.MsgTaskAssetDatabaseIndexCommitDisabled
+		return util.StatusBarCfg.Load().MsgTaskAssetDatabaseIndexCommitDisabled
 	case HistoryGenerateFile:
-		return util.StatusBarCfg.MsgTaskHistoryGenerateFileDisabled
+		return util.StatusBarCfg.Load().MsgTaskHistoryGenerateFileDisabled
 	default:
 		return false
 	}
@@ -332,6 +255,7 @@ func ExecTaskJob() {
 	}
 
 	if util.IsExiting.Load() {
+		finishRunningTask(task)
 		return
 	}
 
@@ -353,6 +277,7 @@ func popTask() (ret *Task) {
 
 		if !task.Async {
 			ret = task
+			runningTasks[task] = struct{}{}
 			taskQueue = append(taskQueue[:i], taskQueue[i+1:]...)
 			return
 		}
@@ -367,6 +292,9 @@ func ExecAsyncTaskJob() {
 	}
 
 	if util.IsExiting.Load() {
+		for _, task := range tasks {
+			finishRunningTask(task)
+		}
 		return
 	}
 
@@ -394,6 +322,7 @@ func popAsyncTasks() (ret []*Task) {
 		shouldPop := task.Async && time.Since(task.Created) > task.Delay
 		if shouldPop {
 			ret = append(ret, task)
+			runningTasks[task] = struct{}{}
 			// 不写入 taskQueue，相当于删除
 		} else {
 			// 保留此任务，移动到 writeIdx 位置
@@ -424,39 +353,48 @@ func execTask(task *Task) {
 
 	defer logging.Recover()
 
-	args := make([]reflect.Value, len(task.Args))
-	for i, v := range task.Args {
-		if nil == v {
-			args[i] = reflect.New(task.Handler.Type().In(i)).Elem()
-		} else {
-			args[i] = reflect.ValueOf(v)
-		}
-	}
-
+	queueLock.Lock()
+	runningTasks[task] = struct{}{}
 	if !task.Async {
 		currentTaskLock.Lock()
 		currentTask = task
 		currentTaskLock.Unlock()
 	}
+	queueLock.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), task.Timeout)
 	defer cancel()
-	ch := make(chan bool, 1)
+	ch := make(chan struct{})
 	go func() {
+		defer close(ch)
+		defer finishRunningTask(task)
+		defer logging.Recover()
+		args := make([]reflect.Value, len(task.Args))
+		for i, v := range task.Args {
+			if nil == v {
+				args[i] = reflect.New(task.Handler.Type().In(i)).Elem()
+			} else {
+				args[i] = reflect.ValueOf(v)
+			}
+		}
 		task.Handler.Call(args)
-		ch <- true
 	}()
 
 	select {
 	case <-ctx.Done():
-		logging.LogWarnf("task [%s] timeout", task.Action)
+		logging.LogWarnf("task [%s] wait timeout; handler remains tracked until completion", task.Action)
 	case <-ch:
 		//logging.LogInfof("task [%s] done", task.Action)
 	}
+}
 
-	if !task.Async {
-		currentTaskLock.Lock()
+func finishRunningTask(task *Task) {
+	queueLock.Lock()
+	defer queueLock.Unlock()
+	delete(runningTasks, task)
+	currentTaskLock.Lock()
+	defer currentTaskLock.Unlock()
+	if currentTask == task {
 		currentTask = nil
-		currentTaskLock.Unlock()
 	}
 }

@@ -2,8 +2,11 @@
 | [中文](API.zh-CN.md)
 | [日本語](API.ja.md)
 
+Plugin resource declarations, data authorization, and publishing APIs are documented in [Plugin publishing](PLUGIN-PUBLISH.md).
+
 * [Specification](#Specification)
     * [Parameters and return values](#Parameters-and-return-values)
+    * [TypeScript contracts](#TypeScript-contracts)
     * [Behavior semantics](#Behavior-semantics)
     * [Authentication](#Authentication)
 * [Notebooks](#Notebooks)
@@ -17,10 +20,14 @@
     * [Save notebook configuration](#Save-notebook-configuration)
 * [Documents](#Documents)
     * [Create a document with Markdown](#Create-a-document-with-Markdown)
+    * [Create a document by parent ID](#create-a-document-by-parent-id)
+    * [Resolve a document path by title segments](#resolve-a-document-path-by-title-segments)
+    * [Get document paths by IDs](#get-document-paths-by-ids)
     * [Rename a document](#Rename-a-document)
     * [Remove a document](#Remove-a-document)
     * [Move documents](#Move-documents)
     * [Set notebook and document sort values](#Set-notebook-and-document-sort-values)
+    * [Set a document's child document sort mode](#Set-a-documents-child-document-sort-mode)
     * [Get human-readable path based on path](#Get-human-readable-path-based-on-path)
     * [Get human-readable path based on ID](#Get-human-readable-path-based-on-ID)
     * [Get storage path based on ID](#Get-storage-path-based-on-ID)
@@ -59,6 +66,10 @@
     * [Remove a field](#Remove-a-field)
     * [Set global field sort](#Set-global-field-sort)
     * [Set per-view field sort](#Set-per-view-field-sort)
+* [Search](#Search)
+    * [Get saved search criteria](#Get-saved-search-criteria)
+    * [Save a search criterion](#Save-a-search-criterion)
+    * [Remove a search criterion](#Remove-a-search-criterion)
 * [SQL](#SQL)
     * [Execute SQL query](#Execute-SQL-query)
     * [Flush transaction](#Flush-transaction)
@@ -112,6 +123,21 @@
     * `code`: non-zero for exceptions
     * `msg`: an empty string under normal circumstances, an error text will be returned under abnormal conditions
     * `data`: may be `{}`, `[]` or `NULL`, depending on the interface
+
+### TypeScript contracts
+
+The plugin `fetchPost`, `fetchSyncPost`, and `fetchGet` declarations infer request and response types for migrated API paths from generated kernel contracts. Coverage is expanding and includes system utilities, batch block attributes, tag and bookmark operations, selected block queries, notebook listing, history search, and snapshot operations. Existing untyped endpoints and dynamic URLs remain supported. Check the response code before reading successful data from asynchronous calls, and handle nullable fields explicitly.
+
+```typescript
+import {fetchSyncPost} from "siyuan";
+
+const response = await fetchSyncPost("/api/attr/getBlockAttrs", {id: blockID});
+if (response.code === 0 && response.data) {
+    const value = response.data["custom-value"];
+}
+```
+
+See the [generated route declarations](../app/src/types/api/index.d.ts) for exact coverage and the [contract maintenance guide](API-CONTRACTS.md) for generation and compatibility rules. Type declarations do not validate JSON at runtime.
 
 ### Behavior semantics
 
@@ -203,7 +229,13 @@ View the API token in <kbd>Settings - Authentication - API token</kbd>. Use it i
   }
   ```
 
+The close endpoint validates the notebook ID without trimming whitespace. Typed request and response declarations are generated in `app/src/types/api/index.d.ts` and synchronized to `petal`.
+
 ### Rename a notebook
+
+`name` is a plain display label. ASCII `/` remains distinct from `／` and does not create a directory. Notebook identity remains its ID.
+
+When a notebook document exists, renaming also updates its plain title. For a rich title, returning the current notebook name is a no-op; a different name is rejected to preserve styles, images, and references. Read the complete title with `getDocTitle` using the notebook ID, then edit it through a `setDocTitle` transaction with `expectedRevision`.
 
 * `/api/notebook/renameNotebook`
 * Parameters
@@ -227,6 +259,8 @@ View the API token in <kbd>Settings - Authentication - API token</kbd>. Use it i
   ```
 
 ### Create a notebook
+
+`name` accepts literal ASCII `/` as part of one plain display label; it is not Markdown, rich text, or a filesystem path.
 
 * `/api/notebook/createNotebook`
 * Parameters
@@ -278,6 +312,8 @@ View the API token in <kbd>Settings - Authentication - API token</kbd>. Use it i
 
 ### Get notebook configuration
 
+Administrator responses may also include the read-only `documentCapabilities` object. It reports structured API support, supported title formats, index readiness and a capability revision. All notebooks follow structured title rules without a mode setting or migration. `literalSlash` is true only when indexes are ready. Compatibility depends on each document's source specification and title representation. Synchronization transfers document bytes without interpreting unsupported source formats. Reading, indexing, and editing still require a compatible version; snapshot restoration retains source-specification preflight checks. Existing permission filtering still applies.
+
 * `/api/notebook/getNotebookConf`
 * Parameters
 
@@ -309,7 +345,11 @@ View the API token in <kbd>Settings - Authentication - API token</kbd>. Use it i
   }
   ```
 
+Administrator responses also include the optional read-only `documentCapabilities` object. `structuredPaths` advertises the ID and segment APIs; it does not grant access to closed or locked notebooks. `titleFormats` lists supported title formats, `indexState` reports readiness and `revision` identifies the capability declaration. `literalSlash` is true only when indexes are ready. Compatibility depends on each document's source specification and title representation. Synchronization transfers document bytes without interpreting unsupported source formats. Reading, indexing, and editing still require a compatible version; snapshot restoration retains source-specification preflight checks. An absent object on an older server differs from a failed request; failures must not trigger a fallback write through legacy path APIs.
+
 ### Save notebook configuration
+
+The `name` field follows the same notebook-document title linkage and rich-title protection as `renameNotebook`. Omit it when changing other settings; a rejected rename does not save the remaining configuration changes.
 
 * `/api/notebook/setNotebookConf`
 * Parameters
@@ -350,6 +390,8 @@ View the API token in <kbd>Settings - Authentication - API token</kbd>. Use it i
 
 ### Create a document with Markdown
 
+Legacy string creation checks every parent prefix before writing. Slash or empty-title ancestors return `code: -1` with `data.reason: "pathAmbiguous"`. Multiple clean parents require a valid matching `parentID`; otherwise they also return `pathAmbiguous`. Unready metadata returns `indexUnavailable`. Prefer [creating a document by parent ID](#create-a-document-by-parent-id) with a separate parent identity and title.
+
 * `/api/filetree/createDocWithMd`
 * Parameters
 
@@ -362,8 +404,10 @@ View the API token in <kbd>Settings - Authentication - API token</kbd>. Use it i
   ```
 
     * `notebook`: Notebook ID
-    * `path`: Document path, which needs to start with / and separate levels with / (path here corresponds to the
-      database hpath field)
+    * `path`: Document path, which needs to start with `/` and separate levels with `/` (corresponds to the database `hpath` field)
+        * `/` is a hierarchy separator and cannot represent a literal slash in a document title; missing parent documents are created automatically
+        * For example, `/Notes/Programming in C/C++` creates a document titled `C++` under `Programming in C` under `Notes`
+        * Importers should sanitize each title before joining titles into a path, for example by replacing ASCII `/` with full-width `／` (U+FF0F): `/Notes/Programming in C／C++` creates a document titled `Programming in C／C++` under `Notes`. This replacement changes the title text
     * `markdown`: GFM Markdown content
 * Return value
 
@@ -378,7 +422,250 @@ View the API token in <kbd>Settings - Authentication - API token</kbd>. Use it i
     * `data`: Created document ID
     * If you use the same `path` to call this interface repeatedly, the existing document will not be overwritten
 
+### Create a document by parent ID
+
+Creates one document under an existing parent. Requires administrator access, a writable workspace, and an opened notebook with ready document metadata; encrypted notebooks must be unlocked.
+
+* `/api/filetree/createDocByParent`
+* Parameters
+
+  ```json
+  {
+    "notebook": "20210817205410-2kvfpfn",
+    "parentID": null,
+    "id": "20261030150000-abc1234",
+    "title": {
+      "format": "plain",
+      "text": "C/C++"
+    },
+    "markdown": "Hello"
+  }
+  ```
+
+    * `notebook`: Destination notebook ID
+    * `parentID`: Existing parent document ID in that notebook, or `null` for root; required and cannot be an empty string
+    * `id`: New document ID generated and saved before sending; the SiYuan frontend can use `Lute.NewNodeID()`; replace the example ID for each new document
+    * `title`: Title object; `format` must be `plain` and `text` is required; Markdown syntax is literal text and `/` is part of the title
+    * `title.text`: At most 512 Unicode code points; empty text creates an empty-title marker and a display placeholder; leading/trailing whitespace, invalid characters, `.` and `..` are rejected
+    * `markdown`: GFM body content; may be an empty string
+    * `expectedParentRevision`: Parent version from a path query, optional; for root use `resolveDocPath`'s `data.start.revision`; a mismatch returns `planChanged`
+    * `nameConditions`: Array of up to 128 `{parentID, title, expectedID}` objects, optional; all three fields are required; `parentID: null` means root; `expectedID: null` requires no same-title child, otherwise exactly one same-title child with that ID is required; conditions apply to the destination parent and its ancestors
+    * `expectedTarget`: `{notebook, purpose, revision}` from a configuration-based creation plan, optional; `purpose` is `document`, `reference`, or `dailyNote`; changed configuration returns `planChanged`
+    * `tags`: Comma-separated document tags, optional, default empty string; subject to notebook restrictions
+    * `withMath`: Enable inline math parsing, optional, default `false`
+    * `clippingHref`: Clipping source URL, optional, default empty string; recognized community article URLs enable their Markdown syntax options
+    * `sorts`: Array of sibling storage paths in custom order, optional, default `[]`; cannot be combined with `sortTargetID`
+    * `sortTargetID`: Sibling document ID used for relative sorting, optional; requires `sortPosition`
+    * `sortPosition`: `before` or `after`, optional; requires `sortTargetID`; without sorting options, notebook creation-order settings apply
+    * `docCreateTemplatePath`: Body template path, optional, default empty string; applied only when `markdown` is empty
+    * `listDocTree`: Document-tree refresh flag in the creation notification, optional, default `false`
+    * Only `parentID` accepts `null`; unknown fields such as `path` and `hPath` are rejected
+    * Missing parents are not created automatically; invalid parent IDs, content-block IDs, and parents in other notebooks return an error
+    * Existing IDs return `documentIDConflict`; same-title documents with different IDs are allowed unless a name condition prevents them
+* Return value
+
+  ```json
+  {
+    "code": 0,
+    "msg": "",
+    "data": {
+      "id": "20261030150000-abc1234",
+      "document": {
+        "notebook": "20210817205410-2kvfpfn",
+        "id": "20261030150000-abc1234",
+        "parentID": null,
+        "path": "/20261030150000-abc1234.sy",
+        "title": {
+          "format": "plain",
+          "text": "C/C++",
+          "empty": false
+        },
+        "segments": [
+          {
+            "id": "20261030150000-abc1234",
+            "text": "C/C++",
+            "empty": false
+          }
+        ],
+        "depth": 1,
+        "displayPath": "/C/C++",
+        "revision": "opaque-revision"
+      }
+    }
+  }
+  ```
+
+    * `data.id`: Created document ID
+    * `data.document`: Document metadata, also used by the path-query endpoints below
+    * `data.document.parentID`: Parent document ID, or `null` at root
+    * `data.document.path`: ID-based `.sy` storage path
+    * `data.document.title`: Title summary; `format` is `plain` or `inline-ast`, `text` is display text, and `empty` marks an explicitly empty title
+    * `data.document.segments`: Ancestor chain including the current document; each entry contains `id`, `text`, and `empty`
+    * `data.document.depth`: Number of path segments
+    * `data.document.displayPath`: Display path; titles may contain `/`, so it cannot be split to recover document IDs
+    * `data.document.revision`: Version string for subsequent checks; use the actual returned value instead of `opaque-revision` in the example
+
+Example parameters for creating a child under the document above:
+
+```json
+{
+  "notebook": "20210817205410-2kvfpfn",
+  "parentID": "20261030150000-abc1234",
+  "id": "20261030150001-def5678",
+  "title": {
+    "format": "plain",
+    "text": "Child"
+  },
+  "markdown": "Child content",
+  "expectedParentRevision": "opaque-revision",
+  "nameConditions": [
+    {
+      "parentID": "20261030150000-abc1234",
+      "title": "Child",
+      "expectedID": null
+    }
+  ]
+}
+```
+
+Replace `expectedParentRevision` with the returned parent version. The name condition requires that `Child` does not exist. For multiple missing levels, use [path resolution](#resolve-a-document-path-by-title-segments).
+
+* Creation failures return `code: -1`. When available, `data` describes the failed step
+
+  ```json
+  {
+    "code": -1,
+    "msg": "parent document changed after planning",
+    "data": {
+      "reason": "planChanged",
+      "commitState": "none",
+      "stage": "source",
+      "completed": []
+    }
+  }
+  ```
+
+    * `data.reason`: Error reason
+        * `invalidTitle`: Invalid title
+        * `unsupportedTitleFormat`: Creation format is not `plain`
+        * `parentUnavailable`: Parent is unavailable
+        * `planChanged`: Parent version, name conditions, configuration target, or sort target changed
+        * `documentIDConflict`: ID is already in use
+        * `indexUnavailable`: Metadata is not ready or is inconsistent
+        * `writeFailed`: Other creation, sorting, or template error
+    * `data.commitState`: `none` means this call did not save the document; `committed` means the document was saved but later steps may have failed; `unknown` means persistence could not be determined
+    * `data.id`: Optional ID of a document confirmed saved
+    * `data.stage`: Failed phase, such as `validate`, `source`, `sort`, or `template`
+    * `data.completed`: Completed phases, such as `source` and `sort`
+    * Request parsing, authentication, and notebook-access errors may return only the normal error envelope
+
+Sorting or template failure keeps the saved document. After a timeout, lost response, or `unknown` result, [query the original ID](#get-document-paths-by-ids) once metadata is ready and check the parent, title, body, and unfinished steps before retrying. A matching ID alone does not confirm that all steps succeeded; keep the original ID and avoid repeating templates or falling back to legacy writes automatically.
+
+### Resolve a document path by title segments
+
+Resolves titles under a specified starting location without creating documents. Requires administrator access and an opened, unlocked notebook with ready document metadata.
+
+* `/api/filetree/resolveDocPath`
+* Parameters
+
+  ```json
+  {
+    "notebook": "20210817205410-2kvfpfn",
+    "start": {
+      "kind": "root"
+    },
+    "segments": [
+      "Notes",
+      "C/C++"
+    ]
+  }
+  ```
+
+    * `notebook`: Notebook ID
+    * `start`: `{kind: "root"}` for root, without `id`, or `{kind: "document", id: "existing-document-id"}` for an existing document; the notebook root document ID is treated as logical root
+    * `segments`: Array of 0 to 128 nonempty titles, matched exactly under each parent; `/` within a title is literal; no Unicode normalization, full-width conversion, or percent decoding is performed
+    * Use a document ID as the start to address an empty-title document; an empty segment array returns the starting document or root
+* Return value
+
+  The following result assumes that `Notes` does not exist.
+
+  ```json
+  {
+    "code": 0,
+    "msg": "",
+    "data": {
+      "status": "missing",
+      "start": {
+        "notebook": "20210817205410-2kvfpfn",
+        "id": null,
+        "revision": "opaque-root-revision"
+      },
+      "resolved": null,
+      "nextIndex": 0,
+      "candidates": [],
+      "candidatesTruncated": false,
+      "nameConditions": [
+        {
+          "parentID": null,
+          "title": "Notes",
+          "expectedID": null
+        }
+      ]
+    }
+  }
+  ```
+
+    * `data.status`: `resolved`, `missing`, or `ambiguous`; all three return `code: 0`
+    * `data.start`: Starting notebook, document ID (`null` for root), and version
+    * `data.resolved`: Last uniquely resolved document, using the metadata structure above, or `null` at root
+    * `data.nextIndex`: Zero-based missing or ambiguous segment index; equals `segments.length` when fully resolved
+    * `data.candidates`: Same-title candidates for an ambiguous segment, ordered by ID, up to 128 entries; selection requires an explicit document ID
+    * `data.candidatesTruncated`: Whether more candidates exist
+    * `data.nameConditions`: Unique matches and the first missing name; pass these conditions when creating to check for intervening changes
+    * Errors return `code: -1` and may include `data.reason`; an error does not mean that the document is missing
+
+To import `/Notes/2026-10-30/Article`, use parent segments `["Notes", "2026-10-30"]` and final title `"Article"`:
+
+1. Resolve the parent segments from root; for `ambiguous`, select the parent by ID
+2. For `missing`, create `segments[nextIndex]` with `markdown: ""`; use `resolved.id` as `parentID`, or `start.id` if `resolved` is `null`; pass the corresponding version as `expectedParentRevision` and the returned `nameConditions`, and save the allocated document ID
+3. After success, resolve the parent segments again and repeat until fully resolved; refresh the name conditions after each creation
+4. Create `Article` under the resolved parent with its version and the final Markdown body; to require a unique final title, add `{parentID, title: "Article", expectedID: null}`, keeping the total conditions within 128
+
+Each document is saved separately. A later failure preserves existing parents; check the failed step's outcome before continuing. The whole path is not committed or rolled back as one operation.
+
+### Get document paths by IDs
+
+Reads document metadata by ID. Requires administrator access and an opened, unlocked notebook with ready document metadata.
+
+* `/api/filetree/getDocPaths`
+* Parameters
+
+  ```json
+  {
+    "notebook": "20210817205410-2kvfpfn",
+    "ids": [
+      "20261030150000-abc1234",
+      "20261030150001-def5678"
+    ]
+  }
+  ```
+
+    * `notebook`: Notebook ID
+    * `ids`: Array of 1 to 128 valid document IDs; duplicates are removed in first-occurrence order
+    * `includeIcons`: Optional boolean, default `false`; `true` reads icons for the returned documents and their ancestors
+* Return value
+
+    * `data.documents`: Array of document metadata objects described in [creation results](#create-a-document-by-parent-id), in request order
+    * `data.missingIDs`: IDs that are missing, belong to another notebook, or identify content blocks
+    * `data.icons`: Optional map from document or ancestor ID to its raw stored icon, or an empty string when unset. Omitted unless `includeIcons` is `true`; icons do not affect path revisions. Source read failures return an error without recreating missing documents
+    * Either array may be empty; unavailable or inconsistent metadata returns an error rather than a missing result
+    * Each document is read consistently; the batch does not promise a single snapshot
+
+This endpoint does not return body content. To check an uncertain creation result, locate the retained ID here, then read the body separately and verify any unfinished sorting, template, or import steps.
+
 ### Rename a document
+
+The two rename endpoints below accept plain titles. For a rich title, returning its current plain-text summary is a no-op; a different summary is rejected to preserve the full source. Use the source-aware title transaction declared in the generated API contracts when editing rich titles.
 
 * `/api/filetree/renameDoc`
 * Parameters
@@ -476,6 +763,8 @@ Remove a document by `id`:
 
 ### Move documents
 
+Both move endpoints evaluate block collection rules for moved documents and descendants entering a watched scope. Existing database rows and field values are preserved. If collection fails after a document has moved, the endpoint returns an error and that document remains at its new location.
+
 * `/api/filetree/moveDocs`
 * Parameters
 
@@ -524,6 +813,66 @@ Move documents by `id`:
   }
   ```
 
+### Reorder documents relative to a sibling
+
+* `/api/filetree/reorderDocs`
+* Parameters
+
+  ```json
+  {
+    "sourceIDs": ["20210917220056-yxtyl7i"],
+    "targetID": "20210917220057-abcdefg",
+    "position": "before"
+  }
+  ```
+
+    * `sourceIDs`: Source document IDs inserted in array order
+    * `targetID`: Target sibling document ID
+    * `position`: `before` or `after`
+    * After moving, every source document must have the same notebook and parent as the target; sorting uses the complete sibling list, including hidden and unlisted documents
+* Return value
+
+  ```json
+  {
+    "code": 0,
+    "msg": "",
+    "data": {
+      "changed": true,
+      "notebook": "20210817205410-2kvfpfn",
+      "parentPath": "/"
+    }
+  }
+  ```
+
+### Reorder notebooks relative to another notebook
+
+* `/api/notebook/reorder`
+* Parameters
+
+  ```json
+  {
+    "sourceIDs": ["20210817205410-2kvfpfn"],
+    "targetID": "20210817205411-abcdefg",
+    "position": "after"
+  }
+  ```
+
+    * `sourceIDs`: Source notebook IDs inserted in array order
+    * `targetID`: Target notebook ID
+    * `position`: `before` or `after`
+    * Sorting uses the complete notebook list, including closed notebooks
+* Return value
+
+  ```json
+  {
+    "code": 0,
+    "msg": "",
+    "data": {
+      "changed": true
+    }
+  }
+  ```
+
 ### Set notebook and document sort values
 
 * `/api/filetree/setSort`
@@ -562,6 +911,40 @@ Move documents by `id`:
     }
   }
   ```
+
+### Set a document's child document sort mode
+
+* `/api/filetree/setDocSortMode`
+* Parameters
+
+  ```json
+  {
+    "id": "20210917220056-yxtyl7i",
+    "sortMode": 4
+  }
+  ```
+
+    * `id`: ID of the regular document whose child documents use this sort mode; notebook root document IDs are not accepted
+    * `sortMode`: Integer from `0` through `14`; `null` clears the document's explicit setting and inherits the nearest parent document, notebook, or global document tree sort rule, in that order
+    * Values: `0`/`1` file name ascending/descending; `2`/`3` update time ascending/descending; `4`/`5` natural file name ascending/descending; `6` custom; `7`/`8` reference count ascending/descending; `9`/`10` creation time ascending/descending; `11`/`12` size ascending/descending; `13`/`14` child document count ascending/descending
+    * The declared sort mode is inherited by deeper descendants until another document declares its own sort mode
+* Return value
+
+  ```json
+  {
+    "code": 0,
+    "msg": "",
+    "data": {
+      "box": "20210817205410-2kvfpfn",
+      "id": "20210917220056-yxtyl7i",
+      "path": "/20210917220056-yxtyl7i.sy",
+      "sortMode": 4,
+      "effectiveSortMode": 4
+    }
+  }
+  ```
+
+    * `sortMode` is the explicit setting (`null` when inheriting), while `effectiveSortMode` is the actual sort mode after inheritance is resolved
 
 ### Get human-readable path based on path
 
@@ -636,6 +1019,8 @@ Move documents by `id`:
 
 ### Get IDs based on human-readable path
 
+Legacy lookup checks each candidate ancestor chain. It returns all clean matches, `pathAmbiguous` for mixed clean and slash/empty-title candidates, `legacyPathUnsupported` for unsupported candidates only, and an empty array for no matches. Unready or inconsistent metadata returns `indexUnavailable`. Error candidate lists are `cleanIDs` and `unsupportedIDs` and retain access filtering. Prefer `/api/filetree/resolveDocPath` with explicit title segments.
+
 * `/api/filetree/getIDsByHPath`
 * Parameters
 
@@ -672,16 +1057,30 @@ Move documents by `id`:
         * `"/assets/sub/"`: workspace/data/assets/sub/ folder
 
       Under normal circumstances, it is recommended to use the first method, which is stored in the assets folder of the
-      workspace, putting in a subdirectory has some side effects, please refer to the assets chapter of the user guide.
+      workspace, since putting in a subdirectory has some side effects, please refer to the assets chapter of the user guide.
     * `file[]`: Uploaded file list
 * Return value
 
   ```json
   {
     "code": 0,
-    "msg": "",
+    "msg": "disk full",
     "data": {
-      "errFiles": [""],
+      "errFiles": ["bar.png"],
+      "failedFiles": [
+        {
+          "index": 1,
+          "name": "bar.png",
+          "error": "disk full"
+        }
+      ],
+      "succFiles": [
+        {
+          "index": 0,
+          "name": "foo.png",
+          "path": "assets/foo-20210719092549-9j5y79r.png"
+        }
+      ],
       "succMap": {
         "foo.png": "assets/foo-20210719092549-9j5y79r.png"
       }
@@ -690,11 +1089,13 @@ Move documents by `id`:
   ```
 
     * `errFiles`: List of filenames with errors in upload processing
-    * `succMap`: For successfully processed files, the key is the file name when uploading, and the value is
-      assets/foo-id.png, which is used to replace the asset link address in the existing Markdown content with the
-      uploaded address
+    * `failedFiles`: Files explicitly reported as failed. `index` is the file's index in `file[]`, `name` is its upload filename, and `error` is the failure message. This field may omit files that were not attempted or not reported individually; use `succFiles` when each input item must be identified unambiguously
+    * `succFiles`: Successfully processed files in input order. `index` is the file's index in `file[]`, `name` is its upload filename, and `path` is the uploaded asset path. Use this field when a batch can contain duplicate filenames
+    * `succMap`: Compatibility mapping for existing callers. The key is the upload filename and the value is assets/foo-id.png. However, when a batch contains duplicate filenames, only the last item with a given key remains in this map
 
 ## Blocks
+
+Block insert, prepend, append and update operations validate block IDs throughout the submitted subtree before saving. Omitted IDs are generated by the system. Explicit IDs must match `YYYYMMDDhhmmss-xxxxxxx` (seven lowercase letters or digits after the hyphen), be unique in the input and avoid conflicts with existing blocks. An update may preserve IDs from the subtree it replaces. Invalid writes return an error without saving the change.
 
 ### Insert blocks
 
@@ -744,7 +1145,7 @@ Move documents by `id`:
   ```
 
     * `action.data`: DOM generated by the newly inserted block
-    * `action.id`: ID of the newly inserted block
+    * `action.id`: ID of the first inserted top-level block. When inserting multiple top-level blocks, send one block per request if each ID is needed
 
 ### Prepend blocks
 
@@ -830,7 +1231,7 @@ Move documents by `id`:
   ```
 
     * `action.data`: DOM generated by the newly inserted block
-    * `action.id`: ID of the newly inserted block
+    * `action.id`: ID of the first appended top-level block. When appending multiple top-level blocks, send one block per request if each ID is needed
 
 ### Update a block
 
@@ -1162,6 +1563,12 @@ Move documents by `id`:
   ```
 
     * `stmt`: SQL statement
+    * `mode`: Optional mode; omitted, `null`, or `""` allows one read or write statement; `"readonly"` allows one read-only `SELECT` or `WITH` query; `"multiple"` executes statements in order and returns the last statement's results
+
+Statements without result columns, including `INSERT`, `UPDATE`, `DELETE`, and DDL, execute and return `data: []` on success. `RETURNING` preserves result rows. Validation failures return code `-1`; execution failures return code `1`. Multiple statements stop at the first failure; completed writes are not automatically rolled back. Direct SQL writes affect the derived index database and do not update source documents or maintain full-text indexes and block caches; use the block APIs to edit document content.
+
+Without an explicit outer `LIMIT`, results default to at most `search.limit` rows (the configured search result limit). Use explicit `LIMIT` and `OFFSET` clauses to paginate, with a stable, unique ordering such as `ORDER BY hpath, id`. However, an explicit outer `LIMIT` overrides the default, including values larger than `search.limit`.
+
 * Return value
 
   ```json
@@ -1170,9 +1577,13 @@ Move documents by `id`:
     "msg": "",
     "data": [
       { "col": "val" }
-    ]
+    ],
+    "limit": 0,
+    "truncated": false
   }
   ```
+
+On success, `data` remains an array. `limit` is the server default limit applied to this query, or `0` when the SQL supplies an explicit outer `LIMIT`; it is not the value of that explicit clause. `truncated` is `true` only when the server default limit omitted at least one result row. Exactly meeting the limit does not imply truncation. For the example above, `LIMIT 7` is explicit, so `limit` is `0` and `truncated` is `false`. These fields are omitted on errors.
 
 Note: To ensure data security, access to this interface is prohibited in Publish Mode.
 
@@ -1190,22 +1601,30 @@ Note: To ensure data security, access to this interface is prohibited in Publish
   }
   ```
 
+Block-writing APIs can return after their block-tree transaction is committed but before asynchronous SQL indexing has caught up. If a subsequent `/api/query/sql` call must observe that write, call `POST /api/sqlite/flushTransaction` after the write and wait for `code: 0` before querying SQL. For example, `getBlockKramdown` reads the block tree and can show newly written content before the SQL index does. Kramdown, DOM, and SQL columns are different representations and are not normalized plain text.
+
 ## Templates
 
 ### Render a template
 
 * `/api/template/render`
+
+Without a live interactive window, `httpGet` returns `interaction_required` and performs no network request. “Allow this time” authorizes the current execution's template version to access multiple public targets, including subsequent requests and redirects, and to send note content it is permitted to read to external services without gaining additional read access. Persistent permission is available only for kernel-identified file or database field template sources and content versions; it applies locally within the current workspace, not just the current target document or unlocked notebook, is not included in built-in export or sync, and can be revoked in template management or database field settings. Referenced child template files do not inherit their parent's permission. Editing, copying, or importing requires confirmation again. Background execution, published pages, and locked notebooks cannot use these permissions to bypass interaction or access checks.
 * Parameters
 
   ```json
   {
     "id": "20220724223548-j6g0o87",
-    "path": "F:\\SiYuan\\data\\templates\\foo.md"
+    "path": "F:\\SiYuan\\data\\templates\\foo.md",
+    "mode": "editorInsert"
   }
   ```
 
     * `id`: The ID of the document where the rendering is called
     * `path`: Template file absolute path
+    * `mode`: Optional rendering mode. Currently supports `"preview"` and `"editorInsert"` only. Preview mode produces a document tree plan without writing files; editor-insert mode produces a plan that can be confirmed and applied with the corresponding editor transaction
+    * `httpConfirmToken`: Optional approval token returned by a successful preview; always-allow permission is not required. Pass it with `mode: "editorInsert"` within 30 seconds for one insertion in the same window, with unchanged template source and dependencies, target document/notebook, and actual requests. Only approvals are reused; insertion fetches fresh data. Changed or revoked context, expiry, or an already-used token returns to normal template permission checks. Closing or switching the preview, locking the notebook, or disconnecting invalidates the handoff; `/api/template/cancelHTTP` also accepts the optional `httpConfirmToken` to revoke it. This handoff does not apply to database or daily-note executions
+    * When `mode` is omitted, the legacy `preview` Boolean parameter remains supported: `preview: true` is equivalent to `mode: "preview"`; otherwise the template is rendered as ordinary content and `createDocTree` is disabled
 * Return value
 
   ```json
@@ -1214,8 +1633,68 @@ Note: To ensure data security, access to this interface is prohibited in Publish
     "msg": "",
     "data": {
       "content": "<div data-node-id=\"20220729234848-dlgsah7\" data-node-index=\"1\" data-type=\"NodeParagraph\" class=\"p\" updated=\"20220729234840\"><div contenteditable=\"true\" spellcheck=\"false\">foo</div><div class=\"protyle-attr\" contenteditable=\"false\">​</div></div>",
-      "path": "F:\\SiYuan\\data\\templates\\foo.md"
+      "path": "F:\\SiYuan\\data\\templates\\foo.md",
+      "docTreePlan": {
+        "id": "template-plan-token",
+        "count": 2,
+        "nodes": [
+          {
+            "id": "20260830150000-abc1234",
+            "title": "Materials",
+            "parentID": "20220724223548-j6g0o87",
+            "hPath": "/Parent/Materials",
+            "depth": 1
+          },
+          {
+            "id": "20260830150001-def5678",
+            "title": "Review",
+            "parentID": "20260830150000-abc1234",
+            "hPath": "/Parent/Materials/Review",
+            "depth": 2
+          }
+        ]
+      }
     }
+  }
+  ```
+
+    * `httpConfirmToken`: Optional one-time approval token issued after a successful interactive preview; see the request field for its scope and 30-second validity
+    * `docTreePlan`: Present when the template declares a child document tree with `createDocTree`
+        * `id`: Empty in preview mode, which never writes files. In editor-insert mode, this is a short-lived, one-time plan token; after confirmation, submit it as the top-level `templateDocTreePlanID` field of the corresponding transaction object
+        * `count`: Total number of child documents in the plan
+        * `nodes`: Static descriptions of the planned documents
+            * `id`: Planned document ID
+            * `title`: Planned document title
+            * `parentID`: Planned parent document ID
+            * `hPath`: Planned human-readable document path
+            * `depth`: Depth relative to the document where the template is inserted
+        * A single plan can contain at most 128 documents, and its declared child document tree can be at most 16 levels deep. The resulting absolute file tree depth remains subject to the setting that controls whether sub-documents deeper than 7 levels may be created
+
+### Save a document as a template
+
+* `/api/template/docSaveAsTemplate`
+* Parameters
+
+  ```json
+  {
+    "id": "20220724223548-j6g0o87",
+    "name": "Project",
+    "overwrite": false,
+    "databaseMode": "copy"
+  }
+  ```
+
+    * `id`: Source document ID
+    * `name`: Template name. The kernel sanitizes the name and adds the `.md` extension
+    * `overwrite`: Whether to replace an existing template with the same name. When `false` and the template exists, the response `code` is `1`
+    * `databaseMode`: Optional handling for all database blocks in the document. `copy` (the default) creates independent databases whenever the template is used and clears their block-level context filters; `reference` keeps the existing database IDs and context filters, so rendered blocks are mirrors that share data and view settings with the source databases. Rendering a reference-mode template fails if a source database is unavailable in the target document's encryption boundary
+* Return value
+
+  ```json
+  {
+    "code": 0,
+    "msg": "",
+    "data": null
   }
   ```
 
@@ -1277,6 +1756,11 @@ Note: To ensure data security, access to this interface is prohibited in Publish
 ### Put file
 
 * `/api/file/putFile`
+
+For `.sy` document paths composed of notebook and document IDs, both the incoming content and any existing document are checked. Unknown formats, invalid document sources, or slash-containing titles without the required Spec 6 declaration return `code: -1`, preserving the original file and modification time. Successful writes retain the request bytes without normalizing titles. Files ending in `.sy` inside asset or plugin directories are not parsed as documents.
+
+An incoming title containing ASCII `/` must declare `Spec` at least `6`; otherwise the endpoint returns `code: -1` and `msg: "document title requires spec 6"` without rewriting the input. Existing lower-spec sources remain readable and can be replaced with valid versioned content.
+
 * The parameter is an HTTP Multipart form
 
     * `path`: the file path under the workspace path
@@ -1296,6 +1780,8 @@ Note: To ensure data security, access to this interface is prohibited in Publish
 ### Remove file
 
 * `/api/file/removeFile`
+
+Deletion retains canonical-path, sensitive-file and encrypted-notebook restrictions; validation failures return `code: -1`. Retired addressing-mode records do not control deletion.
 * Parameters
 
   ```json
@@ -1317,6 +1803,13 @@ Note: To ensure data security, access to this interface is prohibited in Publish
 ### Rename file
 
 * `/api/file/renameFile`
+
+The complete move is checked for canonical paths and destination document-source compatibility before creating the destination directory or moving files. Validation failures return `code: -1`; existing sensitive-path and encrypted-notebook restrictions still apply.
+
+When the destination includes `.sy` document paths composed of notebook and document IDs, all incoming documents are also checked. Unknown formats, invalid document sources, or conflicting titles return `code: -1` without creating the destination directory or moving the sources.
+
+Incoming titles containing ASCII `/` must declare `Spec` at least `6`; otherwise the endpoint returns `code: -1` and `msg: "document title requires spec 6"`, preserving the sources and destination.
+
 * Parameters
 
   ```json
@@ -1385,6 +1878,8 @@ Note: To ensure data security, access to this interface is prohibited in Publish
   ```
 
     * `id`: ID of the doc block to export
+    * `headingNumber`: Optional boolean; `false` omits automatic heading numbers for this Markdown copy only. Omitted or `null` follows the export preference (disabled by default); `true` preserves the document's numbering without enabling numbering on a document where it is disabled
+    * `preserveTaskMarkers`: Optional boolean for Markdown copying; `true` retains task markers such as `[/]` and `[-]`. Omitted, `null`, or `false` keeps standard Markdown normalization to `[X]` for nonstandard markers
 * Return value
 
   ```json
@@ -1399,7 +1894,7 @@ Note: To ensure data security, access to this interface is prohibited in Publish
   ```
 
     * `hPath`: human-readable path
-    * `content`: Markdown content
+    * `content`: Markdown content, including automatic heading numbers when enabled for the document (the document setting overrides the editor default); uses the editor numbering format and preserves source-document numbers for partial exports
 
 ### Export files and folders
 
@@ -1583,6 +2078,10 @@ Note: To ensure data security, access to this interface is prohibited in Publish
         * `base32` | `base32-std`
         * `base32-hex`
         * `hex`
+
+      `text` preserves the existing behavior and converts the character set to UTF-8 when applicable. The binary encodings encode the response body before character-set conversion; existing HTTP content decoding behavior, such as gzip decompression, is unchanged.
+
+      The response body is limited to 32 MiB after HTTP content decoding. If the limit is exceeded, the API returns error code `10` without a partial body. Therefore, use `/api/network/proxy` for large files or streaming responses.
 * Return value
 
   ```json
@@ -1702,7 +2201,7 @@ Note: To ensure data security, access to this interface is prohibited in Publish
 
 ## Database
 
-A database (internally an "attribute view") stores structured data as fields (columns) and items (rows). Each database is identified by an `avID` and can be embedded into a document through one or more database blocks (`blockID`). A single database may contain multiple views (`viewID`) of different layout types: `table`, `gallery`, and `kanban`.
+A database (internally an "attribute view") stores structured data as fields (columns) and items (rows). Each database is identified by an `avID` and can be embedded into a document through one or more database blocks (`blockID`). A single database may contain multiple views (`viewID`) of different layout types: `table`, `list`, `gallery`, and `kanban`.
 
 The field types (`keyType`) are:
 
@@ -1717,6 +2216,7 @@ The field types (`keyType`) are:
 | `url`        | URL                        |
 | `email`      | Email                      |
 | `phone`      | Phone                      |
+| `location` | Location |
 | `mAsset`     | Asset                      |
 | `template`   | Template                   |
 | `created`    | Creation time              |
@@ -1729,6 +2229,11 @@ The field types (`keyType`) are:
 ### Render
 
 * `/api/av/renderAttributeView`
+
+Ordinary HTTP template parsing or evaluation errors are returned in the affected field while the database remains available; cancellation, notebook locking, and execution limits still terminate rendering.
+
+`deferHTTPTemplates` defaults to `false`. Set it to `true` to receive a first view without executing HTTP templates; `pendingHTTPTemplates` contains field IDs awaiting evaluation. Templates in the same database are deferred together. Views whose filtering, grouping, calculations, calendar, or nested layout require template results return structure without provisional rows. When only sorting requires template results, rows are returned first and their order is finalized after evaluation. Request again without this flag for final results and normal network confirmation. `preserveHTTPResults` defaults to `false`; with `automaticRefresh: true`, presentation operations such as sorting and search can reuse the current successful template snapshot even when the template reads external blocks or SQL results. Source, row-input, permission, and cache boundaries still apply; this flag alone does not override manual refresh.
+
 * Parameters
 
   ```json
@@ -1748,14 +2253,19 @@ The field types (`keyType`) are:
   ```
 
     * `id`: Database ID
-    * `blockID`: The database block that embeds this database. Used to resolve the active view and publish access. If its `custom-sy-av-view` is missing or invalid, the first available view is used. Omit when rendering a detached database
+    * `blockID`: The database block that embeds this database. Used to resolve the active view, publish access, and the block-level context filter. If its `custom-sy-av-view` is missing or invalid, the first available view is used. Omit when rendering a detached database; a configured context filter requires a valid block instance
     * `viewID`: An explicit view to render. An invalid value returns an error. When omitted, the view is resolved from `blockID`, then falls back to the first available view
     * `page`: Page number, 1-based. Defaults to `1`
     * `pageSize`: Items per page. `-1` or omitted means use the view's default (`50`)
+    * Optional `automaticRefresh` defaults to `false`. With an interactive template execution, `true` reuses successful in-memory row results only when their source, template and referenced inputs are unchanged. Manual refresh should omit it or use `false`. Locking a notebook or revoking template permission clears these results; this option never expands read permissions
     * `query`: Optional full-text filter for the primary-key values
     * `groupPaging`: Optional paging configuration for grouped (kanban) views
     * `targetItemID`: Optional database item ID to locate. When specified, the response includes target-location metadata
     * `targetGroupID`: Optional group hint used with `targetItemID`
+    * `nested`: Optional tree-reading request for enabled sub-items in a nested table or list view. Omission preserves flat responses. `expandedIDs` controls expansion; `groupExpandedIDs` overrides it per group. `childPaging` maps `parentID` (or `groupID/parentID`) to `{page, pageSize}`; pages start at 1 and child page size is capped at 200. Root paging uses `page`/`pageSize`. The response's `view.nested` reports the actual page, root and matching-item counts; `rows[].hierarchy` identifies visible ancestry and context-only rows. Locating an item opens its ancestors and selects the necessary pages. Inaccessible ancestors are not exposed
+    * `temporarySort`: Optional single-field sort, e.g. `{"column":"field-id","order":"DESC"}`. Omitted or `null` uses the saved rules. Overrides sorting before pagination for this request only; does not create or save the database or change the carrier view. `order` must be `ASC` or `DESC`; missing or unsupported fields fall back to saved rules. Existing `valueSource` and `dateEndpoint` options are supported
+    * `relationContext`: Optional entry-detail scope: `{"sourceAvID":"source-database-id","sourceItemID":"source-item-id","relationKeyID":"relation-field-id"}`. The source field must have an enabled related-view configuration, and `id` must match its related database. `blockID`, when supplied, must be the real source database block or the source entry's bound block, not an item ID substituted for a block. An empty `blockID` is supported for detached entries. Only flat table views are supported in this mode; `nested` is rejected. An explicit `viewID` selects an existing table in the same target database; omission uses the field's configured view. Invalid or unavailable sources, fields and views return an error instead of rendering the entire target database. Published-reader requests do not support this mode
+    * `temporaryFilters`: Optional additional filter rules for `relationContext`. They are combined with the selected view's saved filters using AND for this request only. The source entry's current relation membership is enforced before filtering, sorting, grouping, pagination, counts and target-item location. Candidate filters used when adding relations do not remove existing members. This render mode never persists the membership scope, temporary filters, temporary sort or view selection. Invalid temporary sorts return an error in this mode
     * `createIfNotExist`: When `true` (default), create a database with a default view if the database does not exist
     * `persistView`: Deprecated compatibility parameter. It is accepted but ignored because the database definition no longer stores a top-level current view
 * Return value (real response, table layout, one row shown):
@@ -1770,6 +2280,8 @@ The field types (`keyType`) are:
       "viewType": "table",
       "viewID": "20240118120204-7rnmyc1",
       "isMirror": false,
+      "contextFilter": null,
+      "contextFilterFields": [],
       "views": [
         {
           "id": "20240118120204-7rnmyc1",
@@ -1844,13 +2356,76 @@ The field types (`keyType`) are:
   }
   ```
 
-    * `data.view`: The rendered view instance. Its shape depends on `viewType`: `table` returns `columns`/`rows`/`rowCount`, while `gallery` and `kanban` return `fields`/`cards`/`cardCount`. When grouping is enabled, `groups` contains a view instance for each group, including `groupKey`/`groupValue`. `view` also carries `filters`, `sorts`, `group`, `showIcon`, `wrapField`, `groupFolded`, and `groupHidden`. Note: active filters or grouping can make the item list empty even when the total item count is greater than 0
-    * `data.view.columns[]`: Each has `id`, `name`, `type`, `icon`, `wrap`, `hidden`, `desc`, `calc`, `numberFormat`, `template`, `pin`, `width`; `select`/`mSelect` columns additionally carry `options`
+    * `data.view`: The rendered view instance. Its shape depends on `viewType`: `table` and `list` return `columns`/`rows`/`rowCount`, while `gallery` and `kanban` return `fields`/`cards`/`cardCount`. When grouping is enabled, `groups` contains a view instance for each group, including `groupKey`/`groupValue`. `view` also includes `filters`, `sorts`, `group`, `showIcon`, `wrapField`, `groupFolded`, and `groupHidden`. Note: active filters or grouping can make the item list empty even when the total item count is greater than 0
+    * `data.view.columns[]`: Each has `id`, `name`, `type`, `icon`, `wrap`, `hidden`, `desc`, `calc`, `numberFormat`, `template`, `renderTemplate`, `pin`, `width`; `select`/`mSelect` columns additionally include `options`. Gallery and kanban fields expose the same field metadata under `data.view.fields[]`
+    * `data.view.columns[].renderTemplate`: Optional display template for a normal field. It changes only the displayed content; the field's stored typed value remains unchanged
     * `data.view.rows[].id`: The table row's **item ID** (`itemID`). It also equals `value.blockID` in that row's primary-key cell. For a bound row, the bound block ID is stored in `value.block.id` in the primary-key cell; these are distinct concepts and must not be assumed equal
     * `data.view.cards[].id`: The **item ID** (`itemID`) of a gallery or kanban card. When grouping is enabled, table rows or cards are in the corresponding view instances under `groups[]`
-    * `data.view.rows[].cells[].value`: A `Value` object — see [Set a cell value](#Set-a-cell-value) for all value shapes. `createdAt`/`updatedAt` are int64 millisecond timestamps
+    * `data.view.rows[].cells[].value`: A `Value` object — see [Set a cell value](#Set-a-cell-value) for all value shapes. `createdAt`/`updatedAt` are int64 millisecond timestamps. When a normal field has a non-empty `renderTemplate`, its optional `renderedContent` property contains the runtime display-template result; this property is not persisted, and the original typed property continues to contain the stored value. Values under `data.view.cards[]` follow the same rule
     * `data.views`: Metadata of every view (no rows)
     * `data.isMirror`: `true` when the database block is a mirror (read-only copy) of the database
+    * `data.contextFilter`: The context filter configured for this database block, or `null` when disabled. The current specification is `{ "spec": 1, "keyID": "<relation-field-ID>" }`; it filters every view to rows whose selected relation field contains the database item bound to the root document containing `blockID`, and is combined with the selected view's filters using AND. If the selected field is deleted, changed to a non-relation field, or loses its relation target, the block-level configuration is retained but renders no rows until the field is repaired, replaced, or the context filter is disabled
+    * `data.contextFilterFields`: Lightweight metadata for every configured relation field in the database, independent of the selected view. Each item contains `id`, `name`, `icon`, and `targetAvID`; use this list to configure `contextFilter`. Publish read-only responses mask `contextFilter` as `null` and this list as `[]`, while the stored context filter still applies to rendered rows
+
+### Set a database block context filter
+
+* `/api/av/setAttrViewContextFilter`
+* Parameters
+
+  ```json
+  {
+    "avID": "20240118120204-kwyzf77",
+    "blockID": "20240118120201-kldj15t",
+    "keyID": "20240118120300-relation"
+  }
+  ```
+
+    * `avID`: Database ID
+    * `blockID`: ID of the concrete database block whose context filter is changed. It must be an instance of `avID`
+    * `keyID`: ID of a configured relation field in the database. The filter uses fixed semantics equivalent to `Contains any item - Current document`. Pass an empty string to disable the context filter
+* Return value: the normalized configuration in `data.contextFilter`, or `null` after disabling it
+
+  ```json
+  {
+    "code": 0,
+    "msg": "",
+    "data": {
+      "contextFilter": {
+        "spec": 1,
+        "keyID": "20240118120300-relation"
+      }
+    }
+  }
+  ```
+
+### Get images in the current database view
+
+* `/api/av/getCurrentAttrViewImages`
+* Parameters
+
+  ```json
+  {
+    "id": "20240118120204-kwyzf77",
+    "blockID": "20240118120201-kldj15t",
+    "viewID": "20240118120204-7rnmyc1",
+    "query": ""
+  }
+  ```
+
+    * `id`: Database ID
+    * `blockID`: The database block that embeds the database. It resolves the active view, publish access, and the block-level context filter. Omit only for a detached database that does not require block context
+    * `viewID`: Optional explicit view ID. When omitted, the view is resolved from `blockID`, then falls back to the first available view
+    * `query`: Optional full-text filter for the primary-key values
+    * `groupID`: Optional group ID. Omitted, null, or empty keeps the whole-view behavior. Otherwise only images from that group are returned in group item order followed by the view's sorting rules, without pagination. An unknown group returns an error
+* Return value: an array of image asset paths from visible asset fields after applying the database block's context filter, the view's filters, and sorting
+
+  ```json
+  {
+    "code": 0,
+    "msg": "",
+    "data": ["assets/example-20240118120201-abc1234.png"]
+  }
+  ```
 
 ### Get
 
@@ -1864,6 +2439,10 @@ The field types (`keyType`) are:
   ```
 
     * `id`: Database ID
+    * Optional `blockID`: A real carrier block of this database. With either relation context below, it identifies a real source carrier or a block actually bound to the source database instead; the kernel derives and validates the storage boundary rather than accepting a client-selected notebook
+    * Optional `relationFieldContext`: `{ "sourceAvID": "...", "relationKeyID": "..." }` discovers the actual target of a source relation field, including before its related view is enabled
+    * Optional `relationDependencyContext`: `{ "relationContext": { "sourceAvID": "...", "sourceItemID": "...", "relationKeyID": "..." }, "relationKeyIDs": ["..."] }` follows one or two actual relation fields from the related table's target database for filter metadata; each hop and the final requested `id` must match
+    * The two relation contexts are mutually exclusive. Both return configuration/field metadata without entry values; invalid contexts and unavailable encrypted domains fail rather than falling back to another database
 * Return value (real response, trimmed — `keyValues`/`views` arrays truncated):
 
   ```json
@@ -1928,8 +2507,7 @@ The field types (`keyType`) are:
                   "pin": false,
                   "width": ""
                 }
-              ],
-              "rowIds": null
+              ]
             },
             "itemIds": ["20240118203818-ct041hj", "20240118203855-sqzbja0", "20240118203831-fkfvvtx", "20240118203842-kc31ovy", "20240531235026-uiap07y"],
             "groupCreated": 0,
@@ -1944,7 +2522,11 @@ The field types (`keyType`) are:
   }
   ```
 
-    * `data.av`: The full `AttributeView` definition — fields (`keyValues`), field ordering (`keyIDs`, may be `null`), and all views with their raw layout config (`table`/`gallery`/`kanban`) and item ordering (`itemIds`). The compatibility `viewID` is computed as the first available view and is not persisted. Returns no rendered rows or pagination; use [Render](#Render) for computed rows
+    * `data.av`: The full `AttributeView` definition — fields (`keyValues`), field ordering (`keyIDs`, may be `null`), and all views with their raw layout config (`table`/`list`/`gallery`/`kanban`) and item ordering (`itemIds`). Optional hierarchy configuration is stored in `subItems`, with each view's display mode in `subItemsDisplay`; groups may include `subItemsItemIds` for nested manual order, separate from flat `groupItemIds`. The compatibility `viewID` is computed as the first available view and is not persisted. Returns no rendered rows or pagination; therefore, use [Render](#Render) for computed rows
+
+    * `data.av.automations` optionally contains database-wide rules (`spec: 1` through `10`). A `block` trigger uses `blockSource` to select notebooks/documents, block types, tags, and custom attributes; its `collect` action binds matching source blocks to this database. New scopes saved through `setAttrViewAutomations` allow at most 32 distinct notebooks/documents in total. Existing larger scopes remain readable and usable and may be retained or reduced; adding scopes while above the limit is rejected. Undo and redo preserve the original scope. Main types include every subtype; format 3 supports `h:h1` through `h:h6`, `l:u/o/t`, `i:u/o/t`, and `callout:TYPE` (case-sensitive, including custom types). Empty types impose no restriction, and multiple types use OR. Automatically created primary values may include `block.collectionRuleID`, which is maintained by the kernel. Automatic collection only adds entries. Source changes and changes to rule conditions, scope, target, or activation preserve existing rows and fields; matching again keeps the same row. Explicit cleanup checks all enabled collection rules for manual and automatic bound entries alike, preserves matches and indeterminate entries, and rechecks before removing unmatched entries; undo restores the original row and all fields. `blockSource.tagMatch` and `attributeMatch` default to `and`; format 3 also supports `or` independently within each group. Groups remain ANDed, and empty groups add no restriction. Each rule's optional `notifyOnSuccess` defaults to `true` (including `null`); successful changes are summarized once after the transaction commits. Disabled notifications do not suppress errors. No-op actions, explicit collection, undo, redo, and rolled-back transactions do not generate success messages. Format 4 adds optional `blockSource.tagTarget`: omitted/empty uses default selection, preferring an eligible list item over its first content block, `block` collects the tagged block itself, and `container` collects the nearest container meeting type and attribute conditions, deduplicated by block ID. Documents require an explicit `d` type. AND tags must occur in one source block; without tag conditions this option has no effect. Preview and actual collection share the same targets; changing this option preserves existing rows and fields. Format 5 adds optional `blockSource.documentDepth`: omitted or `null` means unlimited, `0` includes only each selected document itself, and `1` also includes its direct children. Other nonnegative integers set the maximum relative descendant depth. It applies uniformly to document scopes, not notebook scopes; scopes remain combined by union. Changing depth preserves existing rows and fields and does not backfill existing content. Format 6 adds each attribute condition's optional `nameOperator`: omitted/empty or `equals` retains exact full-name matching, `contains` matches a literal substring without requiring the `custom-` prefix, and `regex` uses Go regular expressions against the full name including that prefix. Only custom attributes are considered. Names and values are case-sensitive and must match on the same attribute; `exists` requires at least one name match and `notExists` requires none, ignoring the value. Name patterns are limited to 256 bytes; invalid expressions are rejected on save. Existing formats 1–5 retain their behavior; older readers reject format 6 without rewriting the database. Format 7 adds optional `blockSource.includeSelectedDocuments`: omitted, `null`, or `true` includes each selected document itself; `false` excludes it and all blocks inside it while descendants still follow `documentDepth`. This option is shared by document scopes and does not affect notebook scopes or other overlapping document scopes; scopes remain combined by union. With `false` and depth `0`, the corresponding document scope is empty. Changing it preserves existing rows and fields without automatic backfill or removal. Formats 1–6 remain readable; older readers reject format 7 without rewriting the database. Format 8 adds optional `blockSource.referenceID`: body block references must point to this block; a document target also includes its internal content blocks, excluding child documents. Embeds, ordinary links and references in database rich-text fields are excluded. Tags constrain the same reference source; sources are grouped using backlink parent rules before type and attribute filtering, and `tagTarget` is ignored. The target must be in the same encryption boundary. Automatic collection itself preserves existing rows and fields when references are removed or the target changes; older matches require explicit preview and collection. When deleting body block references in the editor, confirmation can also remove automatically collected entries that are confirmed to match no enabled collection rule. Manually added entries, entries still matching any enabled rule, and indeterminate entries are kept; undo atomically restores the deleted references, original entries, and field values. Formats 1–7 remain readable; older readers reject format 8 without rewriting the database. Format 9 adds an explicit `manual` trigger. Enabled saved rules process matching stored rows only when run interactively; their templates support `httpGet` and strict `fromJson` with existing HTTP permissions and budgets. Results are committed atomically to ordinary fields after all requests and conversions succeed, without holding the editing lock during network waits. A changed source or target database rejects the run; failures preserve old values. Every action reads the initial stored snapshot. Undo and redo reuse saved results without HTTP or automation cascades. Each execution permits at most 1,000 field writes and row additions; scheduling and persistent template-result caches are not provided. Formats 1–8 remain readable; older clients reject format 9 without rewriting the database. Format 10 adds bounded `printf`, `urlquery`, `dict`, `toString` and event-template `fromJson`/`httpGet`. Rules containing HTTP run as one separate undoable result transaction after edits commit, only for triggered entries. Failures preserve edits and previous results. A live originating main window continues the single-use tasks returned in transaction responses; background API writes do not run rules containing HTTP. Continuous edits are coalesced, stale results are discarded, and undo/redo do not fetch again. Formatting permits at most 64 arguments and 64 KiB serialized input/output; `printf` has bounded scalar-argument width/precision and excludes dynamic widths and argument indexes, and `dict` requires string keys and complete pairs. Formats 1–9, including disabled unfinished templates, remain readable; older clients reject format 10 without rewriting sources.
+
+      The manual interface opts into per-entry execution with rows: true. Existing calls retain atomic whole-run execution and null data. Start without runID, then continue with runID and step; status reads progress without writing and repeated steps do not replay actions. Each batch handles at most 32 matching entries, with all actions of each entry committed atomically. Code 1 returns partial progress, including succeeded, failed, pending and skipped IDs. Batches share one network and 1,000-operation budget; explicit retry starts a new round for failed and unfinished entries only. Progress is main-window-bound, valid for fifteen minutes, contains no plaintext field values, and is cleared when notebooks begin locking. The template editor can insert stable field references by name and copy field IDs.
 
 ### Get primary key values
 
@@ -2005,7 +2587,7 @@ The field types (`keyType`) are:
   }
   ```
 
-    * `data.rows`: A `KeyValues` object holding the primary-key (`block`) field and its paginated values
+    * `data.rows`: A `KeyValues` object containing the primary-key (`block`) field and its paginated values
     * `data.blockIDs`: IDs of all database blocks (mirrors) that reference this database
     * `data.total`: Number of primary-key values after filtering and before pagination
 
@@ -2069,6 +2651,7 @@ Updates a single cell (one field of one row). This is the primary write endpoint
 |------------|----------------------------------------------------------------------------------------------------------------------|
 | `block`    | `{"block": {"content": "First row", "id": "<boundBlockID>"}, "isDetached": false}`                                  |
 | `text`     | `{"text": {"content": "Some text"}}`                                                                                 |
+| `text` (rich) | `{"text": {"content": "Some text", "rich": {"spec": 1, "format": "kramdown", "content": "**Some** text"}}}` |
 | `number`   | `{"number": {"content": 42, "isNotEmpty": true}}` (clear with `{"isNotEmpty": false}`)                               |
 | `date`     | `{"date": {"content": 1676042451000, "isNotEmpty": true}}` (millisecond timestamp)                                  |
 | `select`   | `{"mSelect": [{"content": "Done", "color": "1"}]}` (at most one option)                                             |
@@ -2076,12 +2659,17 @@ Updates a single cell (one field of one row). This is the primary write endpoint
 | `url`      | `{"url": {"content": "https://siyuan.com"}}`                                                                         |
 | `email`    | `{"email": {"content": "a@b.com"}}`                                                                                  |
 | `phone`    | `{"phone": {"content": "1234567890"}}`                                                                               |
+| `location` | `{"location":{"name":"Home","latitude":0,"longitude":0,"originalInput":"0, 0"}}` |
 | `mAsset`   | `{"mAsset": [{"type": "image", "name": "", "content": "https://example.com/image"}]}`                               |
 | `checkbox` | `{"checkbox": {"checked": true}}`                                                                                    |
 
-> ⚠️ `itemID` is the **item ID**, which is the rendered item's `id` from [Render](#Render): `rows[].id` for a table and `cards[].id` for a gallery or kanban, inside the corresponding view instance under `groups[]` when grouping is enabled. It also equals the primary-key value's `value.blockID`. For a bound item, the bound block ID is stored in the primary-key value's `value.block.id`; these are distinct concepts and must not be assumed equal. Passing the wrong ID stores the value as an orphan that does not appear in the rendered cell.
+> ⚠️ `itemID` is the **item ID**, which is the rendered item's `id` from [Render](#Render): `rows[].id` for a table or list and `cards[].id` for a gallery or kanban, inside the corresponding view instance under `groups[]` when grouping is enabled. It also equals the primary-key value's `value.blockID`. For a bound item, the bound block ID is stored in the primary-key value's `value.block.id`; these are distinct concepts and must not be assumed equal. Passing the wrong ID stores the value as an orphan that does not appear in the rendered cell.
 
 For `mAsset`, each item uses `type: "image"` to render an image or `type: "file"` to render a file link. Updating the value replaces the entire `mAsset` array, so append operations must include the existing items.
+
+For rich text, `text.rich.content` is the authoritative Kramdown source. The kernel validates its supported structure and derives `text.content` as the plain-text projection; a caller-provided plain-text projection is ignored. For compatibility with existing API clients, omitting `text.rich` preserves the stored rich-text payload when `text.content` is unchanged, but replaces it with plain text when `text.content` changes. Send `"rich": null` to explicitly remove rich formatting even when the plain-text projection is unchanged. Attribute views containing rich text use storage spec 9 and cannot be opened by kernels that only support earlier attribute-view specs.
+
+For `location`, `name` is optional. `latitude` and `longitude` must both be absent/null or both be finite numbers in [-90, 90] and [-180, 180], respectively; zero is valid. All coordinates implicitly use WGS84 and are stored without conversion. Explicit coordinate-system properties on location values are rejected; field-level coordinate-system settings are not provided. `originalInput` retains source text and is excluded from filtering and sorting. Omitted update members preserve existing values; to clear a location send `{"location":null}`, or explicitly clear the name and set both coordinates to null. When coordinates change, omitted `originalInput` is cleared automatically; an explicitly supplied source is retained. Text filters use `{"type":"location","text":{"content":"query"}}` and match the name and coordinates. Location fields use attribute-view storage spec 13; older kernels cannot open them. Unrelated databases retain their existing storage spec.
 
 * `/api/av/setAttributeViewBlockAttr`
 * Parameters
@@ -2134,7 +2722,7 @@ For `mAsset`, each item uses `type: "image"` to render an image or `type: "file"
 
 ### Add items
 
-Adds one or more items (rows). Each source can either bind an existing block (`isDetached: false`) or create a detached row that only lives inside the view (`isDetached: true`).
+Adds one or more items (rows). Each source can either bind an existing block (`isDetached: false`) or create a detached row that exists only inside the view (`isDetached: true`).
 
 * `/api/av/addAttributeViewBlocks`
 * Parameters
@@ -2160,7 +2748,7 @@ Adds one or more items (rows). Each source can either bind an existing block (`i
     * `avID`: Database ID
     * `blockID`: The database block that owns this database (resolves target view/group)
     * `viewID`: Explicit target view. When omitted, the view selected by `blockID` is used, then the first available view
-    * `groupID`: Target group ID for kanban views. Omit for table/gallery
+    * `groupID`: Target group ID for kanban views. Omit for table/list/gallery
     * `previousID`: Insert after this item ID. Empty means append to the end
     * `srcs[].id`: For bound blocks (`isDetached: false`), the block ID to bind. Must match the node ID pattern
     * `srcs[].isDetached`: `true` to create a detached row; `false` to bind an existing block
@@ -2207,7 +2795,9 @@ Removes one or more items (rows). Detached rows are deleted; bound blocks are un
 
 ### Change layout
 
-Switches the layout type of the view selected by the database block between `table`, `gallery`, and `kanban`. On success the server re-renders the view and returns it (same shape as [Render](#Render)).
+Switches the layout type of the view selected by the database block between `table`, `list`, `gallery`, and `kanban`. On success the server re-renders the view and returns it (same shape as [Render](#Render)).
+
+The first switch to `list` initializes an independent layout with only the primary-key field visible. Subsequent switches back to this layout preserve its field visibility and ordering. Hidden fields retain their values and remain available for filtering and sorting; other layouts keep their own display settings.
 
 * `/api/av/changeAttrViewLayout`
 * Parameters
@@ -2222,8 +2812,8 @@ Switches the layout type of the view selected by the database block between `tab
 
     * `avID`: Database ID
     * `blockID`: The database block that owns the view
-    * `layoutType`: Target layout — one of `table`, `gallery`, `kanban`
-* Return value: same shape as [Render](#Render). When switching to `kanban` and a group is configured, `data.view` carries a `groups[]` array; each group is a view instance with `groupKey`, `groupValue`, plus kanban-specific fields (`coverFrom`, `cardAspectRatio`, `cardSize`, `fitImage`, `displayFieldName`, `fillColBackgroundColor`, `fields`)
+    * `layoutType`: Target layout — one of `table`, `list`, `gallery`, `kanban`
+* Return value: same shape as [Render](#Render). When switching to `kanban` and a group is configured, `data.view` contains a `groups[]` array; each group is a view instance with `groupKey`, `groupValue`, plus kanban-specific fields (`coverFrom`, `cardAspectRatio`, `cardSize`, `fitImage`, `displayFieldName`, `fillColBackgroundColor`, `fields`)
 
 ### Set grouping
 
@@ -2249,6 +2839,7 @@ Sets or clears the grouping rule for a kanban view. When `group.field` is empty,
     * `blockID`: The database block that owns the view
     * `group`: Grouping rule
     * `group.field`: Field (column) ID to group by. Empty string removes grouping
+    * `group.valueSource`: Optional value source — `stored` (the default when omitted) uses the stored typed value, while `rendered` uses the field's display-template result and groups it as text by value
     * `group.method`: Group method — `0` by value, `1` by number range, `2` by relative date, `3` by day, `4` by week, `5` by month, `6` by year
     * `group.range`: Optional. Required when `method` is `1` (number range): `{ "numStart": 0, "numEnd": 100, "numStep": 10 }`
     * `group.order`: Group ordering — `0` ascending, `1` descending, `2` manual, `3` follow select-option order
@@ -2313,15 +2904,17 @@ Returns the current filter and sort rules of the view bound to a database block.
   }
   ```
 
-    * `data.filters`: Array of `ViewFilter`. The top level holds a single root group node `{ "combination": "and"|"or", "filters": [...] }`; the array elements are either leaf filters or nested group nodes, enabling recursive AND/OR combinations.
+    * `data.filters`: Array of `ViewFilter`. The top level contains a single root group node `{ "combination": "and"|"or", "filters": [...] }`; the array elements are either leaf filters or nested group nodes, enabling recursive AND/OR combinations.
     * `data.filters[].column`: Field (column) ID the filter applies to (leaf node only)
+    * `data.filters[].valueSource`: Optional value source for a leaf node — `stored` is the default when omitted, and `rendered` filters the field's display-template result
     * `data.filters[].operator`: Filter operator (see the operator table below; leaf node only)
-    * `data.filters[].value`: Filter value, a `Value` object (see [Set a cell value](#Set-a-cell-value) for the value shapes; leaf node only)
+    * `data.filters[].value`: Filter operand, a `Value` object (see [Set a cell value](#Set-a-cell-value) for the value shapes; leaf node only). When `valueSource` is `rendered`, use a template value in the form `{ "type": "template", "template": { "content": "..." } }`
     * `data.filters[].relativeDate`: Optional relative-date descriptor used by date filters (`{ "count": 7, "unit": 0, "direction": -1 }`; `unit`: `0` day, `1` week, `2` month, `3` year; `direction`: `-1` before, `0` this, `1` after; leaf node only)
     * `data.filters[].combination`: Group combinator, `"and"` or `"or"` (group node only)
     * `data.filters[].filters`: Child filter nodes, recursively `ViewFilter` (group node only)
     * `data.sorts`: Array of `ViewSort`
     * `data.sorts[].column`: Field (column) ID the sort applies to
+    * `data.sorts[].valueSource`: Optional value source — `stored` is the default when omitted, and `rendered` sorts by the field's display-template result
     * `data.sorts[].order`: `ASC` or `DESC`
 
   Filter operators:
@@ -2370,7 +2963,7 @@ Returns the current filter and sort rules of the view bound to a database block.
 
     * `avID`: Database ID
     * `blockID`: The database block that owns the view
-    * `data`: Full new array of `ViewFilter` objects that **replaces** the view's existing filters entirely (see [Get filter and sort](#Get-filter-and-sort)). Pass `[]` to clear all filters. The top level holds a single root group node `{ "combination": "and"|"or", "filters": [...] }`; the array elements are either leaf filters or nested group nodes, enabling recursive AND/OR combinations
+    * `data`: Full new array of `ViewFilter` objects that **replaces** the view's existing filters entirely (see [Get filter and sort](#Get-filter-and-sort)). Pass `[]` to clear all filters. The top level contains a single root group node `{ "combination": "and"|"or", "filters": [...] }`; the array elements are either leaf filters or nested group nodes, enabling recursive AND/OR combinations
 * Return value
 
   ```json
@@ -2416,7 +3009,7 @@ Returns the current filter and sort rules of the view bound to a database block.
 
 ### Add a field
 
-Adds a new field (column). The field is appended to every view (table/gallery/kanban) at the position after `previousKeyID` (or at the default position when empty).
+Adds a new field (column). The field is appended to every view (table/list/gallery/kanban) at the position after `previousKeyID` (or at the default position when empty).
 
 * `/api/av/addAttributeViewKey`
 * Parameters
@@ -2435,9 +3028,9 @@ Adds a new field (column). The field is appended to every view (table/gallery/ka
     * `avID`: Database ID
     * `keyID`: ID for the new field. Must be a valid node ID generated by `Lute.NewNodeID()` (14-digit timestamp + `-` + 7-char random alphanumerics, e.g. `20240118120204-abc1234`)
     * `keyName`: Field display name
-    * `keyType`: Field type — one of `text`, `number`, `date`, `select`, `mSelect`, `url`, `email`, `phone`, `mAsset`, `template`, `created`, `updated`, `checkbox`, `relation`, `rollup`, `lineNumber`. `block` (primary key) cannot be added through this endpoint
+    * `keyType`: Field type — one of `text`, `number`, `date`, `select`, `mSelect`, `url`, `email`, `phone`, `location`, `mAsset`, `template`, `created`, `updated`, `checkbox`, `relation`, `rollup`, `lineNumber`. `block` (primary key) cannot be added through this endpoint
     * `keyIcon`: Optional field icon (emoji or empty string)
-    * `previousKeyID`: Insert the new column after this field ID. Empty string uses the layout default (first column for table, last for gallery/kanban)
+    * `previousKeyID`: Insert the new column after this field ID. Empty string uses the layout default (first column for table, last for list/gallery/kanban)
 * Return value
 
   ```json
@@ -2508,6 +3101,8 @@ Reorders a field (column) globally — moves `keyID` to the position after `prev
 
 Reorders a column within a single view's layout (e.g. a table's column order), without changing the global field ordering.
 
+Unknown view IDs or field IDs return an error. Moving a field preserves its width and visibility, field types and stored values.
+
 * `/api/av/sortAttributeViewViewKey`
 * Parameters
 
@@ -2524,6 +3119,107 @@ Reorders a column within a single view's layout (e.g. a table's column order), w
     * `viewID`: Target view. When empty, uses the first available view
     * `keyID`: Field ID to move
     * `previousKeyID`: Field ID after which `keyID` should be placed. Empty string moves it to the first position
+* Return value
+
+  ```json
+  {
+    "code": 0,
+    "msg": "",
+    "data": null
+  }
+  ```
+
+## Search
+
+Saved search criteria use the following fields:
+
+* `name`: Criterion name, which is also its unique key
+* `sort`: Result sorting method — `0` block type, `1` creation time ascending, `2` creation time descending, `3` update time ascending, `4` update time descending, `5` content order, `6` relevance ascending, `7` relevance descending
+* `group`: Grouping method — `0` no grouping, `1` group by document
+* `hasReplace`: Whether replacement is enabled
+* `method`: Search method — `0` keyword, `1` query syntax, `2` SQL, `3` regular expression, `4` semantic search
+* `hPath`: Human-readable search scope path
+* `idPath`: Search scope path array
+* `k`: Search keyword
+* `r`: Replacement keyword
+* `types`: Block type flags. Supported keys are `mathBlock`, `table`, `blockquote`, `superBlock`, `paragraph`, `document`, `heading`, `list`, `listItem`, `codeBlock`, `htmlBlock`, `embedBlock`, `databaseBlock`, `audioBlock`, `videoBlock`, `iframeBlock`, `widgetBlock`, `callout`, `tabs`, and `tabItem`
+* `subTypes`: Independent subtype groups: `heading` accepts `h1` through `h6`; `list` and `listItem` each accept `o` (ordered), `u` (unordered), and `t` (task). A missing or empty group, or a group with all flags `false`, leaves that parent type unrestricted by subtype. The parent must still be enabled in `types`. Unknown top-level keys, including the former flat `h1`–`h6` and `o`/`u`/`t` flags, are ignored without error; saved subtype selections in that format must be selected and saved again
+* `replaceTypes`: Replacement type flags. Supported keys are `text`, `imgText`, `imgTitle`, `imgSrc`, `aText`, `aTitle`, `aHref`, `code`, `em`, `strong`, `inlineMath`, `inlineMemo`, `blockRef`, `fileAnnotationRef`, `kbd`, `mark`, `s`, `sub`, `sup`, `tag`, `u`, `docTitle`, `codeBlock`, `mathBlock`, and `htmlBlock`
+
+Boolean flags omitted from `types`, `subTypes`, or `replaceTypes` are treated as `false`.
+
+### Get saved search criteria
+
+* `/api/storage/getCriteria`
+* No parameters
+* Return value: `data` is an array of saved search criteria in their saved order; it is an empty array when no criteria have been saved
+* For a read-only role, criteria are filtered by publish access permissions and the returned `k` and `r` values are cleared
+
+### Save a search criterion
+
+Creates a criterion or completely replaces the existing criterion with the same `name`. Replacing a criterion retains its current position; a new criterion is appended.
+
+* `/api/storage/setCriterion`
+* Administrator role required; unavailable in read-only mode
+* Parameters
+
+  ```json
+  {
+    "criterion": {
+      "name": "Public notes",
+      "sort": 0,
+      "group": 1,
+      "hasReplace": false,
+      "method": 0,
+      "hPath": "Public notes",
+      "idPath": ["20210808180117-czj9bvb"],
+      "k": "",
+      "r": "",
+      "types": {
+        "document": true,
+        "paragraph": true,
+        "heading": true,
+        "list": true,
+        "listItem": true
+      },
+      "subTypes": {
+        "heading": {"h1": true},
+        "list": {"o": true},
+        "listItem": {"t": true}
+      },
+      "replaceTypes": {
+        "text": true
+      }
+    }
+  }
+  ```
+
+    * `criterion`: Complete search criterion to save
+* Return value
+
+  ```json
+  {
+    "code": 0,
+    "msg": "",
+    "data": null
+  }
+  ```
+
+### Remove a search criterion
+
+Removes the criterion with the specified name. Removing a name that does not exist is also considered successful.
+
+* `/api/storage/removeCriterion`
+* Administrator role required; unavailable in read-only mode
+* Parameters
+
+  ```json
+  {
+    "name": "Public notes"
+  }
+  ```
+
+    * `name`: Criterion name
 * Return value
 
   ```json

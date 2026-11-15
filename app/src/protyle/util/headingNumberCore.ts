@@ -1,12 +1,16 @@
+import {Constants} from "../../constants";
+
 const HEADING_SELECTOR = '[data-node-id][data-type="NodeHeading"]';
 const HEADING_NUMBER_CLASS = "protyle-heading-number";
 const HEADING_NUMBER_ACTIVE_CLASS = "protyle-heading-number--active";
 const HEADING_NUMBER_MEASURE_CLASS = "protyle-heading-number__measure";
 const HEADING_NUMBER_WIDTH_PROPERTY = "--b3-protyle-heading-number-width";
+const HEADING_NUMBER_TRIM_START_PROPERTY = "--b3-protyle-heading-number-trim-start";
+const HEADING_NUMBER_NO_SPACING_SUFFIXES = ["、", "）"];
+const HEADING_NUMBER_TRIM_START_PREFIXES = ["（"];
 const NUMBERED_HEADING_SELECTOR = `${HEADING_SELECTOR}[data-heading-number], ` +
     `${HEADING_SELECTOR} > [contenteditable][data-heading-number]`;
 const HEADING_CONTAINER_TYPES = new Set(["NodeDocument", "NodeList", "NodeListItem", "NodeSuperBlock"]);
-const CUSTOM_HEADING_NUMBER_ATTRIBUTE = "custom-sy-heading-number";
 let headingNumberMeasurements = new WeakMap<Element, {key: string, offset: string}>();
 
 export interface IHeadingNumberStyle {
@@ -33,6 +37,14 @@ export const invalidateHeadingNumberMeasurements = () => {
     headingNumberMeasurements = new WeakMap<Element, {key: string, offset: string}>();
 };
 
+export const headingNumberNeedsSpacing = (number: string) => {
+    return !HEADING_NUMBER_NO_SPACING_SUFFIXES.some(suffix => number.endsWith(suffix));
+};
+
+export const headingNumberNeedsLeadingTrim = (number: string) => {
+    return HEADING_NUMBER_TRIM_START_PREFIXES.some(prefix => number.startsWith(prefix));
+};
+
 export const clearHeadingNumberElements = (root: Element) => {
     root.querySelectorAll(NUMBERED_HEADING_SELECTOR).forEach(item => {
         item.removeAttribute("data-heading-number");
@@ -47,7 +59,7 @@ export const clearHeadingNumberElements = (root: Element) => {
 };
 
 const isNumberedHeadingTarget = (element: Element) => {
-    return !element.closest(".bq, .callout, .protyle-wysiwyg__embed");
+    return !element.closest(".bq, .callout, .tab-item, .protyle-wysiwyg__embed");
 };
 
 const measureHeadingNumbers = (targets: IHeadingNumberTarget[]) => {
@@ -99,18 +111,29 @@ export const buildHeadingNumberStyles = (scope: string, styles: IHeadingNumberSt
     const headingSelector = `${scopeSelector} [data-node-id][data-type="NodeHeading"]`;
     const editableSelector = `${headingSelector}>:first-child[contenteditable]`;
     const rules = [
-        `${headingSelector}{--b3-protyle-heading-number:"";--b3-protyle-heading-number-offset:0px;}`,
+        `${headingSelector}{--b3-protyle-heading-number:"";--b3-protyle-heading-number-offset:0px;` +
+        `${HEADING_NUMBER_TRIM_START_PROPERTY}:0px;}`,
         `${editableSelector}{position:relative;` +
         "padding-inline-start:var(--b3-protyle-heading-number-offset);}",
         `${editableSelector}::before{content:var(--b3-protyle-heading-number);position:absolute;` +
-        "inset-inline-start:0;" +
+        `inset-inline-start:calc(0px - var(${HEADING_NUMBER_TRIM_START_PROPERTY}));` +
         "top:0;width:auto;height:auto;background-color:transparent;color:var(--b3-theme-on-surface-light);" +
         "unicode-bidi:isolate;user-select:none;pointer-events:none;}",
     ];
     styles.forEach(style => {
+        const offsetAdjustments = [];
+        if (headingNumberNeedsSpacing(style.number)) {
+            offsetAdjustments.push("+ .5em");
+        }
+        const trimStart = headingNumberNeedsLeadingTrim(style.number) ? ".5em" : "0px";
+        if (trimStart !== "0px") {
+            offsetAdjustments.push(`- ${trimStart}`);
+        }
+        const offset = offsetAdjustments.length > 0 ?
+            `calc(${style.offset} ${offsetAdjustments.join(" ")})` : style.offset;
         rules.push(`${scopeSelector} [data-type="NodeHeading"][data-node-id="${escapeCSSString(style.id)}"]{` +
             `--b3-protyle-heading-number:"${escapeCSSString(style.number)}";` +
-            `--b3-protyle-heading-number-offset:calc(${style.offset} + .5em);}`);
+            `--b3-protyle-heading-number-offset:${offset};${HEADING_NUMBER_TRIM_START_PROPERTY}:${trimStart};}`);
     });
     return rules.join("");
 };
@@ -216,8 +239,8 @@ const operationChangesHeadingNumberSetting = (operation: IOperation) => {
     if (operation.action !== "updateAttrs" || !operation.data || typeof operation.data !== "object") {
         return false;
     }
-    const oldValue = operation.data.old?.[CUSTOM_HEADING_NUMBER_ATTRIBUTE];
-    const newValue = operation.data.new?.[CUSTOM_HEADING_NUMBER_ATTRIBUTE];
+    const oldValue = operation.data.old?.[Constants.CUSTOM_SY_HEADING_NUMBER];
+    const newValue = operation.data.new?.[Constants.CUSTOM_SY_HEADING_NUMBER];
     return oldValue !== newValue;
 };
 
@@ -239,7 +262,7 @@ export const operationsMayChangeOutline = (operations: IOperation[] | null = [],
         if (operationChangesHeadingNumberSetting(operation)) {
             return true;
         }
-        if (["append", "delete", "move", "moveOutlineHeading"].includes(operation.action)) {
+        if (["append", "delete", "move", "moveOutlineHeading", "swapBlockRef", "convertList"].includes(operation.action)) {
             return true;
         }
         if (operation.action === "update" && operation.id && headingIDs.has(operation.id)) {
@@ -261,7 +284,7 @@ export const operationsMayChangeHeadingNumbers = (
         if (operationChangesHeadingNumberSetting(operation)) {
             return true;
         }
-        if (["append", "delete", "move", "moveOutlineHeading"].includes(operation.action)) {
+        if (["append", "delete", "move", "moveOutlineHeading", "swapBlockRef", "convertList"].includes(operation.action)) {
             return true;
         }
         if (operation.action === "update") {

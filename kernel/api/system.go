@@ -1,25 +1,13 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"image"
 	"io"
@@ -28,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,114 +26,102 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/siyuan-note/filelock"
 	"github.com/siyuan-note/logging"
+	"github.com/siyuan-note/siyuan/kernel/apicontract"
 	"github.com/siyuan-note/siyuan/kernel/conf"
 	"github.com/siyuan-note/siyuan/kernel/model"
 	"github.com/siyuan-note/siyuan/kernel/util"
+	"golang.org/x/mod/semver"
 )
 
-func clearTempFiles(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
-
+var clearTempFiles = contractHandler(apicontract.ClearTempFiles, func(c *gin.Context, request apicontract.EmptyRequest) apicontract.Response[apicontract.Null] {
 	model.ClearTempFiles()
-}
+	return apicontract.Success(apicontract.Null{})
+})
 
-func vacuumDataIndex(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
-
+var vacuumDataIndex = contractHandler(apicontract.VacuumDataIndex, func(c *gin.Context, request apicontract.EmptyRequest) apicontract.Response[apicontract.Null] {
 	model.VacuumDataIndex()
-}
+	return apicontract.Success(apicontract.Null{})
+})
 
-func rebuildDataIndex(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
-
+var rebuildDataIndex = contractHandler(apicontract.RebuildDataIndex, func(c *gin.Context, request apicontract.EmptyRequest) apicontract.Response[apicontract.Null] {
 	model.FullReindex(false)
-}
+	return apicontract.Success(apicontract.Null{})
+})
 
-func addMicrosoftDefenderExclusion(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
-
-	if !gulu.OS.IsWindows() {
-		return
+var addMicrosoftDefenderExclusion = contractHandler(apicontract.AddMicrosoftDefenderExclusion, func(c *gin.Context, request apicontract.EmptyRequest) apicontract.Response[apicontract.Null] {
+	if gulu.OS.IsWindows() {
+		if err := model.AddMicrosoftDefenderExclusion(); err != nil {
+			return apicontract.Failure[apicontract.Null](-1, err.Error())
+		}
 	}
+	return apicontract.Success(apicontract.Null{})
+})
 
-	err := model.AddMicrosoftDefenderExclusion()
-	if nil != err {
-		ret.Code = -1
-		ret.Msg = err.Error()
+var ignoreAddMicrosoftDefenderExclusion = contractHandler(apicontract.IgnoreAddMicrosoftDefenderExclusion, func(c *gin.Context, request apicontract.EmptyRequest) apicontract.Response[apicontract.Null] {
+	if gulu.OS.IsWindows() {
+		model.UpdateSystemConf(func(s *conf.System) { s.MicrosoftDefenderExcluded = true })
 	}
-}
+	return apicontract.Success(apicontract.Null{})
+})
 
-func ignoreAddMicrosoftDefenderExclusion(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+var getWorkspaceInfo = contractHandler(apicontract.GetWorkspaceInfo, func(c *gin.Context, request apicontract.EmptyRequest) apicontract.Response[apicontract.WorkspaceInfoData] {
+	return apicontract.Success(apicontract.WorkspaceInfoData{WorkspaceDir: util.WorkspaceDir, SiyuanVer: util.Ver})
+})
 
-	if !gulu.OS.IsWindows() {
-		return
-	}
+var getRuntimeInfo = contractHandler(apicontract.GetRuntimeInfo, func(c *gin.Context, request apicontract.EmptyRequest) apicontract.Response[apicontract.SystemRuntimeInfoData] {
+	return apicontract.Success(apicontract.SystemRuntimeInfoData{Text: util.RuntimeInfo(c.Request.Context())})
+})
 
-	model.Conf.System.MicrosoftDefenderExcluded = true
-	model.Conf.Save()
-}
-
-func getWorkspaceInfo(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
-
-	ret.Data = map[string]any{
-		"workspaceDir": util.WorkspaceDir,
-		"siyuanVer":    util.Ver,
-	}
-}
-
-func getNetwork(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
-
+var getNetwork = contractHandler(apicontract.GetNetwork, func(c *gin.Context, request apicontract.EmptyRequest) apicontract.Response[apicontract.NetworkData] {
 	maskedConf, err := model.GetMaskedConf()
 	if err != nil {
-		ret.Code = -1
-		ret.Msg = "get conf failed: " + err.Error()
-		return
+		return apicontract.Failure[apicontract.NetworkData](-1, "get conf failed: "+err.Error())
 	}
-
-	ret.Data = map[string]any{
-		"proxy": maskedConf.System.NetworkProxy,
+	var proxy *apicontract.NetworkProxy
+	if value := maskedConf.System.Load().NetworkProxy; value != nil {
+		proxy = &apicontract.NetworkProxy{Scheme: value.Scheme, Host: value.Host, Port: value.Port}
 	}
-}
+	return apicontract.Success(apicontract.NetworkData{Proxy: proxy})
+})
 
-func getChangelog(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+var getReleaseChangelog = model.GetReleaseChangelog
 
-	data := map[string]any{"show": false, "html": ""}
-	ret.Data = data
+var getChangelog = contractHandler(apicontract.SystemGetChangelog, func(c *gin.Context, request apicontract.SystemChangelogRequest) apicontract.Response[apicontract.SystemChangelogData] {
+	return loadChangelog(c.Request.Context(), request.Force, util.Ver)
+})
+
+func loadChangelog(ctx context.Context, force bool, version string) (ret apicontract.Response[apicontract.SystemChangelogData]) {
+	data := apicontract.SystemChangelogData{}
+	ret = apicontract.Success(data)
+
+	if !util.IsReleaseVer(version) {
+		if !force {
+			return
+		}
+		content, err := getReleaseChangelog(ctx, version)
+		if err != nil {
+			logging.LogWarnf("get changelog for v%s failed: %s", version, err)
+			return apicontract.Failure[apicontract.SystemChangelogData](-1, "release changelog is unavailable")
+		}
+		return apicontract.Success(apicontract.SystemChangelogData{Show: true, HTML: content, Version: version})
+	}
 
 	changelogsDir := filepath.Join(util.WorkingDir, "changelogs")
 	if !gulu.File.IsDir(changelogsDir) {
 		return
 	}
 
-	if !model.Conf.ShowChangelog {
+	if !force && !model.Conf.ShowChangelog {
 		return
 	}
 
-	if !util.IsReleaseVer(util.Ver) {
-		model.Conf.ShowChangelog = false
-		model.Conf.Save()
-		return
+	changelogVer := version
+	changelogPath := getChangelogPath(changelogsDir, changelogVer)
+	if force && changelogPath == "" {
+		changelogVer, changelogPath = getLatestChangelog(changelogsDir, version)
 	}
-
-	verDir := filepath.Join(changelogsDir, "v"+util.Ver)
-	changelogPath := filepath.Join(verDir, "v"+util.Ver+"."+model.Conf.Lang+".md")
-	if !gulu.File.IsExist(changelogPath) {
-		changelogPath = filepath.Join(verDir, "v"+util.Ver+".md")
-	}
-	if !gulu.File.IsExist(changelogPath) {
-		logging.LogErrorf("changelog not found in %s", verDir)
+	if changelogPath == "" {
+		logging.LogErrorf("changelog not found for v%s", version)
 		return
 	}
 
@@ -154,59 +131,96 @@ func getChangelog(c *gin.Context) {
 		return
 	}
 
-	model.Conf.ShowChangelog = false
-	model.Conf.Save()
+	if !force {
+		model.Conf.ShowChangelog = false
+		model.Conf.Save()
+	}
 	luteEngine := lute.New()
 	htmlContent := luteEngine.MarkdownStr("", string(contentData))
 	htmlContent = util.LinkTarget(htmlContent, "")
 
-	data["show"] = true
-	data["html"] = htmlContent
-	ret.Data = data
+	data.Show = true
+	data.HTML = htmlContent
+	data.Version = changelogVer
+	ret = apicontract.Success(data)
+	return
 }
 
-func getEmojiConf(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+func getChangelogPath(changelogsDir, ver string) string {
+	verDir := filepath.Join(changelogsDir, "v"+ver)
+	changelogPath := filepath.Join(verDir, "v"+ver+"."+model.Conf.Lang+".md")
+	if gulu.File.IsExist(changelogPath) {
+		return changelogPath
+	}
+	changelogPath = filepath.Join(verDir, "v"+ver+".md")
+	if gulu.File.IsExist(changelogPath) {
+		return changelogPath
+	}
+	return ""
+}
+
+func getLatestChangelog(changelogsDir, currentVer string) (ver, path string) {
+	entries, err := os.ReadDir(changelogsDir)
+	if err != nil {
+		return "", ""
+	}
+	currentSemver := "v" + strings.TrimPrefix(currentVer, "v")
+	for _, entry := range entries {
+		candidate := strings.TrimPrefix(entry.Name(), "v")
+		candidateSemver := "v" + candidate
+		if !entry.IsDir() || !util.IsReleaseVer(candidate) ||
+			(semver.IsValid(currentSemver) && semver.Compare(candidateSemver, currentSemver) > 0) ||
+			(ver != "" && semver.Compare(candidateSemver, "v"+ver) <= 0) {
+			continue
+		}
+		candidatePath := getChangelogPath(changelogsDir, candidate)
+		if candidatePath != "" {
+			ver = candidate
+			path = candidatePath
+		}
+	}
+	return
+}
+
+var getEmojiConf = contractHandler(apicontract.SystemGetEmojiConf, func(c *gin.Context, request apicontract.EmptyRequest) (ret apicontract.Response[[]*apicontract.SystemEmojiGroup]) {
+	ret = apicontract.Success(([]*apicontract.SystemEmojiGroup)(nil))
 
 	builtConfPath := filepath.Join(util.AppearancePath, "emojis", "conf.json")
 	data, err := os.ReadFile(builtConfPath)
 	if err != nil {
 		logging.LogErrorf("read emojis conf.json failed: %s", err)
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[[]*apicontract.SystemEmojiGroup](-1, err.Error())
 		return
 	}
 
-	var conf []map[string]any
+	var conf []*apicontract.SystemEmojiGroup
 	if err = gulu.JSON.UnmarshalJSON(data, &conf); err != nil {
 		logging.LogErrorf("unmarshal emojis conf.json failed: %s", err)
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[[]*apicontract.SystemEmojiGroup](-1, err.Error())
 		return
 	}
 
 	customConfDir := filepath.Join(util.DataDir, "emojis")
-	custom := map[string]any{
-		"id":          "custom",
-		"title":       "Custom",
-		"title_zh_cn": "自定义",
-		"title_ja_jp": "カスタム",
+	custom := &apicontract.SystemEmojiGroup{
+		ID:        "custom",
+		Title:     "Custom",
+		TitleZhCN: "自定义",
+		TitleJaJP: "カスタム",
 	}
-	items := []map[string]any{}
-	custom["items"] = items
+	items := []*apicontract.SystemEmoji{}
+	custom.Items = items
 	if gulu.File.IsDir(customConfDir) {
 		model.ClearCustomEmojis()
 		readCustomEmojis(customConfDir, "", &items)
 	}
-	custom["items"] = items
-	conf = append([]map[string]any{custom}, conf...)
+	custom.Items = items
+	conf = append([]*apicontract.SystemEmojiGroup{custom}, conf...)
 
-	ret.Data = conf
+	ret = apicontract.Success(conf)
 	return
-}
+})
 
-func readCustomEmojis(rootDir, relativeDir string, items *[]map[string]any) {
+func readCustomEmojis(rootDir, relativeDir string, items *[]*apicontract.SystemEmoji) {
 	dir := filepath.Join(rootDir, filepath.FromSlash(relativeDir))
 	customEmojis, err := os.ReadDir(dir)
 	if err != nil {
@@ -220,13 +234,13 @@ func readCustomEmojis(rootDir, relativeDir string, items *[]map[string]any) {
 			continue
 		}
 
-		if !util.IsValidUploadFileName(html.UnescapeString(name)) {
+		if !util.IsValidExistingEmojiFileName(html.UnescapeString(name)) {
 			oldPath := filepath.Join(dir, name)
 			name = util.FilterUploadEmojiFileName(name)
 			newPath := filepath.Join(dir, name)
 			// XSS through emoji name https://github.com/siyuan-note/siyuan/issues/15034
 			logging.LogWarnf("renaming invalid custom emoji file [%s] to [%s]", oldPath, newPath)
-			if renameErr := filelock.Rename(oldPath, newPath); nil != renameErr {
+			if renameErr := util.RenameEmojiFile(oldPath, newPath); nil != renameErr {
 				logging.LogErrorf("renaming invalid custom emoji file to [%s] failed: %s", newPath, renameErr)
 				continue
 			}
@@ -241,15 +255,15 @@ func readCustomEmojis(rootDir, relativeDir string, items *[]map[string]any) {
 	}
 }
 
-func appendCustomEmoji(name string, items *[]map[string]any) {
+func appendCustomEmoji(name string, items *[]*apicontract.SystemEmoji) {
 	ext := filepath.Ext(name)
 	nameWithoutExt := strings.TrimSuffix(name, ext)
-	emoji := map[string]any{
-		"unicode":           name,
-		"description":       nameWithoutExt,
-		"description_zh_cn": nameWithoutExt,
-		"description_ja_jp": nameWithoutExt,
-		"keywords":          nameWithoutExt,
+	emoji := &apicontract.SystemEmoji{
+		Unicode:         name,
+		Description:     nameWithoutExt,
+		DescriptionZhCN: nameWithoutExt,
+		DescriptionJaJP: nameWithoutExt,
+		Keywords:        nameWithoutExt,
 	}
 	*items = append(*items, emoji)
 
@@ -259,57 +273,51 @@ func appendCustomEmoji(name string, items *[]map[string]any) {
 
 const maxCustomEmojiSize = 10 * 1024 * 1024
 
-func addCustomEmoji(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+var addCustomEmoji = contractHandler(apicontract.SystemAddCustomEmoji, func(c *gin.Context, request apicontract.SystemCustomEmojiRequest) (ret apicontract.Response[apicontract.SystemPathData]) {
+	ret = apicontract.Success(apicontract.SystemPathData{})
 
-	data, err := readCustomEmojiData(c)
+	data, err := readCustomEmojiData(request)
 	if err != nil {
-		ret.Code = http.StatusBadRequest
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.SystemPathData](http.StatusBadRequest, err.Error())
 		return
 	}
 	if len(data) > maxCustomEmojiSize {
-		ret.Code = http.StatusRequestEntityTooLarge
-		ret.Msg = "custom emoji file is too large"
+		ret = apicontract.Failure[apicontract.SystemPathData](http.StatusRequestEntityTooLarge, "custom emoji file is too large")
 		return
 	}
 
 	data, ext, err := normalizeCustomEmojiData(data)
 	if err != nil {
-		ret.Code = http.StatusBadRequest
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.SystemPathData](http.StatusBadRequest, err.Error())
 		return
 	}
-	relativePath, err := normalizeCustomEmojiPath(c.PostForm("name"), ext)
+	relativePath, err := normalizeCustomEmojiPath(request.Name, ext)
 	if err != nil {
-		ret.Code = http.StatusBadRequest
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.SystemPathData](http.StatusBadRequest, err.Error())
 		return
 	}
 
 	emojisDir := filepath.Join(util.DataDir, "emojis")
 	emojiPath := util.GetUniqueFilename(filepath.Join(emojisDir, filepath.FromSlash(relativePath)))
 	if err = os.MkdirAll(filepath.Dir(emojiPath), 0755); err != nil {
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.SystemPathData](-1, err.Error())
 		return
 	}
 	if err = filelock.WriteFile(emojiPath, data); err != nil {
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.SystemPathData](-1, err.Error())
 		return
 	}
 
 	model.IncSync()
 	relativePath, _ = filepath.Rel(emojisDir, emojiPath)
 	relativePath = filepath.ToSlash(relativePath)
-	ret.Data = map[string]any{"path": relativePath}
-}
+	ret = apicontract.Success(apicontract.SystemPathData{Path: relativePath})
+	return
+})
 
-func readCustomEmojiData(c *gin.Context) ([]byte, error) {
-	fileHeader, fileErr := c.FormFile("file")
-	if fileErr == nil {
+func readCustomEmojiData(request apicontract.SystemCustomEmojiRequest) ([]byte, error) {
+	fileHeader := request.File
+	if fileHeader != nil {
 		file, err := fileHeader.Open()
 		if err != nil {
 			return nil, err
@@ -318,7 +326,7 @@ func readCustomEmojiData(c *gin.Context) ([]byte, error) {
 		return io.ReadAll(io.LimitReader(file, maxCustomEmojiSize+1))
 	}
 
-	rawURL := strings.TrimSpace(c.PostForm("url"))
+	rawURL := strings.TrimSpace(request.URL)
 	if rawURL == "" {
 		return nil, fmt.Errorf("field [file] or [url] must not be empty")
 	}
@@ -411,33 +419,28 @@ func normalizeCustomEmojiPath(name, ext string) (string, error) {
 	return strings.Join(parts, "/"), nil
 }
 
-func checkUpdate(c *gin.Context) {
-	// ret := gulu.Ret.NewResult()
-	// defer c.JSON(http.StatusOK, ret)
+var checkUpdate = contractHandler(apicontract.SystemCheckUpdate, func(c *gin.Context, request apicontract.SystemCheckUpdateRequest) (ret apicontract.Response[apicontract.Null]) {
+	return apicontract.Success(apicontract.Null{})
+})
 
-	// arg, ok := util.JsonArg(c, ret)
-	// if !ok {
-	// 	return
-	// }
+var downloadUpdate = contractHandler(apicontract.SystemDownloadUpdate, func(c *gin.Context, request apicontract.SystemDownloadUpdateRequest) apicontract.Response[apicontract.Null] {
+	if err := model.DownloadUpdate(request.Version); err != nil {
+		logging.LogWarnf("download selected update failed: %s", err)
+		return apicontract.Failure[apicontract.Null](-1, model.Conf.Language(104))
+	}
+	return apicontract.Success(apicontract.Null{})
+})
 
-	// showMsg := arg["showMsg"].(bool)
-	// model.CheckUpdate(showMsg)
-	return
-}
-
-func exportLog(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+var exportLog = contractHandler(apicontract.SystemExportLog, func(c *gin.Context, request apicontract.EmptyRequest) (ret apicontract.Response[apicontract.SystemZipData]) {
+	ret = apicontract.Success(apicontract.SystemZipData{})
 
 	zipPath := model.ExportSystemLog()
-	ret.Data = map[string]any{
-		"zip": zipPath,
-	}
-}
+	ret = apicontract.Success(apicontract.SystemZipData{Zip: zipPath})
+	return
+})
 
-func exportConf(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+var exportConf = contractHandler(apicontract.SystemExportConf, func(c *gin.Context, request apicontract.EmptyRequest) (ret apicontract.Response[apicontract.SystemExportConfData]) {
+	ret = apicontract.Success(apicontract.SystemExportConfData{})
 
 	logging.LogInfof("exporting conf...")
 
@@ -445,145 +448,161 @@ func exportConf(c *gin.Context) {
 	tmpDir := filepath.Join(util.TempDir, "export")
 	if err := os.MkdirAll(tmpDir, 0755); err != nil {
 		logging.LogErrorf("export conf failed: %s", err)
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.SystemExportConfData](-1, err.Error())
 		return
 	}
 
-	data, err := gulu.JSON.MarshalJSON(model.Conf)
+	clonedConf, err := model.GetMaskedConf()
 	if err != nil {
 		logging.LogErrorf("export conf failed: %s", err)
-		ret.Code = -1
-		ret.Msg = err.Error()
-		return
-	}
-	clonedConf := &model.AppConf{}
-	if err = gulu.JSON.UnmarshalJSON(data, clonedConf); err != nil {
-		logging.LogErrorf("export conf failed: %s", err)
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.SystemExportConfData](-1, err.Error())
 		return
 	}
 
-	if nil != clonedConf.Appearance {
-		clonedConf.Appearance.DarkThemes = nil
-		clonedConf.Appearance.LightThemes = nil
-		clonedConf.Appearance.Icons = nil
-	}
-	if nil != clonedConf.Editor {
-		clonedConf.Editor.Emoji = []string{}
-		if strings.HasPrefix(clonedConf.Editor.FontFamily, util.CustomFontFamilyPrefix) {
-			clonedConf.Editor.FontFamily = ""
-			clonedConf.Editor.FontWeight = 400
-			clonedConf.Editor.FontFamilyDisplay = ""
+	if nil != clonedConf.Appearance.Load() {
+		// 壁纸文件仅属于本工作空间，不包含在设置导出中。
+		clonedConf.Appearance.Load().LockScreenWallpaper = false
+		clonedConf.Appearance.Load().DarkThemes = nil
+		clonedConf.Appearance.Load().LightThemes = nil
+		clonedConf.Appearance.Load().Icons = nil
+		fonts := make([]*conf.EditorFont, 0, len(clonedConf.Appearance.Load().GlobalFontFamilies))
+		for _, font := range clonedConf.Appearance.Load().GlobalFontFamilies {
+			if nil != font && !strings.HasPrefix(font.Family, util.CustomFontFamilyPrefix) {
+				fonts = append(fonts, font)
+			}
 		}
+		clonedConf.Appearance.Load().GlobalFontFamilies = fonts
 	}
-	if nil != clonedConf.Export {
-		clonedConf.Export.PandocBin = ""
+	if clonedConf.AI.Load() != nil {
+		clonedConf.AI.Load().ClearChatGPTAccountIDs()
+	}
+	if nil != clonedConf.Editor.Load() {
+		clonedConf.Editor.Load().Emoji = []string{}
+		fonts := make([]*conf.EditorFont, 0, len(clonedConf.Editor.Load().FontFamilies))
+		for _, font := range clonedConf.Editor.Load().FontFamilies {
+			if nil != font && !strings.HasPrefix(font.Family, util.CustomFontFamilyPrefix) {
+				fonts = append(fonts, font)
+			}
+		}
+		clonedConf.Editor.Load().FontFamilies = fonts
+		codeFonts := make([]*conf.EditorFont, 0, len(clonedConf.Editor.Load().CodeFontFamilies))
+		for _, font := range clonedConf.Editor.Load().CodeFontFamilies {
+			if nil != font && !strings.HasPrefix(font.Family, util.CustomFontFamilyPrefix) {
+				codeFonts = append(codeFonts, font)
+			}
+		}
+		clonedConf.Editor.Load().CodeFontFamilies = codeFonts
+		clonedConf.Editor.Load().FontFamily = ""
+		clonedConf.Editor.Load().FontWeight = 400
+		clonedConf.Editor.Load().FontFamilyDisplay = ""
+		clonedConf.Editor.Load().NormalizeFontFamilies()
+	}
+	if nil != clonedConf.Export.Load() {
+		clonedConf.Export.Load().PandocBin = ""
 	}
 	clonedConf.UserData = ""
-	clonedConf.Account = nil
 	clonedConf.AccessAuthCode = ""
-	if nil != clonedConf.System {
-		clonedConf.System.ID = ""
-		clonedConf.System.Name = ""
-		clonedConf.System.OSPlatform = ""
-		clonedConf.System.Container = ""
-		clonedConf.System.IsMicrosoftStore = false
-		clonedConf.System.UpdateChannel = ""
-		clonedConf.System.MicrosoftDefenderExcluded = false
+	if nil != clonedConf.System.Load() {
+		clonedConf.System.Load().NetworkProxy = &conf.NetworkProxy{}
+		clonedConf.System.Load().ID = ""
+		clonedConf.System.Load().Name = ""
+		clonedConf.System.Load().OSPlatform = ""
+		clonedConf.System.Load().Container = ""
+		clonedConf.System.Load().IsMicrosoftStore = false
+		clonedConf.System.Load().UpdateChannel = ""
+		clonedConf.System.Load().MicrosoftDefenderExcluded = false
 	}
-	clonedConf.Sync = nil
-	clonedConf.Stat = nil
-	clonedConf.Api = nil
-	clonedConf.Repo = nil
-	clonedConf.Secrets = nil
+	clonedConf.Sync.Store(nil)
+	clonedConf.Stat.Store(nil)
+	clonedConf.Api.Store(nil)
+	clonedConf.Repo.Store(nil)
+	clonedConf.Secrets.Store(nil)
 	clonedConf.NotebookCrypto = nil
-	clonedConf.Onboarding = nil
-	clonedConf.Publish = nil
+	clonedConf.Onboarding.Store(nil)
+	clonedConf.Publish.Store(nil)
 	clonedConf.CookieKey = ""
 	clonedConf.MCPOAuth = ""
 	clonedConf.CloudRegion = 0
-	if nil != clonedConf.AI {
-		for _, provider := range clonedConf.AI.Providers {
+	if nil != clonedConf.OIDC {
+		clonedConf.OIDC.ClientSecret = ""
+	}
+	if nil != clonedConf.AI.Load() {
+		if clonedConf.AI.Load().Web != nil {
+			clonedConf.AI.Load().Web.APIKey = ""
+			clonedConf.AI.Load().Web.ExaAPIKey = ""
+		}
+		for _, provider := range clonedConf.AI.Load().Providers {
 			if nil != provider {
 				provider.APIKey = ""
+				provider.Headers = nil
 			}
 		}
-		if nil != clonedConf.AI.Embedding {
-			clonedConf.AI.Embedding.APIKey = ""
+		if nil != clonedConf.AI.Load().Embedding {
+			clonedConf.AI.Load().Embedding.APIKey = ""
 		}
-		if nil != clonedConf.AI.Rerank {
-			clonedConf.AI.Rerank.APIKey = ""
+		if nil != clonedConf.AI.Load().Rerank {
+			clonedConf.AI.Load().Rerank.APIKey = ""
 		}
-		clonedConf.AI.MCP = nil
+		if nil != clonedConf.AI.Load().Decision {
+			clonedConf.AI.Load().Decision.APIKey = ""
+			for _, profile := range clonedConf.AI.Load().Decision.Profiles {
+				if profile != nil {
+					profile.APIKey = ""
+				}
+			}
+		}
+		clonedConf.AI.Load().MCP = nil
 	}
 
-	data, err = gulu.JSON.MarshalIndentJSON(clonedConf, "", "  ")
+	data, err := gulu.JSON.MarshalIndentJSON(clonedConf, "", "  ")
 	if err != nil {
 		logging.LogErrorf("export conf failed: %s", err)
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.SystemExportConfData](-1, err.Error())
 		return
 	}
 
 	tmp := filepath.Join(tmpDir, name)
 	if err = os.WriteFile(tmp, data, 0644); err != nil {
 		logging.LogErrorf("export conf failed: %s", err)
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.SystemExportConfData](-1, err.Error())
 		return
 	}
 
 	zipFile, err := gulu.Zip.Create(tmp + ".zip")
 	if err != nil {
 		logging.LogErrorf("export conf failed: %s", err)
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.SystemExportConfData](-1, err.Error())
 		return
 	}
 
 	if err = zipFile.AddEntry(name, tmp); err != nil {
 		logging.LogErrorf("export conf failed: %s", err)
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.SystemExportConfData](-1, err.Error())
 		return
 	}
 
 	if err = zipFile.Close(); err != nil {
 		logging.LogErrorf("export conf failed: %s", err)
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.SystemExportConfData](-1, err.Error())
 		return
 	}
 
 	logging.LogInfof("exported conf")
 
 	zipPath := "/export/" + name + ".zip"
-	ret.Data = map[string]any{
-		"name": name,
-		"zip":  zipPath,
-	}
-}
+	ret = apicontract.Success(apicontract.SystemExportConfData{Name: name, Zip: zipPath})
+	return
+})
 
-func importConf(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(200, ret)
+var importConf = contractHandler(apicontract.SystemImportConf, func(c *gin.Context, request apicontract.SystemImportConfRequest) (ret apicontract.Response[apicontract.Null]) {
+	defer beginSettingTask("importConf")()
+	ret = apicontract.Success(apicontract.Null{})
 
 	logging.LogInfof("importing conf...")
 
-	form, err := c.MultipartForm()
-	if err != nil {
-		logging.LogErrorf("read upload file failed: %s", err)
-		ret.Code = -1
-		ret.Msg = err.Error()
-		return
-	}
-
-	files := form.File["file"]
+	files := request.File
 	if 1 != len(files) {
-		ret.Code = -1
-		ret.Msg = "invalid upload file"
+		ret = apicontract.Failure[apicontract.Null](-1, "invalid upload file")
 		return
 	}
 
@@ -591,8 +610,7 @@ func importConf(c *gin.Context) {
 	fh, err := f.Open()
 	if err != nil {
 		logging.LogErrorf("read upload file failed: %s", err)
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.Null](-1, err.Error())
 		return
 	}
 
@@ -600,31 +618,27 @@ func importConf(c *gin.Context) {
 	fh.Close()
 	if err != nil {
 		logging.LogErrorf("read upload file failed: %s", err)
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.Null](-1, err.Error())
 		return
 	}
 
 	importDir := filepath.Join(util.TempDir, "import")
 	if err = os.MkdirAll(importDir, 0755); err != nil {
 		logging.LogErrorf("import conf failed: %s", err)
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.Null](-1, err.Error())
 		return
 	}
 
 	writePath := filepath.Join(importDir, f.Filename)
 	if !gulu.File.IsSubPath(importDir, writePath) {
 		logging.LogErrorf("import path [%s] is not sub path of import dir [%s]", writePath, importDir)
-		ret.Code = -1
-		ret.Msg = "import path is not sub path of import dir"
+		ret = apicontract.Failure[apicontract.Null](-1, "import path is not sub path of import dir")
 		return
 	}
 
 	if err = os.WriteFile(writePath, data, 0644); err != nil {
 		logging.LogErrorf("import conf failed: %s", err)
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.Null](-1, err.Error())
 		return
 	}
 
@@ -633,35 +647,30 @@ func importConf(c *gin.Context) {
 	if strings.HasSuffix(strings.ToLower(writePath), ".zip") {
 		if err = gulu.Zip.Unzip(writePath, tmpDir); err != nil {
 			logging.LogErrorf("import conf failed: %s", err)
-			ret.Code = -1
-			ret.Msg = err.Error()
+			ret = apicontract.Failure[apicontract.Null](-1, err.Error())
 			return
 		}
 	} else if strings.HasSuffix(strings.ToLower(writePath), ".json") {
 		if err = gulu.File.CopyFile(writePath, filepath.Join(tmpDir, f.Filename)); err != nil {
 			logging.LogErrorf("import conf failed: %s", err)
-			ret.Code = -1
-			ret.Msg = err.Error()
+			ret = apicontract.Failure[apicontract.Null](-1, err.Error())
 		}
 	} else {
 		logging.LogErrorf("invalid conf package")
-		ret.Code = -1
-		ret.Msg = "invalid conf package"
+		ret = apicontract.Failure[apicontract.Null](-1, "invalid conf package")
 		return
 	}
 
 	entries, err := os.ReadDir(tmpDir)
 	if err != nil {
 		logging.LogErrorf("import conf failed: %s", err)
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.Null](-1, err.Error())
 		return
 	}
 
 	if 1 != len(entries) {
 		logging.LogErrorf("invalid conf package")
-		ret.Code = -1
-		ret.Msg = "invalid conf package"
+		ret = apicontract.Failure[apicontract.Null](-1, "invalid conf package")
 		return
 	}
 
@@ -669,57 +678,115 @@ func importConf(c *gin.Context) {
 	data, err = os.ReadFile(writePath)
 	if err != nil {
 		logging.LogErrorf("import conf failed: %s", err)
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.Null](-1, err.Error())
 		return
 	}
 
 	importedConf := model.NewAppConf()
 	if err = gulu.JSON.UnmarshalJSON(data, importedConf); err != nil {
 		logging.LogErrorf("import conf failed: %s", err)
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.Null](-1, err.Error())
 		return
 	}
-	preserveImportedAISecrets(importedConf.AI, model.Conf.AI)
-	if nil != importedConf.System && nil != model.Conf.System {
-		// 更新通道是应用级全局设置，导入工作空间配置时保持不变。
-		importedConf.System.UpdateChannel = model.Conf.System.UpdateChannel
+	importAppearance := importedConf.Appearance.Load() != nil
+	importOCR := importedConf.OCR.Load() != nil
+	importSnippet := importedConf.Snippet.Load() != nil
+	importVariables := importedConf.Variables.Load() != nil
+	// 导入的旧版配置与启动加载执行相同的格式迁移。
+	model.ApplyImportedConfMigrations(importedConf, data)
+	preserveImportedAISecrets(importedConf.AI.Load(), model.Conf.AI.Load())
+	if err = validateAIProviderHeaders(importedConf.AI.Load()); err != nil {
+		ret = apicontract.Failure[apicontract.Null](-1, err.Error())
+		return
+	}
+	if nil != importedConf.System.Load() && nil != model.Conf.System.Load(
+	// 更新通道是应用级全局设置，导入工作空间配置时保持不变。
+	) {
+
+		importedConf.System.Load().UpdateChannel = model.Conf.System.Load().UpdateChannel
+		// 网络代理依赖本机环境，导入设置时保持不变。
+		importedConf.System.Load().NetworkProxy = model.Conf.System.Load().NetworkProxy
 	}
 
-	model.Conf.FileTree = importedConf.FileTree
-	model.Conf.Tag = importedConf.Tag
-	model.Conf.Editor = importedConf.Editor
-	model.Conf.Export = importedConf.Export
-	model.Conf.Graph = importedConf.Graph
-	model.Conf.UILayout = importedConf.UILayout
-	model.Conf.System = importedConf.System
-	model.Conf.Keymap = importedConf.Keymap
-	model.Conf.Search = importedConf.Search
-	model.Conf.Flashcard = importedConf.Flashcard
-	model.Conf.AI = importedConf.AI
-	model.Conf.Bazaar = importedConf.Bazaar
+	model.NormalizeAppConf(importedConf)
+	if err = model.LoadChatGPTAccountBindings(importedConf.AI.Load()); err != nil {
+		return apicontract.Failure[apicontract.Null](-1, err.Error())
+	}
+	// 旧版包缺失的新增配置段保持不变；外观资源列表仍以目标工作空间为准。
+	if importAppearance {
+		appearance := importedConf.Appearance.Load()
+		if current := model.Conf.Appearance.Load(); current != nil {
+			appearance.DarkThemes = current.DarkThemes
+			appearance.LightThemes = current.LightThemes
+			appearance.Icons = current.Icons
+		}
+		if appearance.Lang == "" {
+			appearance.Lang = importedConf.Lang
+		}
+		if appearance.Lang == "" {
+			appearance.Lang = model.Conf.Lang
+		}
+		appearance.Lang = util.LangToBCP47(appearance.Lang)
+		model.Conf.Lang = appearance.Lang
+		model.Conf.Appearance.Store(appearance)
+	}
+	if importOCR {
+		model.Conf.OCR.Store(importedConf.OCR.Load())
+	}
+	if importSnippet {
+		model.Conf.Snippet.Store(importedConf.Snippet.Load())
+	}
+	if importVariables {
+		model.Conf.Variables.Store(importedConf.Variables.Load())
+	}
+	model.Conf.FileTree.Store(importedConf.FileTree.Load())
+	model.Conf.Tag.Store(importedConf.Tag.Load())
+	model.Conf.Editor.Store(importedConf.Editor.Load())
+	model.Conf.Export.Store(importedConf.Export.Load())
+	model.Conf.Graph.Store(importedConf.Graph.Load())
+	model.Conf.UILayout.Store(importedConf.UILayout.Load())
+	model.Conf.System.Store(importedConf.System.Load())
+	model.Conf.Keymap.Store(importedConf.Keymap.Load())
+	model.Conf.Search.Store(importedConf.Search.Load())
+	model.Conf.Flashcard.Store(importedConf.Flashcard.Load())
+	model.Conf.AI.Store(importedConf.AI.Load())
+	model.Conf.Bazaar.Store(importedConf.Bazaar.Load())
 	model.Conf.Save()
+	model.ApplyConfRuntime()
 
 	logging.LogInfof("imported conf")
-}
+	return
+})
 
 func preserveImportedAISecrets(imported, current *conf.AI) {
 	if imported == nil || current == nil {
 		return
 	}
+	if imported.Web != nil && current.Web != nil {
+		if imported.Web.APIKey == "" {
+			imported.Web.APIKey = current.Web.APIKey
+		}
+		if imported.Web.ExaAPIKey == "" {
+			imported.Web.ExaAPIKey = current.Web.ExaAPIKey
+		}
+	}
 
 	currentProviders := map[string]*conf.Provider{}
 	for _, provider := range current.Providers {
-		if provider != nil && provider.ID != "" && provider.APIKey != "" {
+		if provider != nil && provider.ID != "" {
 			currentProviders[provider.ID] = provider
 		}
 	}
 	for _, provider := range imported.Providers {
-		if provider != nil && provider.APIKey == "" {
+		if provider != nil {
 			if currentProvider := currentProviders[provider.ID]; currentProvider != nil &&
 				currentProvider.BaseURL == provider.BaseURL && currentProvider.Protocol == provider.Protocol {
-				provider.APIKey = currentProvider.APIKey
+				if provider.APIKey == "" {
+					provider.APIKey = currentProvider.APIKey
+				}
+				if provider.Headers == nil {
+					provider.Headers = currentProvider.Headers
+				}
 			}
 		}
 	}
@@ -739,63 +806,32 @@ func preserveImportedAISecrets(imported, current *conf.AI) {
 	}
 }
 
-func getConf(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+var getConf = contractHandler(apicontract.SystemGetConf, func(c *gin.Context, request apicontract.EmptyRequest) (ret apicontract.Response[apicontract.SystemConfData]) {
+	ret = apicontract.Success(apicontract.SystemConfData{})
 
-	maskedConf, err := model.GetMaskedConf()
+	// 先记录提交序号再读取配置：序号不大于该值的通知都已包含在本次响应中。
+	revision := model.ConfSettingRevision.Load()
+	maskedConf, isPublish, err := visibleConf(c)
 	if err != nil {
-		ret.Code = -1
-		ret.Msg = "get conf failed: " + err.Error()
+		ret = apicontract.Failure[apicontract.SystemConfData](-1, "get conf failed: "+err.Error())
 		return
 	}
 
-	if !maskedConf.Sync.Enabled || (0 == maskedConf.Sync.Provider && !model.IsSubscriber()) {
-		maskedConf.Sync.Stat = model.Conf.Language(53)
+	config, err := systemConfPayload(maskedConf)
+	if err != nil {
+		return apicontract.Failure[apicontract.SystemConfData](-1, "get conf failed: "+err.Error())
 	}
+	ret = apicontract.Success(apicontract.SystemConfData{Conf: config, Start: !util.IsUILoaded.Load(), IsPublish: isPublish,
+		SettingTasks: activeSettingTasks(), Revision: revision})
+	return
+})
 
-	// REF: https://github.com/siyuan-note/siyuan/issues/11364
-	role := model.GetGinContextRole(c)
-	isPublish := model.IsReadOnlyRole(role)
-	if isPublish {
-		maskedConf.ReadOnly = true
-	}
-	if !model.IsValidRole(role, []model.Role{
-		model.RoleAdministrator,
-	}) {
-		model.HideConfSecret(maskedConf)
-	}
-
-	if model.IsReadOnlyRoleContext(c) {
-		maskedConf.UILayout = &conf.UILayout{}
-	}
-
-	// 浏览器环境下不返回工作空间绝对路径，避免泄露用户名等敏感信息
-	// 原生客户端（桌面 Electron、移动端）UA 以 "SiYuan/" 开头，照常返回真实路径
-	// REF: https://github.com/siyuan-note/siyuan/issues/17410
-	if util.IsBrowserRequest(c) {
-		maskedConf.System.WorkspaceDir = ""
-		maskedConf.System.AppDir = ""
-		maskedConf.System.ConfDir = ""
-		maskedConf.System.DataDir = ""
-		maskedConf.System.HomeDir = ""
-	}
-
-	ret.Data = map[string]any{
-		"conf":      maskedConf,
-		"start":     !util.IsUILoaded,
-		"isPublish": isPublish,
-	}
-}
-
-func ensureOnboarding(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+var ensureOnboarding = contractHandler(apicontract.SystemEnsureOnboarding, func(c *gin.Context, request apicontract.EmptyRequest) (ret apicontract.Response[*apicontract.SystemOnboarding]) {
+	ret = apicontract.Success((*apicontract.SystemOnboarding)(nil))
 
 	onboarding, notebookCreated, err := model.EnsureOnboarding()
 	if err != nil {
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[*apicontract.SystemOnboarding](-1, err.Error())
 		return
 	}
 	if notebookCreated {
@@ -806,86 +842,60 @@ func ensureOnboarding(c *gin.Context) {
 			util.PushEvent(evt)
 		}
 	}
-	ret.Data = onboarding
-}
+	ret = apicontract.Success(systemOnboardingPayload(onboarding))
+	return
+})
 
-func dismissOnboarding(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
-	ret.Data = model.DismissOnboarding()
-}
+var dismissOnboarding = contractHandler(apicontract.SystemDismissOnboarding, func(c *gin.Context, request apicontract.EmptyRequest) (ret apicontract.Response[*apicontract.SystemOnboarding]) {
+	ret = apicontract.Success((*apicontract.SystemOnboarding)(nil))
+	ret = apicontract.Success(systemOnboardingPayload(model.DismissOnboarding()))
+	return
+})
 
-func setUILayout(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
-
-	if util.ReadOnly {
-		return
+var setUILayout = contractHandler(apicontract.SystemSetUILayout, func(c *gin.Context, request apicontract.SystemUILayoutRequest) (ret apicontract.Response[apicontract.Null]) {
+	if err := request.LayoutError(); err != nil {
+		return apicontract.Failure[apicontract.Null](-1, err.Error())
 	}
+	ret = apicontract.Success(apicontract.Null{})
 
-	arg, ok := util.JsonArg(c, ret)
-	if !ok {
-		return
-	}
-
-	param, err := gulu.JSON.MarshalJSON(arg["layout"])
+	param, err := gulu.JSON.MarshalJSON(request.Layout)
 	if err != nil {
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.Null](-1, err.Error())
 		return
 	}
 
 	uiLayout := &conf.UILayout{}
 	if err = gulu.JSON.UnmarshalJSON(param, uiLayout); err != nil {
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.Null](-1, err.Error())
 		return
 	}
 
 	model.Conf.SetUILayout(uiLayout)
 	model.Conf.Save()
-}
+	return
+}, systemUILayoutPreflight)
 
-func setAPIToken(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+var setAPIToken = contractHandler(apicontract.SystemSetAPIToken, func(c *gin.Context, request apicontract.SystemAPITokenRequest) (ret apicontract.Response[apicontract.Null]) {
+	ret = apicontract.Success(apicontract.Null{})
 
-	arg, ok := util.JsonArg(c, ret)
-	if !ok {
-		return
-	}
-
-	token := arg["token"].(string)
+	token := request.Token
 	token = util.RemoveInvalid(token)
 	token = strings.TrimSpace(token)
 
 	// 仅校验新设置的 token，清空（禁用 API token 鉴权）不做长度限制 https://github.com/siyuan-note/siyuan/security/advisories/GHSA-m6w6-p7pc-fpg2
 	if 0 < len(token) && 8 > len(token) {
-		ret.Code = -1
-		ret.Msg = model.Conf.Language(356)
+		ret = apicontract.Failure[apicontract.Null](-1, model.Conf.Language(356))
 		return
 	}
 
-	model.Conf.Api.Token = token
-	model.Conf.Save()
-}
+	model.UpdateAPIConf(func(s *conf.API) { s.Token = token })
+	return
+})
 
-func setAccessAuthCode(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+var setAccessAuthCode = contractHandler(apicontract.SystemSetAccessAuthCode, func(c *gin.Context, request apicontract.SystemAccessAuthCodeRequest) (ret apicontract.Response[apicontract.Null]) {
+	ret = apicontract.Success(apicontract.Null{})
 
-	if util.ContainerDocker == util.Container {
-		ret.Code = -1
-		ret.Msg = "access auth code cannot be set in Docker container"
-		return
-	}
-
-	arg, ok := util.JsonArg(c, ret)
-	if !ok {
-		return
-	}
-
-	aac := arg["accessAuthCode"].(string)
+	aac := request.AccessAuthCode
 	masked := model.MaskedAccessAuthCode == aac
 	if masked {
 		aac = model.Conf.AccessAuthCode
@@ -897,15 +907,13 @@ func setAccessAuthCode(c *gin.Context) {
 	aac = strings.TrimSpace(aac)
 
 	if 0 < originalLen && 0 == len(aac) {
-		ret.Code = -1
-		ret.Msg = model.Conf.Language(287)
+		ret = apicontract.Failure[apicontract.Null](-1, model.Conf.Language(287))
 		return
 	}
 
 	// 仅校验新设置的密码，掩码回填的已有密码和清空（禁用锁屏）不做长度限制，避免用户被锁定 https://github.com/siyuan-note/siyuan/security/advisories/GHSA-w3xh-mmmh-r54v
 	if !masked && 0 < len(aac) && 8 > len(aac) {
-		ret.Code = -1
-		ret.Msg = model.Conf.Language(355)
+		ret = apicontract.Failure[apicontract.Null](-1, model.Conf.Language(355))
 		return
 	}
 	if aac == "" {
@@ -918,35 +926,35 @@ func setAccessAuthCode(c *gin.Context) {
 				util.SiYuanAccessAuthCodeBypass)
 		}
 		if err != nil {
-			ret.Code = -1
-			ret.Msg = model.Conf.Language(369)
+			ret = apicontract.Failure[apicontract.Null](-1, model.Conf.Language(369))
 			logging.LogWarnf("reject clearing the last usable access authentication method [ip=%s]: %s", c.ClientIP(), err)
 			return
 		}
 	}
 
+	session := util.GetSession(c)
+	workspaceSession := util.GetWorkspaceSession(session)
+	if !model.IsWorkspaceSessionAuthenticated(workspaceSession) {
+		model.BindDesktopSession(c, workspaceSession, false)
+	}
 	model.Conf.AccessAuthCode = aac
 	model.Conf.Save()
 
-	session := util.GetSession(c)
-	workspaceSession := util.GetWorkspaceSession(session)
-	workspaceSession.AccessAuthCode = aac
+	model.SetAccessCodeSession(workspaceSession, aac)
 	session.Save(c)
 	go func() {
 		time.Sleep(200 * time.Millisecond)
 		util.ReloadUI()
 	}()
 	return
-}
+}, systemAccessAuthPreflight)
 
-func setOIDC(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+var setOIDC = contractHandler(apicontract.SystemSetOIDC, func(c *gin.Context, request apicontract.SystemOIDCRequest) (ret apicontract.Response[*apicontract.SystemOIDC]) {
+	ret = apicontract.Success((*apicontract.SystemOIDC)(nil))
 
-	config := conf.NewOIDC()
-	if err := c.ShouldBindJSON(config); err != nil {
-		ret.Code = -1
-		ret.Msg = model.Conf.Language(369)
+	config := model.SystemOIDCConfig(request.SystemOIDC)
+	if err := request.ParseError(); err != nil {
+		ret = apicontract.Failure[*apicontract.SystemOIDC](-1, model.Conf.Language(369))
 		logging.LogWarnf("bind OIDC configuration failed [ip=%s]: %s", c.ClientIP(), err)
 		return
 	}
@@ -955,98 +963,72 @@ func setOIDC(c *gin.Context) {
 	requireRemoteAuthentication := util.ContainerDocker == util.Container || !model.IsLocalRequest(c)
 	if err := model.ValidateOIDCConfigurationChange(c.Request.Context(), config, requireRemoteAuthentication,
 		model.Conf.AccessAuthCode != "", util.SiYuanAccessAuthCodeBypass); err != nil {
-		ret.Code = -1
-		ret.Msg = model.Conf.Language(369)
+		ret = apicontract.Failure[*apicontract.SystemOIDC](-1, model.Conf.Language(369))
 		logging.LogErrorf("validate OIDC configuration change failed [ip=%s]: %s", c.ClientIP(), err)
 		return
 	}
 	configurationChanged := !reflect.DeepEqual(currentConfig, config)
 	if configurationChanged && config.Enabled {
-		ret.Code = -1
-		ret.Msg = model.Conf.Language(369)
+		ret = apicontract.Failure[*apicontract.SystemOIDC](-1, model.Conf.Language(369))
 		logging.LogWarnf("reject unverified OIDC configuration change [ip=%s]", c.ClientIP())
 		return
 	}
 	model.Conf.SetOIDC(config)
 	masked, err := model.GetMaskedConf()
 	if err != nil {
-		ret.Code = -1
-		ret.Msg = model.Conf.Language(369)
+		ret = apicontract.Failure[*apicontract.SystemOIDC](-1, model.Conf.Language(369))
 		logging.LogErrorf("get masked configuration after setting OIDC failed: %s", err)
 		return
 	}
-	ret.Data = masked.OIDC
+	ret = apicontract.Success(model.SystemOIDCPayload(masked.OIDC))
 	if configurationChanged {
 		util.CloseOIDCSessions()
 	}
-}
-
-func setFollowSystemLockScreen(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
-
-	arg, ok := util.JsonArg(c, ret)
-	if !ok {
-		return
-	}
-
-	lockScreenMode := int(arg["lockScreenMode"].(float64))
-
-	model.Conf.System.LockScreenMode = lockScreenMode
-	model.Conf.Save()
 	return
-}
+})
 
-func getSysFonts(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+var setFollowSystemLockScreen = contractHandler(apicontract.SetFollowSystemLockScreen, func(c *gin.Context, request apicontract.LockScreenRequest) apicontract.Response[apicontract.Null] {
+	model.UpdateSystemConf(func(s *conf.System) { s.LockScreenMode = int(request.LockScreenMode) })
+	return apicontract.Success(apicontract.Null{})
+})
+
+var getSysFonts = contractHandler(apicontract.SystemGetSysFonts, func(c *gin.Context, request apicontract.EmptyRequest) (ret apicontract.Response[[]*apicontract.SystemFont]) {
+	ret = apicontract.Success(([]*apicontract.SystemFont)(nil))
 
 	fonts := util.LoadSysFonts()
-	ret.Data = fonts
-}
+	ret = apicontract.Success(systemFontsPayload(fonts))
+	return
+})
 
-func getCustomFonts(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+var getCustomFonts = contractHandler(apicontract.SystemGetCustomFonts, func(c *gin.Context, request apicontract.EmptyRequest) (ret apicontract.Response[[]*apicontract.SystemCustomFont]) {
+	ret = apicontract.Success(([]*apicontract.SystemCustomFont)(nil))
 
-	ret.Data = util.LoadCustomFonts()
-}
+	ret = apicontract.Success(systemCustomFontsPayload(util.LoadCustomFonts()))
+	return
+})
 
-func importCustomFont(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+var importCustomFont = contractHandler(apicontract.SystemImportCustomFont, func(c *gin.Context, request apicontract.SystemImportFileRequest) (ret apicontract.Response[*apicontract.SystemCustomFont]) {
+	ret = apicontract.Success((*apicontract.SystemCustomFont)(nil))
 
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, util.MaxCustomFontSize+1024*1024)
-	fileHeader, err := c.FormFile("file")
-	if err != nil {
-		var maxBytesError *http.MaxBytesError
-		if errors.As(err, &maxBytesError) {
-			ret.Code = http.StatusRequestEntityTooLarge
-			ret.Msg = "font file is too large"
-		} else {
-			ret.Code = http.StatusBadRequest
-			ret.Msg = "Field [file] must not be empty"
-		}
-		return
+	fileHeader := request.File
+	if fileHeader == nil {
+		return apicontract.Failure[*apicontract.SystemCustomFont](400, "Field [file] must not be empty")
 	}
 	if util.MaxCustomFontSize < fileHeader.Size {
-		ret.Code = http.StatusRequestEntityTooLarge
-		ret.Msg = "font file is too large"
+		ret = apicontract.Failure[*apicontract.SystemCustomFont](http.StatusRequestEntityTooLarge, "font file is too large")
 		return
 	}
 
 	file, err := fileHeader.Open()
 	if err != nil {
-		ret.Code = http.StatusBadRequest
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[*apicontract.SystemCustomFont](http.StatusBadRequest, err.Error())
 		return
 	}
 	defer file.Close()
 
 	tempFile, err := util.CreateCustomFontTemp()
 	if err != nil {
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[*apicontract.SystemCustomFont](-1, err.Error())
 		return
 	}
 	tempPath := tempFile.Name()
@@ -1055,134 +1037,149 @@ func importCustomFont(c *gin.Context) {
 	written, copyErr := io.Copy(tempFile, io.LimitReader(file, util.MaxCustomFontSize+1))
 	closeErr := tempFile.Close()
 	if copyErr != nil {
-		ret.Code = http.StatusBadRequest
-		ret.Msg = copyErr.Error()
+		ret = apicontract.Failure[*apicontract.SystemCustomFont](http.StatusBadRequest, copyErr.Error())
 		return
 	}
 	if closeErr != nil {
-		ret.Code = -1
-		ret.Msg = closeErr.Error()
+		ret = apicontract.Failure[*apicontract.SystemCustomFont](-1, closeErr.Error())
 		return
 	}
 	if util.MaxCustomFontSize < written {
-		ret.Code = http.StatusRequestEntityTooLarge
-		ret.Msg = "font file is too large"
+		ret = apicontract.Failure[*apicontract.SystemCustomFont](http.StatusRequestEntityTooLarge, "font file is too large")
 		return
 	}
 
 	font, _, err := util.InstallCustomFont(tempPath)
 	if err != nil {
-		ret.Code = http.StatusBadRequest
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[*apicontract.SystemCustomFont](http.StatusBadRequest, err.Error())
 		return
 	}
-	ret.Data = font
-}
+	ret = apicontract.Success(systemCustomFontPayload(font))
+	return
+}, systemImportFontPreflight)
 
-func removeCustomFont(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+var removeCustomFont = contractHandler(apicontract.SystemRemoveCustomFont, func(c *gin.Context, request apicontract.SystemRemoveCustomFontRequest) (ret apicontract.Response[apicontract.SystemRemoveCustomFontData]) {
+	ret = apicontract.Success(apicontract.SystemRemoveCustomFontData{})
 
-	arg, ok := util.JsonArg(c, ret)
-	if !ok {
-		return
-	}
-	id, _ := arg["id"].(string)
+	id := request.ID
 	font, err := util.RemoveCustomFont(id)
 	if err != nil {
+		code := http.StatusBadRequest
 		if os.IsNotExist(err) {
-			ret.Code = http.StatusNotFound
-		} else {
-			ret.Code = http.StatusBadRequest
+			code = http.StatusNotFound
 		}
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.SystemRemoveCustomFontData](code, err.Error())
 		return
 	}
 
 	var editor *conf.Editor
-	if model.Conf.Editor.FontFamily == font.Family {
-		model.Conf.Editor.FontFamily = ""
-		model.Conf.Editor.FontWeight = 400
-		model.Conf.Editor.FontFamilyDisplay = ""
-		model.Conf.Save()
-		editor = model.Conf.Editor
-	}
-	ret.Data = map[string]any{
-		"font":   font,
-		"editor": editor,
-	}
-}
-
-func version(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
-
-	ret.Data = util.Ver
-}
-
-func currentTime(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
-
-	ret.Data = util.CurrentTimeMillis()
-}
-
-func bootProgress(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
-
-	progress, details := util.GetBootProgressDetails()
-	ret.Data = map[string]any{"progress": progress, "details": details}
-}
-
-// bootProgressSSE 以 Server-Sent Events 推送启动进度，仅在进度发生变化时写一帧。
-func bootProgressSSE(c *gin.Context) {
-	c.Header("Content-Type", "text/event-stream")
-	c.Header("Cache-Control", "no-cache")
-	c.Header("Connection", "keep-alive")
-	c.Writer.Flush()
-
-	flusher, ok := c.Writer.(http.Flusher)
-	if !ok {
-		return
-	}
-
-	// 连接后立即推送当前进度，避免等待第一个 tick
-	progress, details := util.GetBootProgressDetails()
-	lastProgress, lastDetails := progress, details
-	if err := writeBootProgressSSE(c, flusher, progress, details); err != nil {
-		return
-	}
-	if 100 <= progress {
-		return
-	}
-
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	ctx := c.Request.Context()
-	for {
-		select {
-		case <-ctx.Done():
-			// 客户端断开连接
-			return
-		case <-ticker.C:
-			progress, details = util.GetBootProgressDetails()
-			if progress == lastProgress && details == lastDetails {
-				continue
-			}
-			lastProgress, lastDetails = progress, details
-			if err := writeBootProgressSSE(c, flusher, progress, details); err != nil {
-				return
-			}
-			if 100 <= progress {
-				return
-			}
+	var appearance *conf.Appearance
+	globalFonts := make([]*conf.EditorFont, 0, len(model.Conf.Appearance.Load().GlobalFontFamilies))
+	for _, selectedFont := range model.Conf.Appearance.Load().GlobalFontFamilies {
+		if nil != selectedFont && selectedFont.Family != font.Family {
+			globalFonts = append(globalFonts, selectedFont)
 		}
 	}
-}
+	if len(globalFonts) != len(model.Conf.Appearance.Load().GlobalFontFamilies) {
+		appearance = model.UpdateAppearanceConf(func(a *conf.Appearance) { a.GlobalFontFamilies = globalFonts })
+	}
+	fonts := make([]*conf.EditorFont, 0, len(model.Conf.Editor.Load().FontFamilies))
+	for _, selectedFont := range model.Conf.Editor.Load().FontFamilies {
+		if nil != selectedFont && selectedFont.Family != font.Family {
+			fonts = append(fonts, selectedFont)
+		}
+	}
+	codeFonts := make([]*conf.EditorFont, 0, len(model.Conf.Editor.Load().CodeFontFamilies))
+	for _, selectedFont := range model.Conf.Editor.Load().CodeFontFamilies {
+		if nil != selectedFont && selectedFont.Family != font.Family {
+			codeFonts = append(codeFonts, selectedFont)
+		}
+	}
+	if len(fonts) != len(model.Conf.Editor.Load().FontFamilies) ||
+		len(codeFonts) != len(model.Conf.Editor.Load().CodeFontFamilies) {
+		editor = model.UpdateEditorConf(func(e *conf.Editor) {
+			e.FontFamilies = fonts
+			e.CodeFontFamilies = codeFonts
+			e.FontFamily = ""
+			e.FontWeight = 400
+			e.FontFamilyDisplay = ""
+		})
+	}
+	if nil != appearance {
+		util.BroadcastByType("main", "setAppearance", 0, "", appearance)
+	}
+	ret = apicontract.Success(apicontract.SystemRemoveCustomFontData{Font: systemCustomFontPayload(font), Editor: settingEditorPayload(editor), Appearance: settingAppearancePayload(appearance)})
+	return
+})
+
+var version = contractHandler(apicontract.Version, func(c *gin.Context, request apicontract.EmptyRequest) apicontract.Response[string] {
+	return apicontract.Success(util.Ver)
+})
+
+var currentTime = contractHandler(apicontract.CurrentTime, func(c *gin.Context, request apicontract.EmptyRequest) apicontract.Response[int64] {
+	return apicontract.Success(util.CurrentTimeMillis())
+})
+
+var bootProgress = contractHandler(apicontract.BootProgress, func(c *gin.Context, request apicontract.EmptyRequest) apicontract.Response[apicontract.BootProgressData] {
+	progress, details := util.GetBootProgressDetails()
+	return apicontract.Success(apicontract.BootProgressData{Progress: progress, Details: details})
+})
+
+var getBootAppearance = contractHandler(apicontract.SystemGetBootAppearance, func(c *gin.Context, request apicontract.EmptyRequest) apicontract.Response[*apicontract.SettingBootAppearance] {
+	if !model.IsLocalRequest(c) {
+		return apicontract.EmptyHTTPResponse[*apicontract.SettingBootAppearance](http.StatusForbidden)
+	}
+	c.Header("Cache-Control", "no-store")
+	return apicontract.Success(settingBootAppearancePayload(model.GetBootAppearance()))
+})
+
+// bootProgressSSE 以 Server-Sent Events 推送启动进度，仅在进度发生变化时写一帧。
+var bootProgressSSE = contractHandler(apicontract.SystemBootProgressSSE, func(c *gin.Context, request apicontract.EmptyRequest) apicontract.Response[apicontract.Null] {
+	return apicontract.StreamSSE[apicontract.Null](func(_ http.ResponseWriter, _ *http.Request) {
+		c.Header("Content-Type", "text/event-stream")
+		c.Header("Cache-Control", "no-cache")
+		c.Header("Connection", "keep-alive")
+		c.Writer.Flush()
+
+		flusher := c.Writer
+
+		// 连接后立即推送当前进度，避免等待第一个 tick
+		progress, details := util.GetBootProgressDetails()
+		lastProgress, lastDetails := progress, details
+		if err := writeBootProgressSSE(c, flusher, progress, details); err != nil {
+			return
+		}
+		if 100 <= progress {
+			return
+		}
+
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		ctx := c.Request.Context()
+		for {
+			select {
+			case <-ctx.Done():
+				// 客户端断开连接
+				return
+			case <-ticker.C:
+				progress, details = util.GetBootProgressDetails()
+				if progress == lastProgress && details == lastDetails {
+					continue
+				}
+				lastProgress, lastDetails = progress, details
+				if err := writeBootProgressSSE(c, flusher, progress, details); err != nil {
+					return
+				}
+				if 100 <= progress {
+					return
+				}
+			}
+		}
+	})
+})
 
 func writeBootProgressSSE(c *gin.Context, flusher http.Flusher, progress int32, details string) error {
-	data, err := json.Marshal(map[string]any{"progress": progress, "details": details})
+	data, err := json.Marshal(apicontract.BootProgressData{Progress: progress, Details: details})
 	if err != nil {
 		return err
 	}
@@ -1193,169 +1190,124 @@ func writeBootProgressSSE(c *gin.Context, flusher http.Flusher, progress int32, 
 	return nil
 }
 
-func setAppearanceMode(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+var setAppearanceMode = contractHandler(apicontract.SystemSetAppearanceMode, func(c *gin.Context, request apicontract.SystemAppearanceModeRequest) (ret apicontract.Response[apicontract.SystemAppearanceData]) {
+	ret = apicontract.Success(apicontract.SystemAppearanceData{})
 
-	arg, ok := util.JsonArg(c, ret)
-	if !ok {
-		return
-	}
-
-	mode := int(arg["mode"].(float64))
-	model.Conf.Appearance.Mode = mode
+	mode := int(request.Mode)
+	model.UpdateAppearanceConf(func(s *conf.Appearance) { s.Mode = mode })
 	model.LoadThemes()
+	model.WatchThemes()
 	model.Conf.Save()
 
-	ret.Data = map[string]any{
-		"appearance": model.Conf.Appearance,
-	}
-}
+	ret = apicontract.Success(apicontract.SystemAppearanceData{Appearance: settingAppearancePayload(model.Conf.Appearance.Load())})
+	return
+})
 
-func setNetworkServe(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
-
-	arg, ok := util.JsonArg(c, ret)
-	if !ok {
-		return
-	}
-
-	networkServe := arg["networkServe"].(bool)
-	model.Conf.System.NetworkServe = networkServe
-	model.Conf.Save()
-
+var setNetworkServe = contractHandler(apicontract.SetNetworkServe, func(c *gin.Context, request apicontract.NetworkServeRequest) apicontract.Response[apicontract.Null] {
+	model.UpdateSystemConf(func(s *conf.System) { s.NetworkServe = request.NetworkServe })
 	util.PushMsg(model.Conf.Language(42), 1000*15)
 	time.Sleep(time.Second * 3)
-}
+	return apicontract.Success(apicontract.Null{})
+})
 
-func setNetworkServeTLS(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
-
-	arg, ok := util.JsonArg(c, ret)
-	if !ok {
-		return
-	}
-
-	networkServeTLS := arg["networkServeTLS"].(bool)
-	model.Conf.System.NetworkServeTLS = networkServeTLS
-	model.Conf.Save()
-
+var setNetworkServeTLS = contractHandler(apicontract.SetNetworkServeTLS, func(c *gin.Context, request apicontract.NetworkServeTLSRequest) apicontract.Response[apicontract.Null] {
+	model.UpdateSystemConf(func(s *conf.System) { s.NetworkServeTLS = request.NetworkServeTLS })
 	util.PushMsg(model.Conf.Language(42), 1000*15)
 	time.Sleep(time.Second * 3)
-}
+	return apicontract.Success(apicontract.Null{})
+})
 
-func exportTLSCACert(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+var exportTLSCACert = contractHandler(apicontract.SystemExportTLSCACert, func(c *gin.Context, request apicontract.EmptyRequest) (ret apicontract.Response[apicontract.SystemPathData]) {
+	ret = apicontract.Success(apicontract.SystemPathData{})
 
 	caCertPath := filepath.Join(util.ConfDir, util.TLSCACertFilename)
 	if !gulu.File.IsExist(caCertPath) {
-		ret.Code = -1
-		ret.Msg = "CA certificate not found"
+		ret = apicontract.Failure[apicontract.SystemPathData](-1, "CA certificate not found")
 		return
 	}
 
 	tmpDir := filepath.Join(util.TempDir, "export")
 	if err := os.MkdirAll(tmpDir, 0755); err != nil {
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.SystemPathData](-1, err.Error())
 		return
 	}
 
 	exportPath := filepath.Join(tmpDir, util.TLSCACertFilename)
 	if err := gulu.File.CopyFile(caCertPath, exportPath); err != nil {
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.SystemPathData](-1, err.Error())
 		return
 	}
 
-	ret.Data = map[string]any{
-		"path": "/export/" + util.TLSCACertFilename,
-	}
-}
+	ret = apicontract.Success(apicontract.SystemPathData{Path: "/export/" + util.TLSCACertFilename})
+	return
+})
 
-func exportTLSCABundle(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+var exportTLSCABundle = contractHandler(apicontract.SystemExportTLSCABundle, func(c *gin.Context, request apicontract.EmptyRequest) (ret apicontract.Response[apicontract.SystemPathData]) {
+	ret = apicontract.Success(apicontract.SystemPathData{})
 
 	caCertPath := filepath.Join(util.ConfDir, util.TLSCACertFilename)
 	caKeyPath := filepath.Join(util.ConfDir, util.TLSCAKeyFilename)
 
 	if !gulu.File.IsExist(caCertPath) || !gulu.File.IsExist(caKeyPath) {
-		ret.Code = -1
-		ret.Msg = "CA certificate not found, please enable TLS first"
+		ret = apicontract.Failure[apicontract.SystemPathData](-1, "CA certificate not found, please enable TLS first")
 		return
 	}
 
 	tmpDir := filepath.Join(util.TempDir, "export", "ca-bundle")
 	os.RemoveAll(tmpDir)
 	if err := os.MkdirAll(tmpDir, 0755); err != nil {
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.SystemPathData](-1, err.Error())
 		return
 	}
 	defer os.RemoveAll(tmpDir)
 
 	if err := gulu.File.CopyFile(caCertPath, filepath.Join(tmpDir, util.TLSCACertFilename)); err != nil {
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.SystemPathData](-1, err.Error())
 		return
 	}
 	if err := gulu.File.CopyFile(caKeyPath, filepath.Join(tmpDir, util.TLSCAKeyFilename)); err != nil {
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.SystemPathData](-1, err.Error())
 		return
 	}
 
 	zipPath := filepath.Join(util.TempDir, "export", "ca-bundle.zip")
 	zipFile, err := gulu.Zip.Create(zipPath)
 	if err != nil {
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.SystemPathData](-1, err.Error())
 		return
 	}
 
 	if err := zipFile.AddDirectory("", tmpDir); err != nil {
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.SystemPathData](-1, err.Error())
 		return
 	}
 
 	if err := zipFile.Close(); err != nil {
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.SystemPathData](-1, err.Error())
 		return
 	}
 
-	ret.Data = map[string]any{
-		"path": "/export/ca-bundle.zip",
-	}
-}
+	ret = apicontract.Success(apicontract.SystemPathData{Path: "/export/ca-bundle.zip"})
+	return
+})
 
-func importTLSCABundle(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+var importTLSCABundle = contractHandler(apicontract.SystemImportTLSCABundle, func(c *gin.Context, request apicontract.SystemImportFileRequest) (ret apicontract.Response[apicontract.SystemMessageData]) {
+	ret = apicontract.Success(apicontract.SystemMessageData{})
 
-	file, err := c.FormFile("file")
-	if err != nil {
-		ret.Code = -1
-		ret.Msg = "[file] is required: " + err.Error()
-		return
+	file := request.File
+	if file == nil {
+		return apicontract.Failure[apicontract.SystemMessageData](-1, "[file] is required: "+http.ErrMissingFile.Error())
 	}
 
 	tmpDir := filepath.Join(util.TempDir, "import")
 	if err := os.MkdirAll(tmpDir, 0755); err != nil {
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.SystemMessageData](-1, err.Error())
 		return
 	}
 
 	tmpZipPath := filepath.Join(tmpDir, "ca-bundle.zip")
 	if err := c.SaveUploadedFile(file, tmpZipPath); err != nil {
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.SystemMessageData](-1, err.Error())
 		return
 	}
 	defer os.Remove(tmpZipPath)
@@ -1363,8 +1315,7 @@ func importTLSCABundle(c *gin.Context) {
 	extractDir := filepath.Join(tmpDir, "ca-bundle")
 	os.RemoveAll(extractDir)
 	if err := gulu.Zip.Unzip(tmpZipPath, extractDir); err != nil {
-		ret.Code = -1
-		ret.Msg = "failed to extract zip file: " + err.Error()
+		ret = apicontract.Failure[apicontract.SystemMessageData](-1, "failed to extract zip file: "+err.Error())
 		return
 	}
 	defer os.RemoveAll(extractDir)
@@ -1372,147 +1323,104 @@ func importTLSCABundle(c *gin.Context) {
 	caCertPath := filepath.Join(extractDir, util.TLSCACertFilename)
 	caCertPEM, err := os.ReadFile(caCertPath)
 	if err != nil {
-		ret.Code = -1
-		ret.Msg = "ca.crt not found in zip file"
+		ret = apicontract.Failure[apicontract.SystemMessageData](-1, "ca.crt not found in zip file")
 		return
 	}
 
 	caKeyPath := filepath.Join(extractDir, util.TLSCAKeyFilename)
 	caKeyPEM, err := os.ReadFile(caKeyPath)
 	if err != nil {
-		ret.Code = -1
-		ret.Msg = "ca.key not found in zip file"
+		ret = apicontract.Failure[apicontract.SystemMessageData](-1, "ca.key not found in zip file")
 		return
 	}
 
 	if err := util.ImportCABundle(string(caCertPEM), string(caKeyPEM)); err != nil {
-		ret.Code = -1
-		ret.Msg = err.Error()
+		ret = apicontract.Failure[apicontract.SystemMessageData](-1, err.Error())
 		return
 	}
 
-	ret.Data = map[string]any{
-		"msg": "CA bundle imported successfully. Please restart to apply changes.",
-	}
-}
+	ret = apicontract.Success(apicontract.SystemMessageData{Msg: "CA bundle imported successfully. Please restart to apply changes."})
+	return
+})
 
-func setAutoLaunch(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
-
-	arg, ok := util.JsonArg(c, ret)
-	if !ok {
-		return
-	}
-
-	autoLaunch := int(arg["autoLaunch"].(float64))
-	model.Conf.System.AutoLaunch2 = autoLaunch
+var setAutoLaunch = contractHandler(apicontract.SetAutoLaunch, func(c *gin.Context, request apicontract.AutoLaunchRequest) apicontract.Response[apicontract.Null] {
+	model.UpdateSystemConf(func(value *conf.System) { value.AutoLaunch2 = int(request.AutoLaunch) })
 	model.Conf.Save()
-}
+	return apicontract.Success(apicontract.Null{})
+})
 
-func setDownloadInstallPkg(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
+var setDownloadInstallPkg = contractHandler(apicontract.SetDownloadInstallPkg, func(c *gin.Context, request apicontract.DownloadInstallPkgRequest) apicontract.Response[apicontract.Null] {
+	model.UpdateSystemConf(func(s *conf.System) { s.DownloadInstallPkg = request.DownloadInstallPkg })
+	return apicontract.Success(apicontract.Null{})
+})
 
-	arg, ok := util.JsonArg(c, ret)
-	if !ok {
-		return
+var setSettingsWindow = contractHandler(apicontract.SetSettingsWindow, func(c *gin.Context, request apicontract.SettingsWindowRequest) apicontract.Response[apicontract.Null] {
+	model.UpdateSystemConf(func(s *conf.System) { s.SettingsWindow = request.SettingsWindow })
+	return apicontract.Success(apicontract.Null{})
+})
+
+var setUpdateChannel = contractHandler(apicontract.SetUpdateChannel, func(c *gin.Context, request apicontract.UpdateChannelRequest) apicontract.Response[apicontract.Null] {
+	if err := model.SetUpdateChannel(request.UpdateChannel); err != nil {
+		return apicontract.Failure[apicontract.Null](-1, err.Error())
 	}
+	return apicontract.Success(apicontract.Null{})
+})
 
-	downloadInstallPkg := arg["downloadInstallPkg"].(bool)
-	model.Conf.System.DownloadInstallPkg = downloadInstallPkg
-	model.Conf.Save()
-}
-
-func setUpdateChannel(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
-
-	arg, ok := util.JsonArg(c, ret)
-	if !ok {
-		return
-	}
-
-	updateChannel, ok := arg["updateChannel"].(string)
-	if !ok {
-		ret.Code = -1
-		ret.Msg = "update channel is invalid"
-		return
-	}
-	if err := model.SetUpdateChannel(updateChannel); err != nil {
-		ret.Code = -1
-		ret.Msg = err.Error()
-	}
-}
-
-func setNetworkProxy(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
-
-	arg, ok := util.JsonArg(c, ret)
-	if !ok {
-		return
-	}
-
-	scheme := arg["scheme"].(string)
-	host := arg["host"].(string)
-	port := arg["port"].(string)
-	model.Conf.System.NetworkProxy = &conf.NetworkProxy{
-		Scheme: scheme,
-		Host:   host,
-		Port:   port,
-	}
-	model.Conf.Save()
-
-	proxyURL := model.Conf.System.NetworkProxy.String()
-	util.SetNetworkProxy(proxyURL)
+var setNetworkProxy = contractHandler(apicontract.SetNetworkProxy, func(c *gin.Context, request apicontract.NetworkProxy) apicontract.Response[apicontract.Null] {
+	model.UpdateSystemConf(func(s *conf.System) {
+		s.NetworkProxy = &conf.NetworkProxy{Scheme: request.Scheme, Host: request.Host, Port: request.Port}
+	})
 	util.PushMsg(model.Conf.Language(102), 3000)
-}
+	return apicontract.Success(apicontract.Null{})
+})
 
-func addUIProcess(c *gin.Context) {
-	pid := c.Query("pid")
-	util.UIProcessIDs.Store(pid, true)
-}
-
-func exit(c *gin.Context) {
-	ret := gulu.Ret.NewResult()
-	defer c.JSON(http.StatusOK, ret)
-
-	arg, ok := util.JsonArg(c, ret)
-	if !ok {
-		return
+var addUIProcess = contractHandler(apicontract.SystemAddUIProcess, func(c *gin.Context, request apicontract.EmptyRequest) apicontract.Response[apicontract.Null] {
+	pidInt, err := strconv.Atoi(c.Query("pid"))
+	if err != nil || 0 >= pidInt {
+		return apicontract.EmptyHTTPResponse[apicontract.Null](http.StatusOK)
 	}
 
-	forceArg := arg["force"]
-	var force bool
-	if nil != forceArg {
-		force = forceArg.(bool)
+	// 限制注册表中的 UI 进程数，防止无界增长导致内存耗尽
+	if util.UIProcessCount() >= util.MaxUIProcessCount {
+		return apicontract.EmptyHTTPResponse[apicontract.Null](http.StatusOK)
 	}
+	util.UIProcessIDs.Store(strconv.Itoa(pidInt), true)
+	return apicontract.EmptyHTTPResponse[apicontract.Null](http.StatusOK)
+})
 
-	execInstallPkgArg := arg["execInstallPkg"] // 0：默认检查新版本，1：不返回安装包，2：返回安装包路径并退出
-	execInstallPkg := 0
-	if nil != execInstallPkgArg {
-		execInstallPkg = int(execInstallPkgArg.(float64))
-	}
+var exit = contractHandler(apicontract.SystemExit, exitSystem)
 
-	setCurrentWorkspaceArg := arg["setCurrentWorkspace"]
+var closeSystem = model.CloseWithContext
+var recoverSystemExit = model.RecoverWorkspaceExit
+var finishSystemExit = model.ExitKernel
+
+func exitSystem(c *gin.Context, request apicontract.SystemExitRequest) apicontract.Response[apicontract.SystemExitData] {
 	setCurrentWorkspace := true
-	if nil != setCurrentWorkspaceArg {
-		setCurrentWorkspace = setCurrentWorkspaceArg.(bool)
+	if request.SetCurrentWorkspace != nil {
+		setCurrentWorkspace = *request.SetCurrentWorkspace
 	}
-
-	exitCode, installPkgPath := model.Close(force, setCurrentWorkspace, execInstallPkg)
-	ret.Code = exitCode
-	data := map[string]any{"closeTimeout": 0}
-	if "" != installPkgPath {
-		data["installPkgPath"] = installPkgPath
+	var exitCode int
+	var installPkgPath string
+	if request.RecoverExit != nil {
+		exitCode, installPkgPath = recoverSystemExit(request.RecoverExit.PID, request.RecoverExit.StartedAt, request.RecoverExit.Force)
+	} else {
+		exitCode, installPkgPath = closeSystem(c.Request.Context(), request.Force, setCurrentWorkspace, int(request.ExecInstallPkg))
 	}
-	ret.Data = data
+	data := apicontract.SystemExitData{CloseTimeout: 0, InstallPkgPath: installPkgPath}
 	switch exitCode {
 	case 0:
+		// 清理和响应写入完成后通知宿主退出，再启动服务退出流程。
+		return apicontract.WithAfterWrite(apicontract.Success(data), func() {
+			util.BroadcastByType("main", "exit", 0, "", nil)
+			finishSystemExit()
+		})
 	case 1: // 同步执行失败
-		ret.Msg = model.Conf.Language(96) + "<div class=\"fn__space\"></div><button class=\"b3-button b3-button--white\">" + model.Conf.Language(97) + "</button>"
+		return apicontract.SystemExit.FailureWithData(1, model.Conf.Language(96)+"<div class=\"fn__space\"></div><button class=\"b3-button b3-button--white\">"+model.Conf.Language(97)+"</button>", data)
 	case 2: // 提示新安装包
-		ret.Msg = model.Conf.Language(61)
+		return apicontract.SystemExit.FailureWithData(2, model.Conf.Language(61), data)
+	case 3: // 仍有界面处理退出结果，宿主继续等待。
+		return apicontract.SystemExit.FailureWithData(3, "", data)
+	default:
+		return apicontract.SystemExit.FailureWithData(-1, "Workspace exit no longer matches", data)
 	}
 }

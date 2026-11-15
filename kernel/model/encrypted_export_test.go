@@ -1,3 +1,7 @@
+// SiYuan - https://github.com/siyuan-note/siyuan
+// Copyright (c) 2020-present, b3log.org
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 package model
 
 import (
@@ -28,6 +32,30 @@ func TestManagedEncryptedExportRevocation(t *testing.T) {
 	RevokeManagedEncryptedExportsForBox(boxID)
 	if _, _, ok = ResolveManagedEncryptedExport(relativePath); ok {
 		t.Fatal("revoked managed export remained downloadable")
+	}
+}
+
+func TestNormalExportAvoidsEncryptedNamespace(t *testing.T) {
+	oldTempDir := util.TempDir
+	util.TempDir = t.TempDir()
+	t.Cleanup(func() { util.TempDir = oldTempDir })
+	boxID := "20260907120000-export1"
+	for _, name := range []string{boxID, boxID + "/nested", "./" + boxID, "ordinary", boxID + ".md"} {
+		safeName := normalExportTempName(name)
+		if IsManagedEncryptedExportPath(filepath.ToSlash(safeName)) {
+			t.Fatalf("ordinary export entered the encrypted namespace: %q", safeName)
+		}
+		filePath := filepath.Join(util.TempDir, "export", safeName, "result.txt")
+		if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filePath, []byte("ordinary export"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		clearEncryptedExportTempOnBoot()
+		if _, err := os.Stat(filePath); err != nil {
+			t.Fatalf("encrypted export cleanup removed ordinary export: %v", err)
+		}
 	}
 }
 

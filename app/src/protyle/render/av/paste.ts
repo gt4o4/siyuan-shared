@@ -1,11 +1,3 @@
-export const AV_PASTE_READONLY_TYPES = new Set<TAVCol>([
-    "created",
-    "updated",
-    "template",
-    "rollup",
-    "lineNumber",
-]);
-
 const isStrictNumber = (value: string) => {
     const trimmed = value.trim();
     if (!/^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(trimmed)) {
@@ -124,8 +116,48 @@ export const getAVPasteMatrixWidth = (rows: unknown[][], header?: string[]) => {
     return Math.max(header?.length || 0, ...rows.map(row => row.length), 0);
 };
 
+export const getAVPasteContentRowCount = (rows: unknown[][]) => {
+    let rowCount = rows.length;
+    while (rowCount > 1 && rows[rowCount - 1].every(value => typeof value === "string" && value === "")) {
+        rowCount--;
+    }
+    return rowCount;
+};
+
 export const shouldShowAVPasteSkeleton = (rows: unknown[][]) => {
     return rows.reduce((count, row) => count + row.length, 0) >= 100;
+};
+
+export const compactAVCellOperations = (operations: IOperation[]) => {
+    const cellOperations = operations.filter((operation): operation is Extract<IOperation, {action: "updateAttrViewCell"}> =>
+        operation.action === "updateAttrViewCell");
+    if (cellOperations.length < 2) {
+        return operations;
+    }
+    const otherOperations: IOperation[] = operations.filter(operation => operation.action !== "updateAttrViewCell");
+    const operationsByAV = new Map<string, Extract<IOperation, {action: "updateAttrViewCell"}>[]>();
+    cellOperations.forEach(operation => {
+        const avID = operation.avID || "";
+        const groupedOperations = operationsByAV.get(avID) || [];
+        groupedOperations.push(operation);
+        operationsByAV.set(avID, groupedOperations);
+    });
+    operationsByAV.forEach((groupedOperations, avID) => {
+        if (!avID || groupedOperations.length === 1) {
+            otherOperations.push(...groupedOperations);
+            return;
+        }
+        otherOperations.push({
+            action: "updateAttrViewCells",
+            avID,
+            cellUpdates: groupedOperations.map(operation => ({
+                keyID: operation.keyID,
+                rowID: operation.rowID,
+                data: operation.data,
+            })),
+        });
+    });
+    return otherOperations;
 };
 
 export const showAVPasteSkeleton = (blockElement: HTMLElement, columnCount: number) => {
@@ -172,4 +204,12 @@ export const getUniqueAVPasteColumnName = (baseName: string, usedNames: Set<stri
         index++;
     }
     return `${baseName} ${index}`;
+};
+// 树形粘贴只覆盖当前页的可见条目，包含筛选上下文，不跨入折叠或尚未加载的分支。
+export const getAVNestedPasteItemIDs = (rows: IAVRow[], startItemID: string, count: number) => {
+    const start = rows.findIndex(row => row.id === startItemID);
+    if (start < 0) {
+        return [];
+    }
+    return [...new Set(rows.slice(start).map(row => row.id))].slice(0, Math.max(1, count));
 };

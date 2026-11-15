@@ -1,10 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
@@ -19,11 +15,22 @@ import (
 	"testing"
 
 	"github.com/88250/lute/ast"
+	"github.com/siyuan-note/siyuan/kernel/internal/testutil"
 	"github.com/siyuan-note/siyuan/kernel/treenode"
+	"github.com/siyuan-note/siyuan/kernel/util"
 )
 
+// newObsidianTestDir 隔离工作空间，确保外部 Vault 夹具不依赖进程的当前目录。
+func newObsidianTestDir(t *testing.T) string {
+	t.Helper()
+	originalWorkspace := util.WorkspaceDir
+	util.WorkspaceDir = t.TempDir()
+	t.Cleanup(func() { util.WorkspaceDir = originalWorkspace })
+	return testutil.PublicDataDir(t)
+}
+
 func TestAnalyzeObsidianVault(t *testing.T) {
-	root := t.TempDir()
+	root := newObsidianTestDir(t)
 	if err := os.Mkdir(filepath.Join(root, ".obsidian"), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -52,8 +59,50 @@ func TestAnalyzeObsidianVault(t *testing.T) {
 	}
 }
 
+func TestObsidianFootnoteHeadingsPreserveHeadingTargets(t *testing.T) {
+	root := newObsidianTestDir(t)
+	if err := os.Mkdir(filepath.Join(root, ".obsidian"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	source := []byte("# A\n\nText[^note].\n\n[^note]: # Footnote heading\n\n# B\n\n[[#B]]\n\n[Go to B](#B)\n")
+	if err := os.WriteFile(filepath.Join(root, "Note.md"), source, 0644); err != nil {
+		t.Fatal(err)
+	}
+	vault, err := analyzeObsidianVault(context.Background(), root, func(int, string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := vault.DocsByRel[obsidianPathKey("Note")]
+	if doc == nil {
+		t.Fatal("missing analyzed document")
+	}
+	transformed, stats := transformObsidianMarkdown(vault, doc, source)
+	tree, err := parseObsidianMd(transformed, vault, doc, stats)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved := resolveObsidianTarget(vault, doc, "#B")
+	if resolved.Status != "resolved" {
+		t.Fatalf("missing heading B: %+v", resolved)
+	}
+	target := treenode.GetNodeInTree(tree, resolved.ID)
+	if target == nil || target.Type != ast.NodeHeading || target.Text() != "B" {
+		t.Fatalf("heading B resolves to the wrong block: %+v", target)
+	}
+	refs := 0
+	ast.Walk(tree.Root, func(n *ast.Node, entering bool) ast.WalkStatus {
+		if entering && treenode.IsBlockRef(n) && n.TextMarkBlockRefID == target.ID {
+			refs++
+		}
+		return ast.WalkContinue
+	})
+	if refs != 2 {
+		t.Fatalf("expected wiki and Markdown references to heading B, got %d", refs)
+	}
+}
+
 func TestRevalidateObsidianVaultDetectsAttachmentListChanges(t *testing.T) {
-	root := t.TempDir()
+	root := newObsidianTestDir(t)
 	if err := os.Mkdir(filepath.Join(root, ".obsidian"), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +128,7 @@ func TestRevalidateObsidianVaultDetectsAttachmentListChanges(t *testing.T) {
 }
 
 func TestObsidianVaultValidationErrors(t *testing.T) {
-	notDirectory := filepath.Join(t.TempDir(), "vault.md")
+	notDirectory := filepath.Join(newObsidianTestDir(t), "vault.md")
 	if err := os.WriteFile(notDirectory, []byte("content"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -87,12 +136,12 @@ func TestObsidianVaultValidationErrors(t *testing.T) {
 		t.Fatalf("unexpected non-directory error: %v", err)
 	}
 
-	missingConfig := t.TempDir()
+	missingConfig := newObsidianTestDir(t)
 	if _, err := validateObsidianVaultRoot(missingConfig); !errors.Is(err, errObsidianVaultConfigMissing) || obsidianVaultErrorLanguage(err) != 339 {
 		t.Fatalf("unexpected missing config error: %v", err)
 	}
 
-	missingMarkdown := t.TempDir()
+	missingMarkdown := newObsidianTestDir(t)
 	if err := os.Mkdir(filepath.Join(missingMarkdown, ".obsidian"), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +152,7 @@ func TestObsidianVaultValidationErrors(t *testing.T) {
 }
 
 func TestAnalyzeObsidianVaultReportsMarkdownEncodingPath(t *testing.T) {
-	root := t.TempDir()
+	root := newObsidianTestDir(t)
 	if err := os.Mkdir(filepath.Join(root, ".obsidian"), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -241,6 +290,122 @@ func TestResolveObsidianTarget(t *testing.T) {
 	resolvedAsset := resolveObsidianTarget(vault, current, "image.png")
 	if resolvedAsset.Status != "resolved" || resolvedAsset.Asset != asset {
 		t.Fatalf("resolve image returned %#v", resolvedAsset)
+	}
+}
+
+func TestResolveObsidianSubdirectoryPaths(t *testing.T) {
+	current := newObsidianTestDoc("Folder/Current")
+	local := newObsidianTestDoc("Folder/Sub/Note")
+	root := newObsidianTestDoc("Sub/Note")
+	localAsset := &obsidianAssetPlan{Source: &obsidianSourceFile{RelPath: "Folder/Sub/image.png"}}
+	rootAsset := &obsidianAssetPlan{Source: &obsidianSourceFile{RelPath: "Sub/image.png"}}
+	vault := &obsidianVaultContext{
+		DocsByRel: map[string]*obsidianDocPlan{obsidianPathKey(local.RelPath): local},
+		Assets:    map[string]*obsidianAssetPlan{obsidianPathKey(localAsset.Source.RelPath): localAsset},
+	}
+	for _, withRoot := range []bool{false, true} {
+		if withRoot {
+			vault.DocsByRel[obsidianPathKey(root.RelPath)] = root
+			vault.Assets[obsidianPathKey(rootAsset.Source.RelPath)] = rootAsset
+		}
+		for _, prefix := range []string{"Sub/", "./Sub/", "../Folder/Sub/", "/Sub/", "Missing/", "../../Sub/", "Sub/../../../../Sub/"} {
+			t.Run(fmt.Sprintf("root=%v/%s", withRoot, prefix), func(t *testing.T) {
+				status := "resolved"
+				expectedDoc, expectedAsset := local, localAsset
+				switch prefix {
+				case "Sub/":
+					if withRoot {
+						expectedDoc, expectedAsset = root, rootAsset
+					}
+				case "/Sub/":
+					if withRoot {
+						expectedDoc, expectedAsset = root, rootAsset
+					} else {
+						status = "missing"
+					}
+				case "Missing/":
+					status = "missing"
+				case "../../Sub/", "Sub/../../../../Sub/":
+					status = "unsupported"
+				}
+				for _, markdown := range []bool{false, true} {
+					resolve := resolveObsidianTarget
+					expectedStatus := status
+					if markdown {
+						resolve = resolveObsidianMarkdownDestination
+						if strings.HasPrefix(prefix, "/") {
+							expectedStatus = "unsupported"
+						}
+					}
+					doc := resolve(vault, current, prefix+"Note.md")
+					asset := resolve(vault, current, prefix+"image.png")
+					if doc.Status != expectedStatus || asset.Status != expectedStatus {
+						t.Fatalf("markdown=%v: expected %s, got doc=%+v asset=%+v", markdown, expectedStatus, doc, asset)
+					}
+					if expectedStatus == "resolved" && (doc.Doc != expectedDoc || asset.Asset != expectedAsset) {
+						t.Fatalf("markdown=%v: incorrect target: doc=%+v asset=%+v", markdown, doc, asset)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestImportObsidianRelativeSubdirectoryLinks(t *testing.T) {
+	root := newObsidianTestDir(t)
+	source := "![[Note-assets/image.png]]\n\n[[Sub/Target]]\n\n![[Sub/Target]]\n\n![image](Note-assets/image.png)\n\n[Target](Sub/Target.md)\n"
+	for name, content := range map[string]string{
+		"Folder/Current.md":            source,
+		"Folder/Sub/Target.md":         "# Target\n",
+		"Folder/Note-assets/image.png": "image",
+	} {
+		filename := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(filename), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filename, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(root, ".obsidian"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	vault, err := analyzeObsidianVault(context.Background(), root, func(int, string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vault.Analysis.MissingCount != 0 || vault.Analysis.UnreferencedFileCount != 0 || len(vault.ReferencedAssets) != 1 {
+		t.Fatalf("unexpected analysis: %+v", vault.Analysis)
+	}
+	current := vault.DocsByRel[obsidianPathKey("Folder/Current")]
+	target := vault.DocsByRel[obsidianPathKey("Folder/Sub/Target")]
+	asset := vault.Assets[obsidianPathKey("Folder/Note-assets/image.png")]
+	transformed, stats := transformObsidianMarkdown(vault, current, []byte(source))
+	if stats.PreservedUnresolved != 0 || stats.ConvertedLinks != 2 || stats.ConvertedEmbeds != 1 {
+		t.Fatalf("unexpected transform stats: %+v", stats)
+	}
+	tree, err := parseObsidianMd(transformed, vault, current, stats)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var images, refs, embeds int
+	ast.Walk(tree.Root, func(node *ast.Node, entering bool) ast.WalkStatus {
+		if !entering {
+			return ast.WalkContinue
+		}
+		if node.Type == ast.NodeImage && string(node.ChildByType(ast.NodeLinkDest).Tokens) == "assets/"+asset.FinalName {
+			images++
+		}
+		if treenode.IsBlockRef(node) && node.TextMarkBlockRefID == target.ID {
+			refs++
+		}
+		if node.Type == ast.NodeBlockQueryEmbed && treenode.GetEmbedBlockRef(node) == target.ID {
+			embeds++
+		}
+		return ast.WalkContinue
+	})
+	if images != 2 || refs != 2 || embeds != 1 {
+		t.Fatalf("unexpected parsed links: images=%d refs=%d embeds=%d", images, refs, embeds)
 	}
 }
 
@@ -388,7 +553,7 @@ func TestObsidianBlockIDsOnStructuredBlocks(t *testing.T) {
 	for _, blockID := range scan.BlockIDs {
 		doc.BlockIDs[blockID] = ast.NewNodeID()
 	}
-	analysisTree, _, _, _ := parseStdMd(source)
+	analysisTree, _, _, _ := parseStdMd(source, false)
 	buildObsidianHeadingIndex(doc, analysisTree)
 	headingIDs := map[string]string{}
 	for _, heading := range doc.Headings {
@@ -471,7 +636,7 @@ func TestParseObsidianCalloutAndCustomTaskMarker(t *testing.T) {
 }
 
 func TestStartObsidianVaultAnalysisReplacesPreImportTask(t *testing.T) {
-	root := t.TempDir()
+	root := newObsidianTestDir(t)
 	if err := os.Mkdir(filepath.Join(root, ".obsidian"), 0755); err != nil {
 		t.Fatal(err)
 	}

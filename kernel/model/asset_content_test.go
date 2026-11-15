@@ -1,25 +1,17 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/siyuan-note/siyuan/kernel/util"
 )
 
 func TestAssetContentFieldRegexpUsesArguments(t *testing.T) {
@@ -71,5 +63,25 @@ func TestPDFParser(t *testing.T) {
 	res := p.Parse("../testdata/parsertest.pdf")
 	if res == nil || res.Content == "" {
 		t.Fatalf("empty or nil PDF content result")
+	}
+}
+
+func TestPDFParserRejectsOversizeBeforeCopy(t *testing.T) {
+	oldLimit, oldTemp := PDFAssetContentMaxSize, util.TempDir
+	t.Cleanup(func() { PDFAssetContentMaxSize, util.TempDir = oldLimit, oldTemp })
+	t.Setenv("SIYUAN_PDF_ASSET_CONTENT_INDEX_MAX_SIZE", "16")
+	util.TempDir = filepath.Join(t.TempDir(), "unused-temp")
+	pdf := filepath.Join(t.TempDir(), "oversize.pdf")
+	if err := os.WriteFile(pdf, []byte(strings.Repeat("x", 17)), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if result := (&PdfAssetParser{}).Parse(pdf); result != nil {
+		t.Fatal("oversize PDF must be skipped")
+	}
+	if PDFAssetContentMaxSize != 16 {
+		t.Fatal("environment limit was not applied before the size check")
+	}
+	if _, err := os.Stat(util.TempDir); !os.IsNotExist(err) {
+		t.Fatalf("rejected PDF must not create temporary data: %v", err)
 	}
 }

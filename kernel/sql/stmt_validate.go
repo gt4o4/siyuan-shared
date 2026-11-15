@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package sql
 
@@ -170,6 +158,28 @@ func CheckReadonlyStatement(stmt string) error {
 // CheckAssetContentReadonlyStatement 在资源文件内容数据库连接上检查 SQL 是否只读。
 func CheckAssetContentReadonlyStatement(stmt string) error {
 	return checkReadonlyStatement(stmt, assetContentDB)
+}
+
+// CheckHistoryReadonlyStatement 在历史数据库连接上检查 SQL 为「单条 + 只读」。
+// 历史查询语句只引用 history.db 中的表，必须在该连接上 prepare 才能通过校验。
+// 见 https://github.com/siyuan-note/siyuan/security/advisories/GHSA-4hjx-84f6-gr7c
+func CheckHistoryReadonlyStatement(stmt string) error {
+	if err := CheckSingleStatement(stmt); nil != err {
+		return err
+	}
+	return checkReadonlyStatement(stmt, historyDB)
+}
+
+// CheckReadonlyBlockQueryStatement 校验原始块查询语句为「单条 + 只读」，boxID 为空或普通笔记本时
+// 在全局库上校验，加密笔记本在其独立加密库上校验。
+//
+// 嵌入块脚本、模板查询和导出路径的 SQL 都来自文档内容，属于不可信输入，执行前必须经过本校验。
+// 见 https://github.com/siyuan-note/siyuan/security/advisories/GHSA-67p9-hm94-xwf3
+func CheckReadonlyBlockQueryStatement(stmt, boxID string) error {
+	if err := CheckSingleStatement(stmt); nil != err {
+		return err
+	}
+	return CheckReadonlyStatementInBox(stmt, boxID)
 }
 
 // CheckReadonlyStatementInBox 在指定笔记本对应的数据库连接上检查 SQL 是否只读。

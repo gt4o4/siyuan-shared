@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
@@ -49,7 +37,8 @@ func setupAttributeViewValidationTest(t *testing.T) {
 	}
 	Conf = NewAppConf()
 	Conf.Lang = "en"
-	Conf.Sync = conf.NewSync()
+	Conf.FileTree.Store(conf.NewFileTree())
+	Conf.Sync.Store(conf.NewSync())
 	cache.ClearAVCache()
 	t.Cleanup(func() {
 		cache.ClearAVCache()
@@ -146,6 +135,43 @@ func TestAddAttributeViewBlockAcceptsValidDetachedItem(t *testing.T) {
 	blockValue := parsed.GetBlockValue(itemID)
 	if nil == blockValue || nil == blockValue.Block || !blockValue.IsDetached || "Test" != blockValue.Block.Content {
 		t.Fatalf("unexpected detached block value: %+v", blockValue)
+	}
+}
+
+func TestAddAttributeViewBlocksAcceptsDetachedItemsInBatch(t *testing.T) {
+	setupAttributeViewValidationTest(t)
+
+	avID := "20260811190000-batchav"
+	attrView := av.NewAttributeView(avID)
+	if err := av.SaveAttributeView(attrView); nil != err {
+		t.Fatalf("save attribute view failed: %s", err)
+	}
+
+	const itemCount = 100
+	itemIDs := make([]string, 0, itemCount)
+	srcs := make([]map[string]any, 0, itemCount)
+	for range itemCount {
+		itemID := ast.NewNodeID()
+		itemIDs = append(itemIDs, itemID)
+		srcs = append(srcs, map[string]any{
+			"itemID":     itemID,
+			"isDetached": true,
+			"content":    "Test",
+		})
+	}
+	if err := AddAttributeViewBlock(nil, srcs, avID, "", "", "", "", false); nil != err {
+		t.Fatalf("add detached attribute view items failed: %s", err)
+	}
+
+	parsed, err := av.ParseAttributeView(avID)
+	if nil != err {
+		t.Fatalf("parse attribute view failed: %s", err)
+	}
+	for _, itemID := range itemIDs {
+		blockValue := parsed.GetBlockValue(itemID)
+		if nil == blockValue || nil == blockValue.Block || !blockValue.IsDetached || "Test" != blockValue.Block.Content {
+			t.Fatalf("unexpected detached block value: %+v", blockValue)
+		}
 	}
 }
 

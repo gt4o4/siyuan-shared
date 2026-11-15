@@ -1,10 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
@@ -21,6 +17,7 @@ import (
 	ginSessions "github.com/gin-contrib/sessions"
 	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
+	"github.com/siyuan-note/siyuan/kernel/apicontract"
 	"github.com/siyuan-note/siyuan/kernel/conf"
 	"github.com/siyuan-note/siyuan/kernel/util"
 )
@@ -214,13 +211,11 @@ func TestOIDCTransactionCanOnlyBeClaimedOnceConcurrently(t *testing.T) {
 	}
 	results := make(chan claimResult, workers)
 	var waitGroup sync.WaitGroup
-	for i := 0; i < workers; i++ {
-		waitGroup.Add(1)
-		go func() {
-			defer waitGroup.Done()
+	for range workers {
+		waitGroup.Go(func() {
 			_, repeated, err := claimOIDCTransaction(context.Background(), transaction.State, transaction.Binding, false)
 			results <- claimResult{repeated: repeated, err: err}
-		}()
+		})
 	}
 	first := <-results
 	if first.err != nil || first.repeated {
@@ -439,9 +434,11 @@ func TestWriteOIDCCallbackPageUsesSharedOAuthStyle(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	context, _ := gin.CreateTestContext(recorder)
 
-	writeOIDCCallbackPage(context, false, "登录失败<script>")
-
-	page := recorder.Body.String()
+	response := writeOIDCCallbackPage(context, false, "登录失败<script>")
+	if response.Binary() == nil {
+		t.Fatal("OIDC callback page has no HTTP content")
+	}
+	page := string(response.Binary().Bytes)
 	for _, expected := range []string{`lang="zh-CN"`, `class="brand">SiYuan</div>`, `class="mark mark--error"`, "登录失败&lt;script&gt;"} {
 		if !strings.Contains(page, expected) {
 			t.Fatalf("OIDC callback page does not contain %q: %s", expected, page)
@@ -453,13 +450,71 @@ func TestWriteOIDCCallbackPageUsesSharedOAuthStyle(t *testing.T) {
 	}
 }
 
+func TestOIDCWebCallbackContract(t *testing.T) {
+	setupOIDCTest(t)
+	for _, target := range []string{"/stage/build/desktop/?a=1&b=2", "https://foreign.example/", "//foreign.example/"} {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		response := writeOIDCWebCallbackPage(c, target)
+		if apicontract.SystemOIDCCallback.Status(response) != http.StatusOK || response.Binary() == nil {
+			t.Fatal("web callback must commit a document instead of an HTTP redirect")
+		}
+		page := string(response.Binary().Bytes)
+		if !strings.Contains(page, `<meta http-equiv="refresh" content="0;url=/`) || strings.Contains(page, "foreign.example") {
+			t.Fatalf("unexpected web callback navigation: %s", page)
+		}
+		if recorder.Header().Get("Cache-Control") != "no-store" || recorder.Header().Get("Referrer-Policy") != "no-referrer" ||
+			!strings.Contains(recorder.Header().Get("Content-Security-Policy"), "default-src 'none'") {
+			t.Fatalf("missing callback security headers: %v", recorder.Header())
+		}
+	}
+}
+
+func TestOIDCRepeatedWebCallbackContractSession(t *testing.T) {
+	setupOIDCTest(t)
+	engine := gin.New()
+	engine.Use(ginSessions.Sessions("siyuan", cookie.NewStore([]byte("oidc-web-callback-test-key"))))
+	engine.GET("/callback", func(c *gin.Context) {
+		response := respondRepeatedOIDCCallback(c, &oidcTransaction{Flow: oidcFlowWeb, Success: true, To: "/workspace"})
+		if apicontract.SystemOIDCCallback.Status(response) != http.StatusOK || response.Binary() == nil {
+			t.Fatal("repeated callback must return a navigation page")
+		}
+		c.Data(http.StatusOK, response.Binary().ContentType, response.Binary().Bytes)
+	})
+	engine.GET("/workspace", CheckAuth, func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	callback := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "https://notes.example/callback", nil)
+	request.Header.Set("Sec-Fetch-Site", "cross-site")
+	engine.ServeHTTP(callback, request)
+	if callback.Code != http.StatusOK || callback.Header().Get("Location") != "" ||
+		!strings.Contains(callback.Body.String(), `content="0;url=/workspace"`) {
+		t.Fatalf("unexpected repeated callback: %d %s", callback.Code, callback.Body.String())
+	}
+	for _, site := range []string{"same-origin", "cross-site", "same-site"} {
+		request = httptest.NewRequest(http.MethodGet, "https://notes.example/workspace", nil)
+		request.Header.Set("Sec-Fetch-Site", site)
+		for _, cookie := range callback.Result().Cookies() {
+			request.AddCookie(cookie)
+		}
+		recorder := httptest.NewRecorder()
+		engine.ServeHTTP(recorder, request)
+		want := http.StatusUnauthorized
+		if site == "same-origin" {
+			want = http.StatusNoContent
+		}
+		if recorder.Code != want {
+			t.Fatalf("workspace request with %s returned %d, want %d: %s", site, recorder.Code, want, recorder.Body.String())
+		}
+	}
+}
+
 func TestOIDCTransactionLimitsRejectWithoutEviction(t *testing.T) {
 	setupOIDCTest(t)
 	newTransaction := func(state, binding, clientIP string) *oidcTransaction {
 		return &oidcTransaction{State: state, Binding: binding, ClientIP: clientIP,
 			ConfigVersion: oidcConfigurationVersion(Conf.GetOIDC()), ExpiresAt: time.Now().Add(time.Minute)}
 	}
-	for i := 0; i < oidcTransactionPerBind; i++ {
+	for i := range oidcTransactionPerBind {
 		if err := storeOIDCTransaction(newTransaction(fmt.Sprintf("binding-%d", i), "same-binding", "")); err != nil {
 			t.Fatal(err)
 		}
@@ -475,7 +530,7 @@ func TestOIDCTransactionLimitsRejectWithoutEviction(t *testing.T) {
 	oidcTransactions.byState = map[string]*oidcTransaction{}
 	oidcTransactions.byPoll = map[string]string{}
 	oidcTransactions.Unlock()
-	for i := 0; i < oidcTransactionPerIP; i++ {
+	for i := range oidcTransactionPerIP {
 		if err := storeOIDCTransaction(newTransaction(fmt.Sprintf("ip-%d", i), fmt.Sprintf("binding-%d", i), "192.0.2.1")); err != nil {
 			t.Fatal(err)
 		}
@@ -488,7 +543,7 @@ func TestOIDCTransactionLimitsRejectWithoutEviction(t *testing.T) {
 	oidcTransactions.byState = map[string]*oidcTransaction{}
 	oidcTransactions.byPoll = map[string]string{}
 	oidcTransactions.Unlock()
-	for i := 0; i < oidcTransactionMax; i++ {
+	for i := range oidcTransactionMax {
 		if err := storeOIDCTransaction(newTransaction(fmt.Sprintf("capacity-%d", i), "", "")); err != nil {
 			t.Fatal(err)
 		}
@@ -579,7 +634,7 @@ func TestOIDCSessionVersionInvalidatesOnConfigurationChange(t *testing.T) {
 		t.Fatal("OIDC WebSocket session survived an authentication configuration change")
 	}
 	Conf.AccessAuthCode = "access-code"
-	workspaceSession.AccessAuthCode = "access-code"
+	SetAccessCodeSession(workspaceSession, "access-code")
 	if !IsWorkspaceSessionAuthenticated(workspaceSession) {
 		t.Fatal("valid access-code session should remain available as an independent login method")
 	}

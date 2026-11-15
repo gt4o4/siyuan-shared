@@ -8,7 +8,7 @@
 		"id": "20240530101000-a91lmk2",
 		"title": "高度な検索",
 		"type": "doc",
-		"updated": "20260803163243"
+		"updated": "20261026182843"
 	},
 	"Children": [
 		{
@@ -17,7 +17,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20260613193509-xedpmdl",
-				"updated": "20260613193509"
+				"updated": "20261024161058"
 			},
 			"Children": [
 				{
@@ -31,12 +31,177 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20260613193509-ircy5x0",
-				"updated": "20260613193509"
+				"updated": "20261024161058"
 			},
 			"Children": [
 				{
 					"Type": "NodeText",
-					"Data": "グローバル検索はクエリ構文による高度な検索をサポートし、AND/OR/NOT論理組合せ、タイプフィルタリング、フィールドフィルタリングなどが利用できます。データベーステーブル直接検索、インデックス除外、検索除外などの高度な機能も提供し、単純なキーワードから複雑な条件まであらゆる検索ニーズに対応します。以下のサブドキュメントでは、各機能の詳細な使い方を紹介します。"
+					"Data": "グローバル検索では、キーワード、クエリ構文、正規表現、SQL を使ってワークスペース内のブロックを探せます。セマンティックインデックスを設定すると、セマンティック検索も利用できます。検索画面で方式を選び、キーワードや条件を入力してください。この章では、各方式の操作と、インデックスおよび検索範囲の設定を説明します。"
+				}
+			]
+		},
+		{
+			"ID": "20261009182324-svc2r56",
+			"Type": "NodeHeading",
+			"Properties": {
+				"id": "20261009182324-svc2r56",
+				"updated": "20261026182843"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "検索方法ごとに利用できる操作"
+				}
+			],
+			"HeadingLevel": 2
+		},
+		{
+			"ID": "20261009182324-duyze6a",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261009182324-duyze6a",
+				"updated": "20261026182843"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "キーワード検索とクエリ構文検索では、ブロックタイプ、ノートブック、文書パス、子文書を含めるかどうかの絞り込みと、並べ替え、グループ化、置換を利用できます。本文の順序による並べ替えは、文書ごとにグループ化した場合のみ利用できます。ブロック ID を直接入力した場合も、ノートブック、文書パス、ブロックタイプ、サブタイプ、除外条件が適用されます。キーワード方式の複数語検索では、%、_、バックスラッシュを文字どおりに照合します。文書ごとのグループ化は現在のページの結果を整理するだけで、検索方式のページ分割単位は変わりません。ブロック単位でページ分割する場合、同じ文書の一致ブロックが複数ページに分かれることがあります。"
+				}
+			]
+		},
+		{
+			"ID": "20261009182324-n7t8cwa",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261009182324-n7t8cwa",
+				"updated": "20261009182324"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "正規表現検索では、同じ絞り込み、グループ化、置換と、タイプ、作成日時、更新日時による並べ替えを利用できます。関連度による並べ替えは利用できません。本文の順序は文書グループ内の結果にのみ適用されます。"
+				}
+			]
+		},
+		{
+			"ID": "20261009182324-k4vtj63",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261009182324-k4vtj63",
+				"updated": "20261009182324"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "SQL 検索では、SQL 文に記述した条件と順序を使用します。パネルのブロックタイプ、パス、現在の文書の範囲、子文書を含める設定は適用されず、置換も利用できません。文書ごとのグループ化は利用でき、グループ化後の結果はタイプ、作成日時、更新日時、本文の順序で並べ替えられますが、関連度では並べ替えられません。"
+				}
+			]
+		},
+		{
+			"ID": "20261010113646-3gi11r9",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261010113646-3gi11r9",
+				"updated": "20261010113646"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "デスクトップとモバイルの SQL 検索では、複数行の文を貼り付け、コメントを保持できます。SQL モードでは "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "Enter"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " で改行します。-- 行コメントの後の改行を残し、後続の文がコメントに含まれないようにしてください。検索画面には SELECT b.* FROM blocks b のような完全なブロック列が必要です。列の一部や集計結果にはエージェントの sql.query を使用してください。"
+				}
+			]
+		},
+		{
+			"ID": "20261009182324-5i14ow7",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261009182324-5i14ow7",
+				"updated": "20261009182324"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "意味検索では、ブロックタイプ、ノートブック、文書パス、子文書を含めるかどうかの絞り込みを利用できます。結果は意味の関連度順に表示され、パネルの並べ替え、グループ化、置換は利用できません。"
+				}
+			]
+		},
+		{
+			"ID": "20261009182324-imw0dl2",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261009182324-imw0dl2",
+				"updated": "20261009182324"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "現在の検索方法で利用できない操作は無効になり、説明が表示されます。SQL 検索と意味検索では置換入力行が非表示になりますが、入力内容と展開状態は保持され、置換を利用できる方法に戻すと再表示されます。検索条件の保存とリセットは引き続き利用できます。"
+				}
+			]
+		},
+		{
+			"ID": "20260929000700-6p02njw",
+			"Type": "NodeHeading",
+			"Properties": {
+				"id": "20260929000700-6p02njw",
+				"updated": "20261024164212"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "マインドマップの検索"
+				}
+			],
+			"HeadingLevel": 2
+		},
+		{
+			"ID": "20260929000700-cqew1c9",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20260929000700-cqew1c9",
+				"updated": "20261024164212"
+			},
+			"Children": [
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "設定"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " - "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "検索"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " で「マインドマップブロック」を有効にすると、ブロック参照と埋め込みブロックの候補検索で、ノードのテキストからマインドマップ全体を検索できます。グローバル検索では「検索タイプ」で「マインドマップブロック」を選択してください。"
+				}
+			]
+		},
+		{
+			"ID": "20261024164212-uywtgpr",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261024164212-uywtgpr",
+				"updated": "20261024164212"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "「マインドマップ項目ブロック」を個別に有効にすると、各分岐も検索できます。既定ではマインドマップブロックは有効、マインドマップ項目ブロックは無効です。古い検索設定にこれらの項目がない場合は全体の検索設定を引き継ぎ、明示的に選択した状態は保持されます。"
 				}
 			]
 		},
@@ -46,7 +211,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20260613193509-avyxr38",
-				"updated": "20260803163243"
+				"updated": "20261024163013"
 			},
 			"Children": [
 				{
@@ -60,7 +225,7 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20260613193509-k9kj9ol",
-				"updated": "20260803163243"
+				"updated": "20261024163013"
 			},
 			"Children": [
 				{
@@ -70,7 +235,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​ - "
+					"Data": " - "
 				},
 				{
 					"Type": "NodeTextMark",
@@ -79,7 +244,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​ - "
+					"Data": " - "
 				},
 				{
 					"Type": "NodeTextMark",
@@ -88,7 +253,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": " ​ で設定できます。デフォルトはオフで、"
+					"Data": " で設定できます。デフォルトはオフで、"
 				},
 				{
 					"Type": "NodeTextMark",
@@ -116,7 +281,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20260613193509-eeostl9",
-				"updated": "20260803163243"
+				"updated": "20261024163013"
 			},
 			"Children": [
 				{
@@ -130,7 +295,7 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20260613193509-703emtd",
-				"updated": "20260803163243"
+				"updated": "20261024163013"
 			},
 			"Children": [
 				{
@@ -140,7 +305,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​ - "
+					"Data": " - "
 				},
 				{
 					"Type": "NodeTextMark",
@@ -149,7 +314,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​ - "
+					"Data": " - "
 				},
 				{
 					"Type": "NodeTextMark",
@@ -158,7 +323,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": " ​ で設定できます。デフォルトはオンで、「经济」を検索しても「經濟」には一致しません。オフにすると、「经济」の検索で「经济」と「經濟」の両方に一致します。このオプションを切り替えた後、インデックスの再構築が完了するまで有効になりません。"
+					"Data": " で設定できます。デフォルトはオンで、「经济」を検索しても「經濟」には一致しません。オフにすると、「经济」の検索で「经济」と「經濟」の両方に一致します。このオプションを切り替えた後、インデックスの再構築が完了するまで有効になりません。"
 				}
 			]
 		},
@@ -168,7 +333,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20260613193509-byuidqn",
-				"updated": "20260613193509"
+				"updated": "20261024163828"
 			},
 			"Children": [
 				{
@@ -197,7 +362,7 @@
 			"ListData": {},
 			"Properties": {
 				"id": "20260613193509-i2in6rr",
-				"updated": "20260613193509"
+				"updated": "20261010225402"
 			},
 			"Children": [
 				{
@@ -209,7 +374,7 @@
 					},
 					"Properties": {
 						"id": "20260613193509-01mcz0t",
-						"updated": "20260613193509"
+						"updated": "20260809232000"
 					},
 					"Children": [
 						{
@@ -217,7 +382,7 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20260613193509-3a19rho",
-								"updated": "20260613193509"
+								"updated": "20260809232000"
 							},
 							"Children": [
 								{
@@ -231,8 +396,17 @@
 								},
 								{
 									"Type": "NodeTextMark",
-									"TextMarkType": "code",
-									"TextMarkTextContent": "Ctrl+P"
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "Ctrl"
+								},
+								{
+									"Type": "NodeText",
+									"Data": "+"
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "P"
 								},
 								{
 									"Type": "NodeText",
@@ -384,7 +558,7 @@
 					},
 					"Properties": {
 						"id": "20260613193509-xvgjid2",
-						"updated": "20260613193509"
+						"updated": "20261010225402"
 					},
 					"Children": [
 						{
@@ -392,7 +566,7 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20260613193509-x2zxtbc",
-								"updated": "20260613193509"
+								"updated": "20261010225402"
 							},
 							"Children": [
 								{
@@ -406,12 +580,25 @@
 								},
 								{
 									"Type": "NodeTextMark",
-									"TextMarkType": "code",
-									"TextMarkTextContent": "Ctrl+Z"
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "Ctrl"
+								},
+								{
+									"Type": "NodeText",
+									"Data": "+"
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "Z"
 								},
 								{
 									"Type": "NodeText",
 									"Data": "​ での取り消しはできません。実行前にシステムが自動的にファイル履歴を生成します。復元が必要な場合はデータ履歴からロールバックしてください"
+								},
+								{
+									"Type": "NodeText",
+									"Data": "。通常の文書と暗号化された文書のいずれも、置換中の編集内容は保持されます。保存前に文書が変更または削除された場合、置換はエラーで停止し、その文書の現在の内容を保持します。すでに保存された文書の置換結果は残ります。編集が完了してから置換を再実行してください"
 								}
 							]
 						}
@@ -443,7 +630,7 @@
 			"Properties": {
 				"ID": "20240530101000-chom53o",
 				"id": "20240530101000-8tt1kq0",
-				"updated": "20240530101000"
+				"updated": "20261024163828"
 			},
 			"Children": [
 				{
@@ -451,7 +638,7 @@
 					"TextMarkType": "block-ref",
 					"TextMarkBlockRefID": "20240530101000-58z6rjh",
 					"TextMarkBlockRefSubtype": "d",
-					"TextMarkTextContent": "データベーステーブル"
+					"TextMarkTextContent": "SQL インデックステーブル"
 				}
 			]
 		},

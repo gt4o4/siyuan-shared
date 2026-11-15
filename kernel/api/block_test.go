@@ -1,51 +1,168 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/88250/gulu"
 	"github.com/88250/lute/ast"
 	"github.com/88250/lute/parse"
 	"github.com/gin-gonic/gin"
+	"github.com/siyuan-note/siyuan/kernel/conf"
+	"github.com/siyuan-note/siyuan/kernel/filesys"
 	"github.com/siyuan-note/siyuan/kernel/model"
+	"github.com/siyuan-note/siyuan/kernel/sql"
+	"github.com/siyuan-note/siyuan/kernel/task"
 	"github.com/siyuan-note/siyuan/kernel/treenode"
 	"github.com/siyuan-note/siyuan/kernel/util"
 )
 
-func TestParseBlockRefStringArrayEmptyHandling(t *testing.T) {
-	arg := map[string]any{"ids": []any{}}
-
-	requiredResult := gulu.Ret.NewResult()
-	if _, ok := parseBlockRefStringArray(arg, "ids", requiredResult, true); ok || requiredResult.Code != -1 {
-		t.Fatalf("expected an empty required array to be rejected, got code %d", requiredResult.Code)
+func TestGetBlockInfoRecovery(t *testing.T) {
+	for _, name := range []string{"document", "child", "metadataOnly", "literalTitle", "explicit", "missing", "indexing", "reader", "encrypted"} {
+		t.Run(name, func(t *testing.T) {
+			if os.Getenv("SIYUAN_TEST_BLOCK_INFO_RECOVERY") == t.Name() {
+				testGetBlockInfoRecovery(t, name)
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+			defer cancel()
+			command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestGetBlockInfoRecovery$/^"+name+"$", "-test.v")
+			command.Env = append(os.Environ(), "SIYUAN_TEST_BLOCK_INFO_RECOVERY="+t.Name())
+			if output, err := command.CombinedOutput(); err != nil {
+				t.Fatalf("recovery subprocess failed: %v\n%s", err, output)
+			}
+		})
 	}
+}
 
-	optionalResult := gulu.Ret.NewResult()
-	values, ok := parseBlockRefStringArray(arg, "ids", optionalResult, false)
-	if !ok || optionalResult.Code != 0 || len(values) != 0 {
-		t.Fatalf("expected an empty optional array to be accepted, got code %d and values %v", optionalResult.Code, values)
+func testGetBlockInfoRecovery(t *testing.T, name string) {
+	root := t.TempDir()
+	util.DataDir = filepath.Join(root, "data")
+	util.TempDir = root
+	util.ConfDir = root
+	util.QueueDir = filepath.Join(root, "queue")
+	util.DBPath = filepath.Join(root, "siyuan.db")
+	util.HistoryDBPath = filepath.Join(root, "history.db")
+	util.AssetContentDBPath = filepath.Join(root, "asset_content.db")
+	util.BlockTreeDBPath = filepath.Join(root, "blocktree.db")
+	model.Conf = model.NewAppConf()
+	{
+		confSectionValue0, confSectionValue1 := conf.NewFileTree(), conf.NewSync()
+		model.Conf.FileTree.Store(confSectionValue0)
+		model.Conf.Sync.Store(confSectionValue1)
+	}
+	model.Conf.NotebookCrypto = conf.NewNotebookCrypto()
+	{
+		confSectionValue0, confSectionValue1, confSectionValue2 := conf.NewSearch(), conf.NewEditor(), conf.NewExport()
+		model.Conf.Search.Store(confSectionValue0)
+		model.Conf.Editor.Store(confSectionValue1)
+		model.Conf.Export.Store(confSectionValue2)
+	}
+	box := &model.Box{ID: ast.NewNodeID()}
+	boxConf := conf.NewBoxConf()
+	boxConf.Name, boxConf.Closed = "Recovery", false
+	if err := box.SaveConf(boxConf); err != nil {
+		t.Fatal(err)
+	}
+	sql.InitDatabase(true)
+	sql.InitHistoryDatabase(true)
+	sql.InitAssetContentDatabase(true)
+	defer sql.CloseDatabase()
+	docID := ast.NewNodeID()
+	title := "Recovered"
+	if name == "literalTitle" {
+		title = "**Literal &amp; title**"
+	}
+	tree := treenode.NewTree(box.ID, "/"+docID+".sy", "/"+title, title)
+	if _, err := filesys.WriteTree(tree); err != nil {
+		t.Fatal(err)
+	}
+	if name != "metadataOnly" {
+		// 源提交会立即登记文档摘要；这些用例需要模拟索引整体缺失。
+		treenode.RemoveBlockTreesByRootID(box.ID, docID)
+	}
+	if name == "encrypted" {
+		// 加密候选即使带有可解析的明文，也不能由普通笔记本恢复路径读取或索引。
+		boxConf.Encrypted = true
+		if err := box.SaveConf(boxConf); err != nil {
+			t.Fatal(err)
+		}
+	}
+	id := docID
+	switch name {
+	case "child":
+		id = tree.Root.FirstChild.ID
+	case "metadataOnly":
+		id = tree.Root.FirstChild.ID
+	case "missing":
+		id = ast.NewNodeID()
+	}
+	if name == "indexing" {
+		task.AppendTask(task.DatabaseIndexFull, func() {})
+	}
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.Use(boxLeaseMiddleware)
+	engine.Use(func(c *gin.Context) {
+		role := model.RoleAdministrator
+		if name == "reader" {
+			role = model.RoleReader
+		}
+		c.Set(model.RoleContextKey, role)
+		c.Next()
+	})
+	engine.POST("/api/block/getBlockInfo", getBlockInfo)
+	args := map[string]any{"id": id}
+	if name == "explicit" {
+		args["notebook"] = box.ID
+	}
+	body, err := json.Marshal(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/block/getBlockInfo", strings.NewReader(string(body)))
+	request.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(recorder, request)
+	requireAPIContract(t, http.MethodPost, "/api/block/getBlockInfo", recorder)
+	var response struct {
+		Code int `json:"code"`
+		Data struct {
+			RootID    string `json:"rootID"`
+			RootTitle string `json:"rootTitle"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	switch name {
+	case "document", "child", "metadataOnly", "literalTitle", "explicit":
+		if response.Code != 0 || response.Data.RootID != docID || response.Data.RootTitle != title {
+			t.Fatalf("document did not recover: %s", recorder.Body.String())
+		}
+		if treenode.GetBlockTree(id) == nil {
+			t.Fatal("requested block was not indexed")
+		}
+	default:
+		wantCode := -1
+		if name == "indexing" {
+			wantCode = 3
+		}
+		if response.Code != wantCode || response.Data.RootID != "" || treenode.GetBlockTree(docID) != nil {
+			t.Fatalf("unexpected recovery or response: %s", recorder.Body.String())
+		}
 	}
 }
 
@@ -71,6 +188,10 @@ func TestCheckBlockRefRejectsDeletedIDsOutsideIDs(t *testing.T) {
 }
 
 func TestFilterBlockAndRefIDsByPublishAccess(t *testing.T) {
+	previousConf := model.Conf
+	model.Conf = model.NewAppConf()
+	model.Conf.Sync.Store(conf.NewSync())
+	t.Cleanup(func() { model.Conf = previousConf })
 	const (
 		boxID             = "20260724000000-boxid01"
 		publicID          = "20260724000001-public1"
@@ -140,6 +261,10 @@ func TestFilterBlockAndRefIDsByPublishAccess(t *testing.T) {
 }
 
 func TestGetBlockInfoPublishAccess(t *testing.T) {
+	previousConf := model.Conf
+	model.Conf = model.NewAppConf()
+	model.Conf.Sync.Store(conf.NewSync())
+	t.Cleanup(func() { model.Conf = previousConf })
 	const (
 		boxID             = "20260806000020-box0020"
 		protectedID       = "20260806000021-protect"
@@ -253,6 +378,10 @@ type docBlocksOrdersResponse struct {
 }
 
 func TestBlockPublishAccessGuards(t *testing.T) {
+	previousConf := model.Conf
+	model.Conf = model.NewAppConf()
+	model.Conf.Sync.Store(conf.NewSync())
+	t.Cleanup(func() { model.Conf = previousConf })
 	const (
 		boxID             = "20260724000000-boxid03"
 		publicID          = "20260724000020-public3"
@@ -348,9 +477,51 @@ func TestBlockPublishAccessGuards(t *testing.T) {
 		}
 	})
 
+	t.Run("document title publish access", func(t *testing.T) {
+		for _, id := range []string{disabledID, protectedID} {
+			response := blockGuardRequest(model.RoleReader, `{"id":"`+id+`"}`, getDocTitle)
+			if response["code"] != float64(-1) || response["data"] != nil || response["msg"] == "" {
+				t.Fatalf("unavailable document title must return a typed failure without title data: %v", response)
+			}
+		}
+	})
+
 	t.Run("administrator", func(t *testing.T) {
 		if response := blockGuardRequest(model.RoleAdministrator, `{"id":"`+disabledID+`"}`, checkBlockExist); !response["data"].(bool) {
 			t.Fatalf("disabled block should be visible to the administrator, got %v", response["data"])
+		}
+		missingID := "20260905120000-missing"
+		response := blockGuardRequest(model.RoleAdministrator, `{"id":"`+missingID+`"}`, checkBlockExist)
+		if response["code"].(float64) != 0 || response["data"] != false {
+			t.Fatalf("missing block should report false without an API error: %v", response)
+		}
+		response = blockGuardRequest(model.RoleAdministrator, `{"ids":["`+missingID+`"]}`, checkBlocksExist)
+		if response["code"].(float64) != 0 || response["data"].(map[string]any)[missingID] != false {
+			t.Fatalf("missing blocks should report false without an API error: %v", response)
+		}
+		response = blockGuardRequest(model.RoleAdministrator, `{"ids":["`+missingID+`"]}`, getBlocksWordCount)
+		if response["code"].(float64) != 0 || response["data"].(map[string]any)["stat"].(map[string]any)["blockCount"].(float64) != 0 {
+			t.Fatalf("missing blocks should be ignored by word count without an API error: %v", response)
+		}
+		response = blockGuardRequest(model.RoleAdministrator, `{"id":"`+missingID+`"}`, getBlockIndex)
+		if response["code"].(float64) != 0 || response["data"].(float64) != 0 {
+			t.Fatalf("missing block should report a zero index without an API error: %v", response)
+		}
+		response = blockGuardRequest(model.RoleAdministrator, `{"id":"`+missingID+`"}`, getBlockBreadcrumb)
+		if response["code"].(float64) == 0 {
+			t.Fatalf("missing block without a notebook should be rejected: %v", response)
+		}
+		response = blockGuardRequest(model.RoleAdministrator, `{"id":"`+missingID+`","notebook":"`+boxID+`"}`, getBlockBreadcrumb)
+		if response["code"].(float64) != 0 || len(response["data"].([]any)) != 0 {
+			t.Fatalf("missing block in an explicit notebook should report an empty breadcrumb without an API error: %v", response)
+		}
+		response = blockGuardRequest(model.RoleAdministrator, `{"id":"`+missingID+`"}`, getBlockBreadcrumbChildren)
+		if response["code"].(float64) == 0 {
+			t.Fatalf("missing breadcrumb parent without a notebook should be rejected: %v", response)
+		}
+		response = blockGuardRequest(model.RoleAdministrator, `{"id":"`+missingID+`","notebook":"`+boxID+`"}`, getBlockBreadcrumbChildren)
+		if response["code"].(float64) != 0 || len(response["data"].(map[string]any)["items"].([]any)) != 0 {
+			t.Fatalf("missing breadcrumb parent in an explicit notebook should report no children: %v", response)
 		}
 	})
 }

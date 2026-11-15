@@ -1,10 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
@@ -19,29 +15,41 @@ import (
 	"github.com/siyuan-note/siyuan/kernel/util"
 )
 
-func TestNewItemParentPathTemplate(t *testing.T) {
-	tests := map[string]string{
-		"":                   "",
-		"/":                  "/",
-		"relative":           "",
-		"/Document":          "/",
-		"folder/Document":    "folder",
-		"/folder/Document":   "/folder",
-		"/folder/subfolder/": "/folder/subfolder/",
-	}
-	for input, expected := range tests {
-		if actual := newItemParentPathTemplate(input); expected != actual {
-			t.Fatalf("newItemParentPathTemplate(%q): expected %q, got %q", input, expected, actual)
+func TestNewItemDocumentTargetSegments(t *testing.T) {
+	for _, test := range []struct {
+		input, title string
+		parents      int
+	}{
+		{"", "", 0}, {"/", "", 0}, {"relative", "relative", 0},
+		{"/Document", "Document", 0}, {"folder/Document", "Document", 1},
+		{"/folder/Document", "Document", 1}, {"/folder/subfolder/", "", 2},
+		{"/Daily Notes/2026-07-18", "2026-07-18", 1}, {"/Daily Notes/", "", 1},
+	} {
+		rendered, err := renderDocumentTarget(&EffectiveDocumentTarget{Notebook: ast.NewNodeID(), Path: test.input}, DocumentPlanRequest{})
+		if err != nil || rendered.title != test.title || len(rendered.parents) != test.parents {
+			t.Fatalf("target %q: %+v, %v", test.input, rendered, err)
 		}
 	}
 }
 
-func TestNewItemPathTitleFallback(t *testing.T) {
-	if expected := "2026-07-18"; expected != newItemTitleFromPath("/Daily Notes/"+expected) {
-		t.Fatal("the last save path segment should be available as the document title")
+func TestNewItemPrimaryKeyUsesClippedTitleFallback(t *testing.T) {
+	createdAt := time.Date(2026, time.August, 13, 12, 0, 0, 0, time.Local)
+	template := &av.NewItemTemplate{TargetType: av.NewItemTargetDetached}
+	preview, err := resolveAttributeViewNewItemTemplateWithFallback(ast.NewNodeID(), template, createdAt, " Clipped title ")
+	if nil != err {
+		t.Fatalf("resolve clipped title fallback failed: %s", err)
 	}
-	if "" != newItemTitleFromPath("/Daily Notes/") {
-		t.Fatal("a save path ending with a slash should not provide a document title")
+	if "Clipped title" != preview.PrimaryKey {
+		t.Fatalf("unexpected clipped title fallback: %q", preview.PrimaryKey)
+	}
+
+	template.PrimaryKeyTemplate = `{{now | date "2006-01-02"}}`
+	preview, err = resolveAttributeViewNewItemTemplateWithFallback(ast.NewNodeID(), template, createdAt, "Clipped title")
+	if nil != err {
+		t.Fatalf("resolve configured primary key failed: %s", err)
+	}
+	if "2026-08-13" != preview.PrimaryKey {
+		t.Fatalf("the configured primary key template should take precedence: %q", preview.PrimaryKey)
 	}
 }
 
@@ -52,14 +60,30 @@ func TestNewItemDocumentPreviewUsesCurrentDatabaseInstance(t *testing.T) {
 		"original": {ID: ast.NewNodeID(), RootID: ast.NewNodeID(), BoxID: boxID, HPath: "/Original"},
 		"mirror":   {ID: ast.NewNodeID(), RootID: ast.NewNodeID(), BoxID: boxID, HPath: "/Mirror"},
 	} {
-		preview := newItemDocumentPreview(blockTree, boxID, template.SaveLocation.PathTemplate, "Child", false)
-		expectedHPath := "/Original/Child"
-		if "mirror" == name {
-			expectedHPath = "/Mirror/Child"
+		title := "Child"
+		rendered, err := renderDocumentTarget(&EffectiveDocumentTarget{Notebook: boxID, Path: template.SaveLocation.PathTemplate},
+			DocumentPlanRequest{Notebook: boxID, ContextID: &blockTree.RootID, Title: &title})
+		if err != nil || rendered.parentID == nil || *rendered.parentID != blockTree.RootID || rendered.title != title {
+			t.Fatalf("%s database instance resolved to unexpected parent: %+v, %v", name, rendered, err)
 		}
-		if expectedHPath != preview.HPath || blockTree.RootID != preview.parentID {
-			t.Fatalf("%s database instance resolved to unexpected parent: %+v", name, preview)
-		}
+	}
+}
+
+func TestNewItemDocumentPreviewUsesBoxDocAsLogicalRoot(t *testing.T) {
+	fixture := setupFileOperationTest(t)
+	blockTree := &treenode.BlockTree{
+		ID:     fixture.box.ID,
+		RootID: fixture.box.ID,
+		BoxID:  fixture.box.ID,
+		HPath:  "/File operation test",
+	}
+
+	title := "Reference"
+	rendered, err := renderDocumentTarget(&EffectiveDocumentTarget{Notebook: fixture.box.ID, Path: "2026/202608/"},
+		DocumentPlanRequest{Notebook: fixture.box.ID, ContextID: &blockTree.RootID, Title: &title})
+	if err != nil || len(rendered.parents) != 2 || rendered.parents[0] != "2026" || rendered.parents[1] != "202608" ||
+		rendered.parentID != nil || rendered.title != title {
+		t.Fatalf("notebook document was used as a physical parent: %+v, %v", rendered, err)
 	}
 }
 
@@ -81,9 +105,14 @@ func TestBuildNewItemFieldValueOperationsWithoutKeyIDs(t *testing.T) {
 	attrView.KeyValues = []*av.KeyValues{{Key: blockKey}, {Key: textKey}}
 	value := &av.Value{Type: av.KeyTypeText, Text: &av.ValueText{Content: "value"}}
 
-	operations := buildNewItemFieldValueOperations(attrView, map[string]*av.Value{textKey.ID: value}, ast.NewNodeID())
+	blockID := ast.NewNodeID()
+	operations := buildNewItemFieldValueOperations(attrView, map[string]*av.Value{textKey.ID: value},
+		ast.NewNodeID(), blockID)
 	if 1 != len(operations) || "updateAttrViewCell" != operations[0].Action || textKey.ID != operations[0].KeyID {
 		t.Fatalf("unexpected field operations: %+v", operations)
+	}
+	if blockID != operations[0].BlockID {
+		t.Fatalf("field operation lost its database carrier: %+v", operations[0])
 	}
 }
 
@@ -166,9 +195,9 @@ func TestResolveDocCreateSaveLocation(t *testing.T) {
 	originalConf, originalDataDir := Conf, util.DataDir
 	util.DataDir = t.TempDir()
 	Conf = NewAppConf()
-	Conf.FileTree = conf.NewFileTree()
+	Conf.FileTree.Store(conf.NewFileTree())
 	Conf.NotebookCrypto = conf.NewNotebookCrypto()
-	Conf.Sync = conf.NewSync()
+	Conf.Sync.Store(conf.NewSync())
 	t.Cleanup(func() {
 		Conf = originalConf
 		util.DataDir = originalDataDir
@@ -188,8 +217,8 @@ func TestResolveDocCreateSaveLocation(t *testing.T) {
 			t.Fatalf("save notebook config failed: %s", err)
 		}
 	}
-	Conf.FileTree.DocCreateSaveBox = globalBoxID
-	Conf.FileTree.DocCreateSavePath = "/Global/{{now | date \"200601\"}}"
+	Conf.FileTree.Load().DocCreateSaveBox = globalBoxID
+	Conf.FileTree.Load().DocCreateSavePath = "/Global/{{now | date \"200601\"}}"
 
 	assertLocation := func(expectedBoxID, expectedPath string) {
 		t.Helper()
@@ -198,7 +227,7 @@ func TestResolveDocCreateSaveLocation(t *testing.T) {
 			t.Fatalf("unexpected save location: box=%q path=%q", boxID, pathTemplate)
 		}
 	}
-	assertLocation(globalBoxID, Conf.FileTree.DocCreateSavePath)
+	assertLocation(globalBoxID, Conf.FileTree.Load().DocCreateSavePath)
 
 	currentBoxConf.DocCreateSavePath = "Local/{{now | date \"200601\"}}"
 	if err := (&Box{ID: currentBoxID}).SaveConf(currentBoxConf); nil != err {
@@ -211,7 +240,7 @@ func TestResolveDocCreateSaveLocation(t *testing.T) {
 	if err := (&Box{ID: currentBoxID}).SaveConf(currentBoxConf); nil != err {
 		t.Fatal(err)
 	}
-	assertLocation(localBoxID, Conf.FileTree.DocCreateSavePath)
+	assertLocation(localBoxID, Conf.FileTree.Load().DocCreateSavePath)
 
 	currentBoxConf.DocCreateSavePath = "/Local"
 	if err := (&Box{ID: currentBoxID}).SaveConf(currentBoxConf); nil != err {
@@ -237,7 +266,8 @@ func TestNewBoundAttributeViewItemValueUsesDynamicAnchorText(t *testing.T) {
 	if nil != err {
 		t.Fatalf("create bound attribute view item value failed: %s", err)
 	}
-	if bound.IsDetached || docID != bound.Block.ID || "" != bound.Block.Content || "1f4c4" != bound.Block.Icon {
+	if bound.IsDetached || docID != bound.Block.ID || "" != bound.Block.Content || "1f4c4" != bound.Block.Icon ||
+		av.BlockRefSubtypeDynamic != bound.Block.RefSubtype {
 		t.Fatalf("the bound item should use dynamic anchor text: %+v", bound)
 	}
 	if !original.IsDetached || "" != original.Block.ID || "Detached item" != original.Block.Content {

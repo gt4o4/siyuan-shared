@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package api
 
@@ -26,6 +14,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/siyuan-note/siyuan/kernel/apicontract"
 	"github.com/siyuan-note/siyuan/kernel/model"
 )
 
@@ -133,12 +122,43 @@ func TestReadCustomEmojisRecursively(t *testing.T) {
 		t.Fatalf("write custom emoji failed: %s", err)
 	}
 
-	items := []map[string]any{}
+	items := []*apicontract.SystemEmoji{}
 	readCustomEmojis(root, "", &items)
 	if len(items) != 1 {
 		t.Fatalf("expected one custom emoji, got %d", len(items))
 	}
-	if actual := items[0]["unicode"]; actual != "folder/sub/icon.png" {
+	if actual := items[0].Unicode; actual != "folder/sub/icon.png" {
 		t.Fatalf("unexpected custom emoji path [%v]", actual)
+	}
+}
+
+func TestReadCustomEmojisPreservesExistingNames(t *testing.T) {
+	model.ClearCustomEmojis()
+	t.Cleanup(model.ClearCustomEmojis)
+	root := t.TempDir()
+	files := map[string]string{"\ufffd.png": "replacement", "_.png": "underscore", "[icon].png": "invalid", "icon.png": "existing"}
+	for name, data := range files {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 2 {
+		items := []*apicontract.SystemEmoji{}
+		readCustomEmojis(root, "", &items)
+		seen := map[string]bool{}
+		for _, item := range items {
+			seen[item.Unicode] = true
+		}
+		for _, name := range []string{"\ufffd.png", "_.png", "icon.png"} {
+			if !seen[name] {
+				t.Errorf("existing emoji disappeared from list: %q", name)
+			}
+		}
+		for name, want := range files {
+			got, err := os.ReadFile(filepath.Join(root, name))
+			if err != nil || string(got) != want {
+				t.Errorf("existing emoji %q changed: %q, %v", name, got, err)
+			}
+		}
 	}
 }

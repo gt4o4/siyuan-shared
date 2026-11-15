@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package cmd
 
@@ -192,7 +180,10 @@ var databaseUnusedCmd = &cobra.Command{
 	Use:   "unused",
 	Short: "List unused databases",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		items := model.UnusedAttributeViews(true)
+		items, err := model.UnusedAttributeViews(true)
+		if err != nil {
+			return err
+		}
 		switch outputFormat {
 		case "json":
 			return printJSON(map[string]any{"count": len(items), "items": items})
@@ -210,20 +201,31 @@ var databaseCleanCmd = &cobra.Command{
 		avID, _ := cmd.Flags().GetString("av")
 		if avID != "" {
 			if dryRun {
+				if err := model.ValidateUnusedAttributeView(avID); err != nil {
+					return err
+				}
 				fmt.Printf("[dry-run] Would clean unused database %s\n", avID)
 				return nil
 			}
-			model.RemoveUnusedAttributeView(avID)
+			if err := model.RemoveUnusedAttributeView(avID); err != nil {
+				return err
+			}
 			fmt.Println(avID)
 			return nil
 		}
 
 		if dryRun {
+			if _, err := model.UnusedAttributeViews(false); err != nil {
+				return err
+			}
 			fmt.Println("[dry-run] Would clean unused databases")
 			return nil
 		}
 
-		removed := model.RemoveUnusedAttributeViews()
+		removed, err := model.RemoveUnusedAttributeViews()
+		if err != nil {
+			return err
+		}
 		fmt.Printf("%d database(s) cleaned\n", len(removed))
 		return nil
 	},
@@ -269,7 +271,8 @@ var databaseItemAddCmd = &cobra.Command{
 		}
 		srcs := []map[string]any{src}
 
-		if err := model.AddAttributeViewBlock(nil, srcs, avID, "", viewID, groupID, previousID, ignoreFill); err != nil {
+		if err := model.PerformAttributeViewOperations([]*model.Operation{{Action: "insertAttrViewBlock", Srcs: srcs,
+			AvID: avID, ViewID: viewID, GroupID: groupID, PreviousID: previousID, IgnoreDefaultFill: ignoreFill}}); err != nil {
 			return err
 		}
 		model.AppendPushReloadAttrViewEntry(avID)
@@ -327,7 +330,8 @@ var databaseItemUpdateCmd = &cobra.Command{
 			return nil
 		}
 
-		if _, err := model.UpdateAttributeViewCell(nil, avID, keyID, itemID, valueData); err != nil {
+		if err := model.PerformAttributeViewOperations([]*model.Operation{{Action: "updateAttrViewCell", AvID: avID,
+			KeyID: keyID, RowID: itemID, Data: valueData}}); err != nil {
 			return err
 		}
 		model.AppendPushReloadAttrViewEntry(avID)
@@ -476,6 +480,10 @@ func databaseViewBase(viewable av.Viewable) (ret *av.BaseInstance) {
 	switch view := viewable.(type) {
 	case *av.Table:
 		ret = view.BaseInstance
+	case *av.Calendar:
+		ret = view.BaseInstance
+	case *av.List:
+		ret = view.BaseInstance
 	case *av.Gallery:
 		ret = view.BaseInstance
 	case *av.Kanban:
@@ -533,7 +541,7 @@ func init() {
 
 	databaseKeyAddCmd.Flags().String("av", "", "attribute view ID (required)")
 	databaseKeyAddCmd.Flags().String("name", "", "key name (required)")
-	databaseKeyAddCmd.Flags().String("type", "", "key type (required): text/number/date/select/mSelect/url/email/phone/mAsset/template/created/updated/checkbox/relation/rollup/lineNumber")
+	databaseKeyAddCmd.Flags().String("type", "", "key type (required): text/number/date/select/mSelect/url/email/phone/location/mAsset/template/created/updated/checkbox/relation/rollup/lineNumber")
 	databaseKeyAddCmd.Flags().String("icon", "", "key icon (optional)")
 	databaseKeyAddCmd.Flags().String("prev", "", "previous key ID for ordering (optional)")
 

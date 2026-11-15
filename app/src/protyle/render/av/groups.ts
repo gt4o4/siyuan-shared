@@ -1,30 +1,36 @@
+import {hasAVCapability, isAVDateType, isAVSelectType} from "./capabilities";
 import {unicode2Emoji} from "../../../emoji";
 import {getColIconByType} from "./col";
-import {escapeAttr, escapeHtml} from "../../../util/escape";
+import {escapeHtml} from "../../../util/escape";
 import {setPosition} from "../../../util/setPosition";
 import {getFieldsByData} from "./view";
 import {fetchSyncPost} from "../../../util/fetch";
 import {Menu} from "../../../plugin/Menu";
 import {objEquals} from "../../../util/functions";
 import {Constants} from "../../../constants";
+import {mergeGroupResponseView} from "./groupResponse";
+import {getAVColorStyle} from "./color";
 
 export const getPageSize = (blockElement: Element) => {
     const groupPageSize: {
         [key: string]: {
-            pageSize: number
+            pageSize: number,
+            page?: number
         }
     } = {};
     let unGroupPageSize: number;
+    let unGroupPage: number;
     blockElement.querySelectorAll(".av__body").forEach((item: HTMLElement) => {
         const id = item.dataset.groupId;
         const pageSize = parseInt(item.dataset.pageSize);
         if (id) {
-            groupPageSize[id] = {pageSize};
+            groupPageSize[id] = {pageSize, ...(item.dataset.rootPage ? {page: Number(item.dataset.rootPage)} : {})};
         } else if (!unGroupPageSize) {
             unGroupPageSize = pageSize;
+            unGroupPage = item.dataset.rootPage ? Number(item.dataset.rootPage) : undefined;
         }
     });
-    return {groupPageSize, unGroupPageSize};
+    return {groupPageSize, unGroupPageSize, unGroupPage};
 };
 
 export const setGroupMethod = async (options: {
@@ -36,9 +42,10 @@ export const setGroupMethod = async (options: {
 }) => {
     const blockID = options.blockElement.getAttribute("data-node-id");
     const column: IAVColumn = getFieldsByData(options.data).find(item => item.id === options.fieldId);
-    const data = column ? {
+    const groupByRendered = column?.type === "mAsset" && Boolean(column.renderTemplate?.trim());
+    const data: Record<string, unknown> = column ? {
         field: options.fieldId,
-        method: column.type === "number" ? 1 : (["date", "updated", "created"].includes(column.type) ? 2 : 0),
+        method: column.type === "number" ? 1 : (isAVDateType(column.type) ? 2 : 0),
         order: 0,
         range: column.type === "number" ? {
             numStart: 0,
@@ -46,13 +53,18 @@ export const setGroupMethod = async (options: {
             numStep: 100,
         } : null,
         hideEmpty: true,
+        valueSource: groupByRendered ? "rendered" : undefined,
     } : {field: null, method: null, order: null, range: null, hideEmpty: null};
     const response = await fetchSyncPost("/api/av/setAttrViewGroup", {
         blockID,
         avID: options.blockElement.getAttribute("data-av-id"),
-        group: data
+        group: data,
+        ignoreRows: true,
     });
-    options.data.view = response.data.view;
+    if (response.code !== 0) {
+        return;
+    }
+    options.data.view = mergeGroupResponseView(options.data.view, response.data);
     options.menuElement.innerHTML = getGroupsHTML(getFieldsByData(options.data), options.data.view);
     bindGroupsEvent({
         protyle: options.protyle,
@@ -71,7 +83,7 @@ export const getGroupsMethodHTML = (columns: IAVColumn[], group: IAVGroup, viewT
     ${(!group || !group.field) ? selectHTML : ""}
 </button>`;
     columns.forEach(item => {
-        if (["rollup", "mAsset", "lineNumber"].includes(item.type)) {
+        if (!hasAVCapability(item.type, "groupable") || (item.type === "mAsset" && !item.renderTemplate?.trim())) {
             return;
         }
         html += `<button class="b3-menu__item" data-id="${item.id}" data-type="setGroupMethod">
@@ -84,7 +96,7 @@ export const getGroupsMethodHTML = (columns: IAVColumn[], group: IAVGroup, viewT
     });
     return `<div class="b3-menu__items">
 <button class="b3-menu__item" data-type="nobg">
-    <span class="block__icon" style="padding: 8px;margin-left: -4px;" data-type="${(!group || !group.field) ? "go-config" : "goGroups"}">
+    <span class="block__icon block__icon--menu-back" data-type="${(!group || !group.field) ? "go-config" : "goGroups"}">
         <svg><use xlink:href="#iconLeft"></use></svg>
     </span>
     <span class="b3-menu__label ft__center">${window.siyuan.languages.groupMethod}</span>
@@ -129,7 +141,7 @@ export const getLanguageByIndex = (index: number, type: "sort" | "date") => {
 export const getGroupsNumberHTML = (group: IAVGroup) => {
     return `<div class="b3-menu__items">
     <button class="b3-menu__item" data-type="nobg">
-        <span class="block__icon" style="padding: 8px;margin-left: -4px;" data-type="goGroups">
+        <span class="block__icon block__icon--menu-back" data-type="goGroups">
             <svg><use xlink:href="#iconLeft"></use></svg>
         </span>
         <span class="b3-menu__label ft__center">${window.siyuan.languages.numberFormatNone}</span>
@@ -176,9 +188,12 @@ export const bindGroupsNumber = (options: {
         const response = await fetchSyncPost("/api/av/setAttrViewGroup", {
             blockID,
             avID: options.blockElement.getAttribute("data-av-id"),
-            group: options.data.view.group
+            group: options.data.view.group,
+            ignoreRows: true,
         });
-        options.data.view = response.data.view;
+        if (response.code === 0) {
+            options.data.view = mergeGroupResponseView(options.data.view, response.data);
+        }
     };
 };
 
@@ -188,8 +203,9 @@ export const getGroupsHTML = (columns: IAVColumn[], view: IAVView) => {
     if (view.group && view.group.field) {
         let groupHTML = "";
         column = columns.find(item => item.id === view.group.field);
+        const groupByRendered = view.group.valueSource === "rendered";
         if (view.groups?.length > 0) {
-            const disabledDrag = ["created", "date", "created", "updated"].includes(column.type);
+            const disabledDrag = !groupByRendered && isAVDateType(column.type);
             let showCount = 0;
             view.groups.forEach(item => {
                 if (item.groupHidden === 0) {
@@ -198,7 +214,7 @@ export const getGroupsHTML = (columns: IAVColumn[], view: IAVView) => {
                 let titleHTML = `<div class="b3-menu__label fn__flex-1 fn__ellipsis">${escapeHtml(item.name || "")}</div>`;
                 if (item.groupValue?.mSelect?.length > 0) {
                     titleHTML = `<div class="fn__flex-1">
-        <span class="b3-chip" style="background-color:var(--b3-font-background${escapeAttr(item.groupValue.mSelect[0].color)});color:var(--b3-font-color${escapeAttr(item.groupValue.mSelect[0].color)})">
+        <span class="b3-chip" style="${getAVColorStyle(item.groupValue.mSelect[0])}">
             <span class="fn__ellipsis">${escapeHtml(item.groupValue.mSelect[0].content)}</span>
         </span>
     </div>`;
@@ -223,17 +239,25 @@ export const getGroupsHTML = (columns: IAVColumn[], view: IAVView) => {
     </span>
 </button>` + groupHTML;
         }
-        html = `<button class="b3-menu__item${["date", "updated", "created"].includes(column.type) ? "" : " fn__none"}" data-type="goGroupsDate">
+        const valueSourceHTML = column.type !== "template" && (column.renderTemplate?.trim() || groupByRendered) ? `<label class="b3-menu__item">
+    <span class="fn__flex-center">${window.siyuan.languages.template}</span>
+    <span class="fn__space fn__flex-1"></span>
+    <select class="b3-select" data-type="groupValueSource">
+        <option value="stored" ${!groupByRendered ? "selected" : ""}>${window.siyuan.languages.originalValue}</option>
+        <option value="rendered" ${groupByRendered ? "selected" : ""}>${window.siyuan.languages.templateRenderedValue}</option>
+    </select>
+</label>` : "";
+        html = `${valueSourceHTML}<button class="b3-menu__item${!groupByRendered && isAVDateType(column.type) ? "" : " fn__none"}" data-type="goGroupsDate">
     <span class="b3-menu__label">${window.siyuan.languages.date}</span>
     <span class="b3-menu__accelerator">${getLanguageByIndex(view.group.method, "date")}</span>
     <svg class="b3-menu__icon b3-menu__icon--small"><use xlink:href="#iconRight"></use></svg>
 </button>
-<button class="b3-menu__item${column.type === "number" ? "" : " fn__none"}" data-type="getGroupsNumber">
+<button class="b3-menu__item${!groupByRendered && column.type === "number" ? "" : " fn__none"}" data-type="getGroupsNumber">
     <span class="b3-menu__label">${window.siyuan.languages.numberFormatNone}</span>
     <span class="b3-menu__accelerator">${(view.group.range && typeof view.group.range.numStart === "number") ? `${view.group.range.numStart} - ${view.group.range.numEnd}` : ""}</span>
     <svg class="b3-menu__icon b3-menu__icon--small"><use xlink:href="#iconRight"></use></svg>
 </button>
-<button class="b3-menu__item${["checkbox", "rollup", "mAsset"].includes(column.type) ? " fn__none" : ""}" data-type="goGroupsSort">
+<button class="b3-menu__item${!groupByRendered && (column.type === "checkbox" || column.type === "rollup" || column.type === "mAsset") ? " fn__none" : ""}" data-type="goGroupsSort">
     <span class="b3-menu__label">${window.siyuan.languages.sort}</span>
     <span class="b3-menu__accelerator">${getLanguageByIndex(view.group.order, "sort")}</span>
     <svg class="b3-menu__icon b3-menu__icon--small"><use xlink:href="#iconRight"></use></svg>
@@ -252,7 +276,7 @@ ${groupHTML}
     }
     return `<div class="b3-menu__items">
 <button class="b3-menu__item" data-type="nobg">
-    <span class="block__icon" style="padding: 8px;margin-left: -4px;" data-type="go-config">
+    <span class="block__icon block__icon--menu-back" data-type="go-config">
         <svg><use xlink:href="#iconLeft"></use></svg>
     </span>
     <span class="b3-menu__label ft__center">${window.siyuan.languages.group}</span>
@@ -273,19 +297,17 @@ export const bindGroupsEvent = (options: {
     blockElement: Element;
     data: IAV;
 }) => {
-    const checkElement = options.menuElement.querySelector("input");
-    if (!checkElement) {
-        return;
-    }
     const blockID = options.blockElement.getAttribute("data-node-id");
-    checkElement.addEventListener("change", async () => {
-        options.data.view.group.hideEmpty = checkElement.checked;
+    const saveGroup = async () => {
         const response = await fetchSyncPost("/api/av/setAttrViewGroup", {
             blockID,
             avID: options.blockElement.getAttribute("data-av-id"),
-            group: options.data.view.group
+            group: options.data.view.group,
+            ignoreRows: true,
         });
-        options.data.view = response.data.view;
+        if (response.code === 0) {
+            options.data.view = mergeGroupResponseView(options.data.view, response.data);
+        }
         options.menuElement.innerHTML = getGroupsHTML(getFieldsByData(options.data), options.data.view);
         bindGroupsEvent({
             protyle: options.protyle,
@@ -295,6 +317,40 @@ export const bindGroupsEvent = (options: {
         });
         const tabRect = options.blockElement.querySelector(".av__views").getBoundingClientRect();
         setPosition(options.menuElement, tabRect.right - options.menuElement.clientWidth, tabRect.bottom, tabRect.height, 0, true);
+    };
+    const checkElement = options.menuElement.querySelector("input.b3-switch") as HTMLInputElement;
+    checkElement?.addEventListener("change", async () => {
+        options.data.view.group.hideEmpty = checkElement.checked;
+        await saveGroup();
+    });
+    const valueSourceElement = options.menuElement.querySelector('[data-type="groupValueSource"]') as HTMLSelectElement;
+    valueSourceElement?.addEventListener("change", async () => {
+        if (valueSourceElement.value === "rendered") {
+            options.data.view.group.valueSource = "rendered";
+            options.data.view.group.method = 0;
+            delete options.data.view.group.range;
+            if (options.data.view.group.order === 3) {
+                options.data.view.group.order = 0;
+            }
+        } else {
+            delete options.data.view.group.valueSource;
+            const column = getFieldsByData(options.data).find(item => item.id === options.data.view.group.field);
+            const columnType = column?.type || "text";
+            options.data.view.group.method = columnType === "number" ? 1 :
+                (isAVDateType(columnType) ? 2 : 0);
+            if (columnType === "number") {
+                options.data.view.group.range = {numStart: 0, numEnd: 1000, numStep: 100};
+            }
+            if (isAVSelectType(columnType)) {
+                options.data.view.group.order = 3;
+            } else if (columnType === "checkbox") {
+                options.data.view.group.order = 2;
+            } else if (isAVDateType(columnType) &&
+                ![0, 1].includes(options.data.view.group.order)) {
+                options.data.view.group.order = 0;
+            }
+        }
+        await saveGroup();
     });
 };
 
@@ -322,9 +378,12 @@ export const goGroupsDate = (options: {
                 const response = await fetchSyncPost("/api/av/setAttrViewGroup", {
                     blockID,
                     avID: options.blockElement.getAttribute("data-av-id"),
-                    group: options.data.view.group
+                    group: options.data.view.group,
+                    ignoreRows: true,
                 });
-                options.data.view = response.data.view;
+                if (response.code === 0) {
+                    options.data.view = mergeGroupResponseView(options.data.view, response.data);
+                }
                 options.menuElement.innerHTML = getGroupsHTML(getFieldsByData(options.data), options.data.view);
                 bindGroupsEvent({
                     protyle: options.protyle,
@@ -341,7 +400,8 @@ export const goGroupsDate = (options: {
     menu.open({
         isLeft: true,
         x: rect.right,
-        y: rect.bottom
+        y: rect.bottom,
+        h: rect.height
     });
 };
 
@@ -358,9 +418,9 @@ export const goGroupsSort = (options: {
     }
     const blockID = options.blockElement.getAttribute("data-node-id");
     const column = getFieldsByData(options.data).find(item => item.id === options.data.view.group.field);
-    (["created", "date", "created", "updated"].includes(column.type) ? [0, 1] : (
-        ["mSelect", "select"].includes(column.type) ? [3, 2, 0, 1] : [2, 0, 1]
-    )).forEach((item) => {
+    (options.data.view.group.valueSource === "rendered" ? [2, 0, 1] : (isAVDateType(column.type) ? [0, 1] : (
+        isAVSelectType(column.type) ? [3, 2, 0, 1] : [2, 0, 1]
+    ))).forEach((item) => {
         const label = getLanguageByIndex(item, "sort");
         menu.addItem({
             iconHTML: "",
@@ -372,9 +432,12 @@ export const goGroupsSort = (options: {
                 const response = await fetchSyncPost("/api/av/setAttrViewGroup", {
                     blockID,
                     avID: options.blockElement.getAttribute("data-av-id"),
-                    group: options.data.view.group
+                    group: options.data.view.group,
+                    ignoreRows: true,
                 });
-                options.data.view = response.data.view;
+                if (response.code === 0) {
+                    options.data.view = mergeGroupResponseView(options.data.view, response.data);
+                }
                 options.menuElement.innerHTML = getGroupsHTML(getFieldsByData(options.data), options.data.view);
                 bindGroupsEvent({
                     protyle: options.protyle,
@@ -391,6 +454,7 @@ export const goGroupsSort = (options: {
     menu.open({
         isLeft: true,
         x: rect.right,
-        y: rect.bottom
+        y: rect.bottom,
+        h: rect.height
     });
 };

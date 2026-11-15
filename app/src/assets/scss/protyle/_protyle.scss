@@ -2,6 +2,71 @@
 @use "toolbar" as *;
 @use "wysiwyg" as *;
 @use "attr" as *;
+@use "mindmap-view" as *;
+@use "block-resize" as *;
+@use "inline";
+
+.protyle-keyboard-guard {
+  position: fixed;
+  top: 0;
+  left: -10000px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.b3-typography.outline-document-title,
+.b3-typography.document-title-preview {
+  display: block;
+  font-family: inherit;
+  @include inline.interactive-marks;
+
+  img {
+    max-height: 1.5em;
+    width: auto;
+    vertical-align: middle;
+  }
+}
+
+.b3-list-item__text.document-title-preview,
+.item__text.document-title-preview,
+.b3-menu__label.document-title-preview,
+.mobile-tabs__item-title.document-title-preview {
+  max-height: 1.625em;
+  overflow: hidden;
+  white-space: nowrap;
+  line-height: 1.625;
+}
+
+.b3-typography.document-title-preview,
+.mobile-document-title-editor .protyle-title__input,
+.document-title-dialog .protyle-title__input {
+  code:not(.hljs),
+  span[data-type~="code"] {
+    white-space: inherit;
+  }
+}
+
+.protyle-lite-fragment .protyle-action__menu {
+  display: none;
+}
+
+.protyle-lite-fragment .protyle-action__copy {
+  border-radius: var(--b3-border-radius);
+}
+
+.table__cell-editor,
+.mindmap-view__editor {
+  .code-block .protyle-action__menu {
+    display: block;
+  }
+
+  .code-block .protyle-action__copy {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+}
 
 .protyle-scroll {
   --b3-dynamicscroll-width: 200px;
@@ -10,6 +75,29 @@
   top: 30px;
   width: 16px;
   bottom: 9px; // 下图标 hover 时，需要留出一定的空间
+  // 空白区域透传点击，避免遮挡编辑器右侧的反链计数。
+  pointer-events: none;
+
+  &__down,
+  &__up,
+  &__bar,
+  &__page {
+    pointer-events: auto;
+  }
+
+  &__page {
+    position: absolute;
+    left: -8px;
+    bottom: 12%;
+    transform: translateX(-100%);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  &__page-up {
+    transform: rotate(180deg);
+  }
 
   svg {
     height: 16px;
@@ -21,7 +109,6 @@
   &__up {
     transition: var(--b3-transition);
     position: absolute;
-    opacity: 0;
     cursor: pointer;
     color: var(--b3-border-color);
 
@@ -36,13 +123,6 @@
 
   &__down {
     bottom: calc(50% - var(--b3-dynamicscroll-width) / 2 - 20px);
-  }
-
-  &:hover {
-    .protyle-scroll__down,
-    .protyle-scroll__up {
-      opacity: 1;
-    }
   }
 
   &__bar {
@@ -69,6 +149,25 @@
       }
     }
   }
+
+  @media (hover: none) {
+    &__bar {
+      top: calc(50% - 22px);
+
+      .b3-slider {
+        height: 44px;
+        touch-action: none;
+      }
+    }
+  }
+}
+
+.protyle--page-scroll {
+  --b3-protyle-page-scroll-gutter: 64px;
+
+  @media (pointer: coarse) {
+    --b3-protyle-page-scroll-gutter: 84px;
+  }
 }
 
 .protyle-gutters {
@@ -78,10 +177,32 @@
   box-sizing: border-box;
   z-index: 1;
   text-align: center;
+  // 块标会随指针重新定位，使用自身悬停反馈，避免系统触摸高亮留在原位置。
+  -webkit-tap-highlight-color: transparent;
+
+  // 横向超级块的块标需高于分栏宽度调节杆，避免重叠区域被调节杆截获点击
+  &--sb-column {
+    z-index: 6;
+  }
 
   &--dragging {
     opacity: 0;
     pointer-events: none;
+  }
+
+  &--full {
+    display: flex;
+    width: max-content;
+    scrollbar-width: none;
+    overscroll-behavior: contain;
+
+    > button {
+      flex-shrink: 0;
+    }
+  }
+
+  &[data-scrollable="true"] span {
+    touch-action: pan-y;
   }
 
   button {
@@ -90,6 +211,11 @@
     padding: 4px 3px;
     cursor: pointer;
     position: relative;
+
+    // 块标自身区域优先接收点击，插入框线和加号的扩展命中区仅在外侧生效。
+    &:not(.protyle-gutters__line):not(.protyle-gutters__plus) {
+      z-index: 5;
+    }
 
     &:hover svg {
       color: var(--b3-theme-on-surface);
@@ -136,12 +262,13 @@
     height: calc(var(--b3-font-size-editor) * 1.625);
     width: 16px;
     float: left;
+    pointer-events: none;
     transition: var(--b3-color-transition);
   }
 }
 
 // 块标边缘框线（悬浮块标显示），与 .protyle-gutters 同为 fixed 坐标系，由 JS 贴块标边缘定位
-// 选择器带 button 标签提升特异性，覆盖 .protyle-gutters button 的 position:relative；z-index 高于块标 span 覆盖层
+// 选择器带 button 标签提升特异性，覆盖 .protyle-gutters button 的 position:relative；块标自身位于框线上方
 .protyle-gutters button.protyle-gutters__line {
   position: fixed;
   z-index: 3;
@@ -219,7 +346,7 @@
   background-color: var(--b3-theme-background);
   flex-shrink: 0;
   box-sizing: border-box;
-  min-height: 42px;
+  min-height: var(--b3-ui-panel-height, 42px);
   // 需高于选区容器，并低于 .protyle-toolbar
   z-index: 5;
   font-size: 14px;
@@ -234,6 +361,19 @@
     }
   }
 
+  &__navigation .block__icon:first-child {
+    margin-left: 0;
+  }
+
+  > .protyle-breadcrumb__bar {
+    flex: 1;
+    min-width: 0;
+
+    + .protyle-breadcrumb__space {
+      flex: 0 0 8px;
+    }
+  }
+
   &__space {
     min-width: 8px;
     transition: var(--b3-transition);
@@ -242,6 +382,29 @@
     padding: 6px 0;
     line-height: 18px;
     flex: 1;
+  }
+
+  &__plugin,
+  &__actions {
+    display: flex;
+    align-items: center;
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+
+    &::-webkit-scrollbar {
+      display: none;
+    }
+
+    > .protyle-breadcrumb__icon:not(:first-child) {
+      margin-left: 8px;
+    }
+
+    > [data-entry-hidden="true"] {
+      display: none;
+    }
   }
 
   &__bar {
@@ -305,14 +468,9 @@
       padding: 5px;
       width: 24px;
 
-      &:hover,
-      &:focus-visible {
+      &:hover {
         background-color: var(--b3-list-hover);
         color: var(--b3-theme-on-background);
-      }
-
-      &:focus-visible {
-        outline: 1px solid var(--b3-theme-primary);
       }
 
       svg {
@@ -334,6 +492,19 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  &__graphic {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    font-variant-emoji: emoji;
+    font-size: 16px;
+    line-height: 16px;
+    object-fit: contain;
   }
 
   &__item {
@@ -366,14 +537,9 @@
     }
 
     &:hover,
-    &:focus-visible,
     &--active {
       color: var(--b3-theme-on-background);
       background-color: var(--b3-list-hover);
-    }
-
-    &:focus-visible {
-      outline: 1px solid var(--b3-theme-primary);
     }
   }
 }
@@ -393,19 +559,6 @@
     outline: none;
   }
 
-  &--transition {
-    > .protyle-wysiwyg,
-    > .sy__backlink--bottom {
-      transition: padding .3s cubic-bezier(.25, .46, .45, .94) 0ms;
-    }
-
-    .protyle-title,
-    .protyle-background__ia,
-    .protyle-db-attr {
-      transition: margin .3s cubic-bezier(.25, .46, .45, .94) 0ms;
-    }
-  }
-
   &--backlink-reveal {
     > .protyle-wysiwyg,
     > .sy__backlink--bottom {
@@ -414,7 +567,181 @@
   }
 }
 
+.protyle-content[data-padding-mode="responsive"],
+.protyle-preview[data-padding-mode="responsive"] {
+  container-name: protyle-padding;
+  container-type: inline-size;
+}
+
+// 水平边距的断点与 getEditorHorizontalPadding 保持一致，容器尺寸变化时由浏览器实时更新。
+.protyle-content[data-padding-mode="responsive"] {
+  > .protyle-top,
+  > .protyle-wysiwyg,
+  > .sy__backlink--bottom {
+    --b3-protyle-padding-left: 24px;
+    --b3-protyle-padding-right: 16px;
+  }
+
+  > .protyle-wysiwyg,
+  > .sy__backlink--bottom {
+    padding-left: var(--b3-protyle-padding-left);
+    padding-right: max(var(--b3-protyle-padding-right), var(--b3-protyle-page-scroll-gutter, 0px));
+  }
+
+  > .protyle-top {
+    .protyle-title,
+    .protyle-background__ia,
+    .protyle-db-attr {
+      margin-left: var(--b3-protyle-padding-left);
+      margin-right: max(var(--b3-protyle-padding-right), var(--b3-protyle-page-scroll-gutter, 0px));
+    }
+  }
+}
+
+.protyle-preview[data-padding-mode="responsive"][data-device="desktop"] > .b3-typography {
+  --b3-protyle-padding-left: 24px;
+  --b3-protyle-padding-right: 16px;
+  padding-left: var(--b3-protyle-padding-left);
+  padding-right: var(--b3-protyle-padding-right);
+}
+
+@container protyle-padding (width > 760px) {
+  .protyle-content[data-padding-mode="responsive"] {
+    > .protyle-top,
+    > .protyle-wysiwyg,
+    > .sy__backlink--bottom {
+      --b3-protyle-padding-left: 96px;
+      --b3-protyle-padding-right: 96px;
+    }
+  }
+
+  .protyle-preview[data-padding-mode="responsive"][data-device="desktop"] > .b3-typography {
+    --b3-protyle-padding-left: 96px;
+    --b3-protyle-padding-right: 96px;
+  }
+}
+
+@container protyle-padding (width > 952px) {
+  .protyle-content[data-padding-mode="responsive"]:not([data-fullwidth]) {
+    > .protyle-top,
+    > .protyle-wysiwyg,
+    > .sy__backlink--bottom {
+      --b3-protyle-padding-left: calc((100cqi - 760px) / 2);
+      --b3-protyle-padding-right: calc((100cqi - 760px) / 2);
+    }
+  }
+
+  .protyle-preview[data-padding-mode="responsive"][data-device="desktop"]:not([data-fullwidth]) > .b3-typography {
+    --b3-protyle-padding-left: calc((100cqi - 760px) / 2);
+    --b3-protyle-padding-right: calc((100cqi - 760px) / 2);
+  }
+}
+
+@container protyle-padding (width > 2280px) {
+  .protyle-content[data-padding-mode="responsive"]:not([data-fullwidth]) {
+    > .protyle-top,
+    > .protyle-wysiwyg,
+    > .sy__backlink--bottom {
+      --b3-protyle-padding-left: calc(100cqi * .382 / 1.382);
+      --b3-protyle-padding-right: calc(100cqi * .382 / 1.382);
+    }
+  }
+
+  .protyle-preview[data-padding-mode="responsive"][data-device="desktop"]:not([data-fullwidth]) > .b3-typography {
+    --b3-protyle-padding-left: calc(100cqi * .382 / 1.382);
+    --b3-protyle-padding-right: calc(100cqi * .382 / 1.382);
+  }
+}
+
 .sy__backlink {
+  .backlinkList__source {
+    appearance: none;
+    display: block;
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    margin: 0;
+    padding: 4px 28px;
+    border: 0;
+    border-radius: var(--b3-border-radius);
+    background-color: transparent;
+    color: var(--b3-theme-on-surface-light);
+    font: inherit;
+    font-size: 12px;
+    line-height: 20px;
+    text-align: start;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+
+    &:hover {
+      background-color: var(--b3-list-hover);
+      color: var(--b3-theme-on-background);
+    }
+
+    &:focus-visible {
+      outline: 1px solid var(--b3-theme-primary);
+      outline-offset: -1px;
+    }
+  }
+
+  // 仅为上下文首块已有的属性栏留出空间，普通块保持紧凑。
+  .protyle-wysiwyg > .protyle-breadcrumb__bar + [data-node-id]:is(
+    [name]:not([name=""]),
+    [alias]:not([alias=""]),
+    [memo]:not([memo=""]),
+    [bookmark]:not([bookmark=""]),
+    [custom-avs]:not([custom-avs=""])
+  ) {
+    margin-top: 12px;
+  }
+
+  .backlinkList__loading {
+    align-items: center;
+    box-sizing: border-box;
+    display: flex;
+    height: 100%;
+    justify-content: center;
+    min-height: 40px;
+    width: 100%;
+  }
+
+  [data-backlink-type-folded] {
+    display: none !important;
+  }
+
+  .backlinkTypeFold {
+    appearance: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    width: auto;
+    margin: 4px 0;
+    padding: 0 4px;
+    padding-inline-end: 8px;
+    border: 0;
+    border-radius: var(--b3-border-radius);
+    background-color: transparent;
+    color: var(--b3-theme-on-surface);
+    font: inherit;
+    font-size: 14px;
+    line-height: 24px;
+    flex-shrink: 0;
+    cursor: pointer;
+
+    &:hover {
+      background-color: var(--b3-list-hover);
+      color: var(--b3-theme-on-background);
+    }
+
+    svg {
+      width: 12px;
+      height: 12px;
+      flex-shrink: 0;
+    }
+  }
+
   > .backlinkList,
   > .backlinkMList {
     > .b3-list > .backlinkList__item {
@@ -438,11 +765,14 @@
         }
 
         > .counter {
-          background-color: transparent;
+          background-color: var(--b3-theme-background-light);
           color: var(--b3-theme-on-surface-light);
+          height: 18px;
+          line-height: 18px;
+          padding: 0 4px;
 
           &:hover {
-            background-color: transparent;
+            background-color: var(--b3-theme-background-light);
             color: var(--b3-theme-on-surface-light);
           }
         }
@@ -452,6 +782,13 @@
 }
 
 .sy__backlink--bottom {
+  // 避免浏览器锚定下方提及内容，导致折叠时标题随滚动补偿移动。
+  overflow-anchor: none;
+
+  .backlinkList__loading {
+    height: 40px;
+  }
+
   box-sizing: border-box;
   min-height: 32px;
   outline: none;
@@ -533,13 +870,6 @@
     }
   }
 
-  .backlinkList__loading {
-    align-items: center;
-    display: flex;
-    height: 40px;
-    justify-content: center;
-  }
-
   > .backlinkList--divider-spacing:not(.fn__none) + .block__icons {
     margin-top: 8px;
   }
@@ -584,6 +914,10 @@
   &__action {
     transition: opacity 150ms linear;
     opacity: 0;
+  }
+
+  &--hide-actions &__action {
+    display: none;
   }
 
   &__icon {
@@ -646,7 +980,6 @@
   position: relative;
   font-size: var(--b3-font-size-editor);
   font-family: var(--b3-font-family-protyle);
-  padding-left: 2px;
   border-radius: var(--b3-border-radius);
 
   &:hover .protyle-title__icon {
@@ -688,7 +1021,7 @@
     font-size: 2em;
     font-weight: bold;
     line-height: 1.625;
-    padding: 0 4px 0 2px;
+    padding: 0 4px;
     white-space: break-spaces;
 
     &:empty::after {
@@ -700,6 +1033,99 @@
     &:focus {
       outline: none;
     }
+  }
+}
+
+.protyle-title__rich {
+  // 标题按内容撑高，不继承完整编辑器为滚动条预留的最小高度。
+  min-height: 0;
+
+  .protyle-content {
+    overflow: visible;
+
+    &[data-padding-mode="responsive"] > .protyle-wysiwyg {
+      // 外层标题已跟随正文边距，内部片段不能再次叠加响应式留白。
+      padding-left: 0;
+      padding-right: 0;
+    }
+  }
+
+  .protyle-wysiwyg {
+    padding: 0;
+    min-height: 0;
+  }
+
+  .protyle-wysiwyg > [data-type="NodeParagraph"] {
+    margin: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+
+  .protyle-wysiwyg > [data-type="NodeParagraph"] > .protyle-title__input {
+    min-height: 1.625em;
+    padding: 0;
+  }
+
+  .img {
+    max-width: 100%;
+  }
+}
+
+.document-title-dialog {
+  min-height: 0;
+  max-height: min(60vh, 640px);
+  overflow: auto;
+  padding: 16px 24px;
+  background-color: transparent;
+
+  > .protyle-content,
+  > .protyle-preview {
+    display: none;
+  }
+}
+
+.document-title-dialog__editor {
+  min-height: 0;
+  overflow: auto;
+  font-size: var(--b3-font-size);
+
+  .protyle-title__rich {
+    width: max-content;
+    min-width: 100%;
+  }
+
+  .protyle-wysiwyg {
+    font-size: inherit;
+    font-family: inherit;
+
+    > [data-type="NodeParagraph"] {
+      padding: 0;
+    }
+  }
+
+  .protyle-title__input {
+    font-size: inherit;
+    font-weight: inherit;
+    padding: 0;
+    white-space: nowrap;
+  }
+
+  img {
+    max-height: 1.5em;
+    width: auto;
+  }
+
+  .protyle-attr {
+    display: none;
+  }
+}
+
+.document-title-conflict__preview {
+  max-height: 30vh;
+  overflow: auto;
+
+  .protyle-attr {
+    display: none;
   }
 }
 
@@ -718,6 +1144,212 @@
 
   &__tip {
     font-size: 2rem;
+  }
+}
+
+.table__cell-rich,
+.table__cell-editor {
+  // 跟随单元格的可用宽度，保证预览与编辑使用相同的折行边界。
+  width: auto;
+  max-width: 100%;
+}
+
+.table__cell-rich .code-block,
+.table__cell-editor .code-block,
+.mindmap-view__content .code-block {
+  // 预览与编辑共用最小宽度，为代码内容和顶部操作区保留空间。
+  min-width: 200px;
+
+  .protyle-action__language {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+.table__cell-rich {
+  min-width: 0;
+  min-height: 1.6em;
+  white-space: normal;
+  cursor: text;
+  padding: 0 !important;
+
+  .protyle-action {
+    pointer-events: none;
+  }
+
+  .protyle-icons,
+  .protyle-icon,
+  .protyle-action__language {
+    display: none !important;
+  }
+}
+
+.table__cell-editor {
+  min-width: 0;
+  min-height: 0;
+  white-space: normal;
+
+  [contenteditable="true"]:focus {
+    outline: none;
+  }
+
+  &.protyle {
+    background-color: transparent;
+  }
+
+  .protyle-content {
+    overflow: visible;
+
+    &[data-padding-mode="responsive"] {
+      // 单元格由内容参与列宽计算，不能隔离内部列表等块的固有宽度。
+      container-type: normal;
+    }
+  }
+
+  .protyle-wysiwyg {
+    padding: 0 !important;
+    min-height: 1.6em;
+    // 继承单元格字号，保持预览与编辑时的文字大小一致。
+    font-size: inherit;
+  }
+}
+
+.table__cell-rich.table__cell--inline,
+.table__cell-editor.table__cell--inline {
+  min-width: 0;
+  min-height: 0;
+  padding: 0 !important;
+
+  &,
+  .protyle-wysiwyg {
+    padding: 0 !important;
+    min-height: 0;
+
+    > .p {
+      margin: 0;
+      padding: 0;
+      line-height: inherit;
+
+      > [contenteditable] {
+        min-height: 1lh;
+      }
+    }
+  }
+}
+
+.table__cell-rich.table__cell--empty,
+.table__cell-editor.table__cell--empty {
+  // 空内容填满单元格，避免零宽编辑容器裁掉光标。
+  width: 100%;
+}
+
+.table__cell-rich [data-table-cell-content],
+.table__cell-editor .protyle-wysiwyg [contenteditable="true"] {
+  // 为空列表项等块的文字区域保留光标宽度，预览和编辑时保持一致。
+  min-width: 1px;
+}
+
+.table__cell-rich > .list[data-type="NodeList"],
+.table__cell-editor .protyle-wysiwyg > .list[data-type="NodeList"] {
+  // 首层列表按内容宽度整体对齐，内部保留左对齐，窄列中仍限制宽度以便换行。
+  margin-inline: var(--b3-table-cell-list-start, -8px) var(--b3-table-cell-list-end, 0);
+  width: fit-content;
+  max-width: calc(100% + var(--b3-table-cell-list-inset, 8px));
+  text-align: left;
+}
+
+.protyle-wysiwyg :is(td, th) {
+  // 普通左对齐抵消列表起始侧留白，居中和居右则使用单元格内容边界。
+  &[style*="text-align: center"] {
+    --b3-table-cell-list-start: auto;
+    --b3-table-cell-list-end: auto;
+    --b3-table-cell-list-inset: 0px;
+  }
+
+  &[style*="text-align: right"] {
+    --b3-table-cell-list-start: auto;
+    --b3-table-cell-list-end: 0;
+    --b3-table-cell-list-inset: 0px;
+  }
+}
+
+.table__cell-rich .li [data-table-cell-content],
+.table__cell-editor .protyle-wysiwyg .li [contenteditable="true"] {
+  // 列宽收缩时，列表缩进之外至少保留一个字符的空间。
+  min-width: 1em;
+}
+
+.table__cell-editor .protyle-wysiwyg [data-node-id] {
+  // 单元格的对齐方式优先于正文的两端对齐设置。
+  text-align: inherit;
+}
+
+.table__cell-rich > .p[data-table-cell-node],
+.table__cell-rich > .h1[data-table-cell-node],
+.table__cell-rich > .h2[data-table-cell-node],
+.table__cell-rich > .h3[data-table-cell-node],
+.table__cell-rich > .h4[data-table-cell-node],
+.table__cell-rich > .h5[data-table-cell-node],
+.table__cell-rich > .h6[data-table-cell-node],
+.table__cell-editor .protyle-wysiwyg > .p,
+.table__cell-editor .protyle-wysiwyg > .h1,
+.table__cell-editor .protyle-wysiwyg > .h2,
+.table__cell-editor .protyle-wysiwyg > .h3,
+.table__cell-editor .protyle-wysiwyg > .h4,
+.table__cell-editor .protyle-wysiwyg > .h5,
+.table__cell-editor .protyle-wysiwyg > .h6 {
+  // 单元格已提供侧边留白，多段落和标题与普通文本使用相同的对齐边界。
+  padding-inline: 0;
+}
+
+.protyle-wysiwyg [data-type="NodeTable"] {
+  td.dragover__top,
+  td.dragover__bottom,
+  th.dragover__top,
+  th.dragover__bottom {
+    position: relative;
+
+    // 与空单元格的占位行分离，避免占位行高度覆盖插入线高度。
+    &::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      height: 4px;
+      background-color: var(--b3-theme-primary-lighter);
+      pointer-events: none;
+    }
+  }
+
+  td.dragover__top::before,
+  th.dragover__top::before {
+    top: -4px;
+  }
+
+  td.dragover__bottom::before,
+  th.dragover__bottom::before {
+    bottom: -4px;
+  }
+
+  td[tabindex="-1"]:focus,
+  th[tabindex="-1"]:focus {
+    outline: none;
+  }
+
+  td:empty::after,
+  th:empty::after {
+    // 空单元格与输入文字共用行盒高度，避免输入第一个字符时改变整行高度。
+    content: "\200b";
+    display: block;
+    height: auto;
+  }
+}
+
+.table__cell-editor .protyle-wysiwyg > .p > [contenteditable]:empty {
+  &::before,
+  &::after {
+    content: none !important;
   }
 }
 
@@ -744,10 +1376,6 @@ table + .protyle-action__table {
     cursor: col-resize;
     z-index: 2;
     touch-action: none;
-
-    &:hover::after {
-      background-color: var(--b3-theme-primary-light);
-    }
 
     &::after {
       top: 0;
@@ -789,10 +1417,17 @@ table + .protyle-action__table {
 }
 
 .protyle-wysiwyg--select,
+.protyle-wysiwyg--select-mode,
 .protyle-wysiwyg--hl {
   .protyle-action__table::before {
     display: none;
   }
+}
+
+.table__cell--touch-selecting {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .protyle-table-control {
@@ -844,7 +1479,7 @@ table + .protyle-action__table {
     }
 
     &:hover,
-    &:focus-visible {
+    &--active {
       &::before {
         opacity: 0;
       }
@@ -943,11 +1578,11 @@ table + .protyle-action__table {
     }
 
     &--row {
-      cursor: row-resize;
+      cursor: ns-resize;
     }
 
     &--column {
-      cursor: col-resize;
+      cursor: ew-resize;
     }
 
     &--both {
@@ -977,10 +1612,166 @@ table + .protyle-action__table {
     pointer-events: none;
   }
 
-  &__drop {
+  &__drop,
+  &__width-guide,
+  &__height-guide {
     position: fixed;
     z-index: 3;
     background-color: var(--b3-theme-primary);
     pointer-events: none;
+  }
+
+  &__width-guide {
+    width: 2px;
+    transform: translateX(-50%);
+  }
+
+  &__height-guide {
+    height: 2px;
+    transform: translateY(-50%);
+  }
+
+  &__height {
+    height: 8px;
+    cursor: row-resize;
+    touch-action: none;
+
+    &::before {
+      display: none;
+    }
+  }
+
+  &__width {
+    width: 28px;
+    cursor: col-resize;
+    touch-action: pan-y;
+
+    &::before {
+      width: 2px;
+      height: 100%;
+      background-color: var(--b3-theme-primary);
+    }
+
+    &:hover::before {
+      opacity: 1;
+    }
+  }
+
+  &--touch {
+    .protyle-table-control__height {
+      height: 28px;
+    }
+
+    > .protyle-table-control__handle,
+    > .protyle-table-control__add {
+      display: none;
+    }
+  }
+
+  &__touch-button,
+  &__endpoint {
+    position: fixed;
+    z-index: 3;
+    width: 28px;
+    height: 28px;
+    justify-content: center;
+    transform: translate(-50%, -50%);
+    pointer-events: auto;
+    touch-action: none;
+  }
+
+  &__endpoint {
+    z-index: 4;
+
+    &::before {
+      content: "";
+      width: 12px;
+      height: 12px;
+      background-color: var(--b3-theme-primary);
+      border: 2px solid var(--b3-theme-background);
+      border-radius: 50%;
+    }
+  }
+
+  &__toolbar {
+    left: 8px;
+    right: 8px;
+    top: 8px;
+    width: auto;
+    pointer-events: auto;
+  }
+
+  &__touch-add {
+    touch-action: none;
+
+    &::before {
+      content: "";
+      position: absolute;
+      inset: -6px;
+    }
+  }
+
+  &__touch-handle {
+    width: 16px;
+    height: 16px;
+    touch-action: none;
+
+    &::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+    }
+
+    &.protyle-table-control__handle--row::after {
+      left: -12px;
+    }
+
+    &.protyle-table-control__handle--column::after {
+      top: -12px;
+    }
+  }
+}
+.image-ocr {
+  display: flex;
+  gap: 16px;
+  min-height: 0;
+
+  &__preview {
+    flex: 1;
+    min-width: 0;
+    overflow: auto;
+
+    img {
+      max-width: 100%;
+    }
+  }
+
+  &__text {
+    flex: 1;
+    min-width: 0;
+    resize: none;
+  }
+
+  @media (max-width: 600px) {
+    flex-direction: column;
+
+    &__text {
+      min-height: 160px;
+    }
+  }
+}
+
+.img__name,
+.img__alt {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  overflow-wrap: anywhere;
+  white-space: break-spaces;
+
+  > span {
+    flex: 1;
+    width: 0;
   }
 }

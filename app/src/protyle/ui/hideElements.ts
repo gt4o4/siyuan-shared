@@ -1,6 +1,9 @@
 import {getAllEditor} from "../../layout/getAll";
+import {hideRectResizeHandles} from "../../asset/rectAnnotationResize";
 import {isIPhone} from "../util/compatibility";
 import {hideGutterElements} from "./gutterVisibility";
+import {closeSubElement} from "../toolbar/subElementLifecycle";
+import {clearBlockSelectionMode} from "../wysiwyg/blockSelection";
 
 // "gutter", "toolbar", "select", "hint", "util", "dialog", "gutterOnly"
 export const hideElements = (panels: string[], protyle?: IProtyle, focusHide = false) => {
@@ -19,8 +22,7 @@ export const hideElements = (panels: string[], protyle?: IProtyle, focusHide = f
         protyle.hint.element.classList.add("fn__none");
     }
     if (protyle.gutter && panels.includes("gutter")) {
-        protyle.gutter.element.classList.add("fn__none");
-        protyle.gutter.element.innerHTML = "";
+        hideGutterElements([protyle.gutter.element], true);
         // https://ld246.com/article/1651935412480
         protyle.wysiwyg.element.querySelectorAll(".protyle-wysiwyg--hl").forEach((item) => {
             item.classList.remove("protyle-wysiwyg--hl");
@@ -47,18 +49,11 @@ export const hideElements = (panels: string[], protyle?: IProtyle, focusHide = f
         if (!protyle.toolbar.isMultiSelectMode() &&
             (focusHide || !pinElement || (pinElement && pinElement.getAttribute("aria-label") === window.siyuan.languages.pin))) {
             protyle.toolbar.subElement.classList.add("fn__none");
-            if (protyle.toolbar.subElementCloseCB) {
-                protyle.toolbar.subElementCloseCB();
-                protyle.toolbar.subElementCloseCB = undefined;
-            }
+            closeSubElement(protyle.toolbar);
         }
     }
     if (panels.includes("select")) {
-        protyle.wysiwyg.element.querySelectorAll(".protyle-wysiwyg--select").forEach(item => {
-            item.classList.remove("protyle-wysiwyg--select");
-            item.removeAttribute("select-start");
-            item.removeAttribute("select-end");
-        });
+        clearBlockSelectionMode(protyle.wysiwyg.element, true);
     }
 };
 
@@ -77,10 +72,7 @@ export const hideAllElements = (types: string[]) => {
                 if (!item.protyle.toolbar.isMultiSelectMode() &&
                     (!pinElement || (pinElement && pinElement.getAttribute("aria-label") === window.siyuan.languages.pin))) {
                     item.protyle.toolbar.subElement.classList.add("fn__none");
-                    if (item.protyle.toolbar.subElementCloseCB) {
-                        item.protyle.toolbar.subElementCloseCB();
-                        item.protyle.toolbar.subElementCloseCB = undefined;
-                    }
+                    closeSubElement(item.protyle.toolbar);
                 }
             }
         });
@@ -89,11 +81,9 @@ export const hideAllElements = (types: string[]) => {
         document.querySelectorAll(".pdf__util").forEach(item => {
             item.classList.add("fn__none");
         });
+        hideRectResizeHandles(document);
     }
     if (types.includes("gutter")) {
-        document.querySelectorAll(".protyle-gutters").forEach(item => {
-            item.classList.add("fn__none");
-            item.innerHTML = "";
-        });
+        hideGutterElements(Array.from(document.querySelectorAll<HTMLElement>(".protyle-gutters")), true);
     }
 };

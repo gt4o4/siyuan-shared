@@ -8,3 +8,25 @@ export const getPartialUpdateCleanupElements = <T>(
     }
     return rootElements.filter(item => item !== updateRootElement);
 };
+
+export const shouldDeferCodeBlockCaretRestore = (options: {
+    isRangeBlock: boolean,
+    isReplay: boolean,
+    hasCaret: boolean,
+    isCodeBlock: boolean,
+    isRendered: boolean,
+}) => options.isRangeBlock && options.isReplay && options.hasCaret && options.isCodeBlock && !options.isRendered;
+
+export const shouldReloadForHeadingBatch = (
+    rootID: string | undefined,
+    operations: Array<{context?: {headingBatchRootID?: string}}>,
+) => operations.some(operation => {
+    const headingBatchRootID = operation.context?.headingBatchRootID;
+    return Boolean(headingBatchRootID) && headingBatchRootID === rootID;
+});
+
+export const shouldReloadForEmbedConversion = (
+    rootID: string | undefined,
+    operations: Array<{context?: {headingBatchRootID?: string, ignoreProcess?: string}}>,
+) => Boolean(rootID) && operations.some(operation => operation.context?.headingBatchRootID === rootID &&
+    operation.context.ignoreProcess === "true");

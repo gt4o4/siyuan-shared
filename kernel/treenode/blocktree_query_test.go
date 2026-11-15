@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package treenode
 
@@ -22,6 +10,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/88250/lute/ast"
 	"github.com/mattn/go-sqlite3"
 	"github.com/siyuan-note/siyuan/kernel/util"
 )
@@ -57,6 +46,41 @@ func TestGetRootBlockIDsByBoxID(t *testing.T) {
 	}
 }
 
+func TestCustomBlockTypeInBlockTree(t *testing.T) {
+	const (
+		boxID   = "20260830000000-box0001"
+		docID   = "20260830000001-doc0001"
+		blockID = "20260830000002-custom1"
+	)
+
+	previousBlockTreeDBPath := util.BlockTreeDBPath
+	util.BlockTreeDBPath = filepath.Join(t.TempDir(), "blocktree.db")
+	InitBlockTree(true)
+	t.Cleanup(func() {
+		CloseDatabase()
+		util.BlockTreeDBPath = previousBlockTreeDBPath
+		if "" != previousBlockTreeDBPath {
+			InitBlockTree(false)
+		}
+	})
+
+	tree := NewTree(boxID, "/"+docID+".sy", "/Document", "Document")
+	tree.Root.FirstChild.Unlink()
+	customBlock := &ast.Node{Type: ast.NodeCustomBlock, ID: blockID, CustomBlockInfo: "example-plugin/chart", Tokens: []byte("payload")}
+	customBlock.SetIALAttr("id", blockID)
+	customBlock.SetIALAttr("updated", blockID[:14])
+	tree.Root.AppendChild(customBlock)
+	UpsertBlockTree(tree)
+
+	blockTree := GetBlockTreeInBox(blockID, boxID)
+	if nil == blockTree {
+		t.Fatal("custom block was not written to blocktree")
+	}
+	if "custom" != blockTree.Type || docID != blockTree.ParentID {
+		t.Fatalf("unexpected custom blocktree: type=%q, parentID=%q", blockTree.Type, blockTree.ParentID)
+	}
+}
+
 func TestCleanupInvalidBlockTrees(t *testing.T) {
 	testDB, err := sql.Open("sqlite3_extended", ":memory:")
 	if nil != err {
@@ -77,5 +101,29 @@ func TestCleanupInvalidBlockTrees(t *testing.T) {
 	var count int
 	if err = testDB.QueryRow("SELECT COUNT(*) FROM blocktrees").Scan(&count); nil != err || 1 != count {
 		t.Fatalf("cleanup should retain only valid blocktrees: count=%d, err=%v", count, err)
+	}
+}
+
+func TestQueriesWithoutDatabase(t *testing.T) {
+	previousDB := db
+	db = nil
+	t.Cleanup(func() {
+		db = previousDB
+	})
+
+	if count := CountTrees(); count != 0 {
+		t.Fatalf("tree count should be zero after closing database: %d", count)
+	}
+	if count := CountBlocks(); count != 0 {
+		t.Fatalf("block count should be zero after closing database: %d", count)
+	}
+	if ExistBlockTree("20260811000000-block01") {
+		t.Fatal("block should not exist after closing database")
+	}
+	if tree := GetBlockTree("20260811000000-block01"); tree != nil {
+		t.Fatalf("block tree should be nil after closing database: %+v", tree)
+	}
+	if tree := GetBlockTreeInExactBox("20260811000000-block01", ""); tree != nil {
+		t.Fatalf("exact block tree should be nil after closing database: %+v", tree)
 	}
 }

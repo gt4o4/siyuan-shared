@@ -15,7 +15,7 @@ import {isWindow} from "../../../util/functions";
 import {openRecentDocs} from "../../../business/openRecentDocs";
 import {openSearch} from "../../../search/spread";
 import {goBack, goForward} from "../../../util/backForward";
-import {getAllTabs, getAllWnds} from "../../../layout/getAll";
+import {getAllTabs} from "../../../layout/getAll";
 import {getInstanceById} from "../../../layout/util";
 import {
     closeTabByType,
@@ -38,13 +38,25 @@ import {lockScreen} from "../../../dialog/processSystem";
 import {newFile} from "../../../util/newFile";
 import {openCard} from "../../../card/openCard";
 import {syncGuide} from "../../../sync/syncGuide";
-import {Wnd} from "../../../layout/Wnd";
-import {unsplitWnd} from "../../../menus/tab";
+import {unsplitCurrentWnd, unsplitWnd} from "../../../menus/tab";
 import {openFile} from "../../../editor/util";
+import {getAssetPathWithoutFragment} from "../../../util/pathName";
 import {fetchPost} from "../../../util/fetch";
 import {sanitizeClosedTabs, setStorageVal} from "../../../protyle/util/compatibility";
+import {adjustEditorFontSize} from "../../../util/editorFontSize";
+/// #if !MOBILE
+import {toggleDockPanel} from "../../../layout/dock/panel";
+/// #endif
 
-export const globalCommand = (command: string, app: App) => {
+const getSelectionText = (range?: Range) => {
+    if (range) {
+        return range.toString();
+    }
+    const selection = document.getSelection();
+    return selection?.rangeCount ? selection.getRangeAt(0).toString() : "";
+};
+
+export const globalCommand = (command: string, app: App, range?: Range, openOnly = false) => {
     /// #if MOBILE
     switch (command) {
         case "fileTree":
@@ -63,7 +75,7 @@ export const globalCommand = (command: string, app: App) => {
             popMenu();
             return true;
         case "globalSearch":
-            popSearch(app);
+            popSearch(app, undefined, openOnly);
             return true;
         case "recentDocs":
             getRecentDocs(app);
@@ -98,11 +110,12 @@ export const globalCommand = (command: string, app: App) => {
             openSearch({
                 app,
                 hotkey: Constants.DIALOG_GLOBALSEARCH,
-                key: (getSelection().rangeCount > 0 ? getSelection().getRangeAt(0) : document.createRange()).toString()
+                focusInput: openOnly,
+                key: getSelectionText(range)
             });
             return true;
         case "stickSearch":
-            openGlobalSearch(app, (getSelection().rangeCount > 0 ? getSelection().getRangeAt(0) : document.createRange()).toString(), true);
+            openGlobalSearch(app, getSelectionText(range), true);
             return true;
         case "goBack":
             goBack(app);
@@ -143,13 +156,17 @@ export const globalCommand = (command: string, app: App) => {
         case "goToTabPrev":
             switchTabByIndex(-2);
             return true;
+        case "switchTab":
+            getActiveTab(false)?.parent.renderTabList(undefined, true);
+            return true;
         case "mainMenu":
             if (!isWindow()) {
-                workspaceMenu(app, document.querySelector("#barWorkspace").getBoundingClientRect());
+                const target = document.querySelector("#barWorkspace");
+                workspaceMenu(app, target.getBoundingClientRect(), openOnly, target);
             }
             return true;
         case "recentDocs":
-            openRecentDocs();
+            openRecentDocs(openOnly);
             return true;
         case "recentClosed": {
             const closedTabsLength = window.siyuan.storage[Constants.LOCAL_CLOSED_TABS].length;
@@ -170,7 +187,8 @@ export const globalCommand = (command: string, app: App) => {
                     return true;
                 }
                 if (childData.instance === "Asset") {
-                    fetchPost("/api/asset/statAsset", {path: childData.path}, (response) => {
+                    // 内核按文件名检查资源，需先去掉片段；重新打开时仍使用原始路径，保留 #t= 等媒体片段
+                    fetchPost("/api/asset/statAsset", {path: getAssetPathWithoutFragment(childData.path)}, (response) => {
                         if (response.code !== 1) {
                             openFile({
                                 app,
@@ -182,29 +200,21 @@ export const globalCommand = (command: string, app: App) => {
                     return true;
                 }
                 if (childData.instance === "Custom") {
-                    let exit = childData.customModelType === "siyuan-card";
-                    if (!exit) {
-                        app.plugins.find(p => {
-                            if (p.models[childData.customModelType]) {
-                                exit = true;
-                                return true;
-                            }
-                        });
-                    }
-                    if (exit) {
-                        openFile({
-                            app,
-                            custom: {
-                                icon: closeData.icon,
-                                title: closeData.title,
-                                data: childData.customModelData,
-                                id: childData.customModelType
-                            },
-                        });
-                    }
+                    openFile({
+                        app,
+                        custom: {
+                            icon: closeData.icon,
+                            title: closeData.title,
+                            data: childData.customModelData,
+                            id: childData.customModelType
+                        },
+                    });
                     return true;
                 }
                 fetchPost("/api/block/getBlockInfo", {id: childData.rootId || childData.blockId}, (infoResponse) => {
+                    if (infoResponse.code !== 0) {
+                        return;
+                    }
                     if (infoResponse.data.rootID === (childData.rootId || childData.blockId)) {
                         if (childData.instance === "Editor") {
                             openFile({
@@ -257,6 +267,15 @@ export const globalCommand = (command: string, app: App) => {
             return true;
         case "switchBottomDock":
             window.siyuan.layout.bottomDock.togglePin();
+            return true;
+        case "toggleLeftDockPanel":
+            toggleDockPanel("Left");
+            return true;
+        case "toggleRightDockPanel":
+            toggleDockPanel("Right");
+            return true;
+        case "toggleBottomDockPanel":
+            toggleDockPanel("Bottom");
             return true;
         case "toggleWin":
             /// #if !BROWSER
@@ -317,24 +336,13 @@ export const globalCommand = (command: string, app: App) => {
         return true;
     }
     if (command === "unsplitAll") {
-        unsplitWnd(window.siyuan.layout.centerLayout, window.siyuan.layout.centerLayout, false);
+        unsplitWnd(window.siyuan.layout.centerLayout, window.siyuan.layout.centerLayout);
         return true;
     }
     if (command === "unsplit") {
         const tab = getActiveTab(false);
         if (tab) {
-            let wndsTemp: Wnd[] = [];
-            let layout = tab.parent.parent;
-            while (layout.id !== window.siyuan.layout.centerLayout.id) {
-                wndsTemp = [];
-                getAllWnds(layout, wndsTemp);
-                if (wndsTemp.length > 1) {
-                    break;
-                } else {
-                    layout = layout.parent;
-                }
-            }
-            unsplitWnd(tab.parent.parent.children[0], layout, true);
+            unsplitCurrentWnd(tab.parent);
             resizeTabs();
         }
         return true;
@@ -441,23 +449,32 @@ export const globalCommand = (command: string, app: App) => {
     /// #endif
 
     switch (command) {
+        case "increaseEditorFontSize":
+            adjustEditorFontSize("increase");
+            return true;
+        case "decreaseEditorFontSize":
+            adjustEditorFontSize("decrease");
+            return true;
+        case "resetEditorFontSize":
+            adjustEditorFontSize("reset");
+            return true;
         case "dailyNote":
             newDailyNote(app);
             return true;
         case "dataHistory":
-            openHistory(app);
+            openHistory(app, "doc", openOnly);
             return true;
         case "editReadonly":
             editorConfigApi.patch("editor.readOnly", !window.siyuan.config.editor.readOnly);
             return true;
         case "lockScreen":
-            lockScreen(app);
+            lockScreen();
             return true;
         case "newFile":
             newFile(app);
             return true;
         case "riffCard":
-            openCard(app);
+            openCard(app, openOnly);
             return true;
         case "selectOpen1":
             selectOpenTab();

@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
@@ -30,6 +18,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -234,10 +223,15 @@ var (
 	errObsidianVaultMarkdownMissing = errors.New("Obsidian Vault has no readable Markdown")
 	errObsidianSourceChanged        = errors.New("Obsidian source file changed")
 
-	obsidianBlockIDPattern  = regexp.MustCompile(`(?m)(?:^|[ \t])\^([A-Za-z0-9-]+)[ \t]*$`)
-	obsidianQuotePattern    = regexp.MustCompile(`^((?:[ \t]*>[ \t]?)+)(.*)$`)
-	obsidianListItemPattern = regexp.MustCompile(`^([ \t]*(?:[-+*]|\d+[.)])[ \t]+)(.*)$`)
-	obsidianFootnotePattern = regexp.MustCompile(`(?m)\[\^[^\]\r\n]+\]`)
+	obsidianBlockIDPattern              = regexp.MustCompile(`(?m)(?:^|[ \t])\^([A-Za-z0-9-]+)[ \t]*$`)
+	obsidianQuotePattern                = regexp.MustCompile(`^((?:[ \t]*>[ \t]?)+)(.*)$`)
+	obsidianListItemPattern             = regexp.MustCompile(`^([ \t]*(?:[-+*]|\d+[.)])[ \t]+)(.*)$`)
+	obsidianFootnotePattern             = regexp.MustCompile(`(?m)\[\^[^\]\r\n]+\]`)
+	obsidianFootnoteDefinitionPattern   = regexp.MustCompile(`(?m)^\[\^([^\]\r\n]+)\]:[ \t]*(.*?)[ \t]*\r?$`)
+	obsidianFootnoteReferencePattern    = regexp.MustCompile(`\[\^([^\]\r\n]+)\]`)
+	obsidianBlockRefTextReplacer        = strings.NewReplacer("\\", "\\\\", "\"", "\\\"")
+	obsidianDynamicBlockRefTextReplacer = strings.NewReplacer("\\", "\\\\", "'", "\\'")
+	obsidianMarkdownTextReplacer        = strings.NewReplacer("\\", "\\\\", "[", "\\[", "]", "\\]")
 )
 
 func StartObsidianVaultAnalysis(localPath string) (*ObsidianVaultTask, error) {
@@ -547,10 +541,7 @@ func analyzeObsidianVault(ctx context.Context, localPath string, progress func(i
 		ret.Analysis.ImportableAssetCount++
 		ret.Analysis.ImportableAssetSize += asset.Source.Size
 	}
-	ret.Analysis.UnreferencedFileCount = len(ret.ImportAssets) - len(ret.ReferencedAssets)
-	if ret.Analysis.UnreferencedFileCount < 0 {
-		ret.Analysis.UnreferencedFileCount = 0
-	}
+	ret.Analysis.UnreferencedFileCount = max(len(ret.ImportAssets)-len(ret.ReferencedAssets), 0)
 	progress(100, "Analysis completed")
 	return ret, nil
 }
@@ -769,7 +760,7 @@ func planObsidianDocuments(ctx context.Context, vault *obsidianVaultContext) err
 			dirDoc := dirDocs[obsidianPathKey(dir)]
 			dirDoc.Title = uniqueObsidianTitle(parentTarget, dirDoc.Title, titleUses, vault.Analysis)
 			dirDoc.TargetPath = path.Join(parentTarget, dirDoc.ID+".sy")
-			dirDoc.HPath = path.Join(parentHPath, dirDoc.Title)
+			dirDoc.HPath = appendDocumentHPath(parentHPath, dirDoc.Title)
 			contentTarget = path.Join(parentTarget, dirDoc.ID)
 			contentHPath = dirDoc.HPath
 		}
@@ -794,7 +785,7 @@ func planObsidianDocuments(ctx context.Context, vault *obsidianVaultContext) err
 		for _, doc := range directDocs {
 			doc.Title = uniqueObsidianTitle(contentTarget, doc.Title, titleUses, vault.Analysis)
 			doc.TargetPath = path.Join(contentTarget, doc.ID+".sy")
-			doc.HPath = path.Join(contentHPath, doc.Title)
+			doc.HPath = appendDocumentHPath(contentHPath, doc.Title)
 		}
 
 		var childDirs []string
@@ -870,7 +861,7 @@ func analyzeObsidianDocuments(ctx context.Context, vault *obsidianVaultContext, 
 				doc.BlockIDs[blockID] = ast.NewNodeID()
 			}
 		}
-		tree, _, _, _ := parseStdMd(data)
+		tree, _, _, _ := parseStdMd(data, false)
 		if tree == nil {
 			return newObsidianUserError(347, doc.Source.RelPath,
 				fmt.Errorf("parse Markdown [%s] failed", doc.Source.RelPath))
@@ -913,7 +904,7 @@ func analyzeObsidianDocuments(ctx context.Context, vault *obsidianVaultContext, 
 				}
 			}
 		}
-		tree, _, _, _ := parseStdMd(data)
+		tree, _, _, _ := parseStdMd(data, false)
 		if tree == nil {
 			return newObsidianUserError(347, doc.Source.RelPath,
 				fmt.Errorf("parse Markdown [%s] failed", doc.Source.RelPath))
@@ -1052,9 +1043,9 @@ func resolveObsidianTarget(vault *obsidianVaultContext, current *obsidianDocPlan
 
 	docPart := target
 	fragment := ""
-	if index := strings.Index(target, "#"); index >= 0 {
-		docPart = target[:index]
-		fragment = target[index+1:]
+	if before, after, ok := strings.Cut(target, "#"); ok {
+		docPart = before
+		fragment = after
 	}
 	if docPart == "" {
 		return resolveObsidianDocumentFragment(current, fragment)
@@ -1087,6 +1078,7 @@ func resolveObsidianTarget(vault *obsidianVaultContext, current *obsidianDocPlan
 }
 
 func resolveObsidianDocument(vault *obsidianVaultContext, current *obsidianDocPlan, target string) (*obsidianDocPlan, string) {
+	rootRelative := strings.HasPrefix(target, "/")
 	target = strings.TrimSpace(strings.TrimPrefix(target, "/"))
 	if target == "" {
 		return current, "resolved"
@@ -1105,6 +1097,16 @@ func resolveObsidianDocument(vault *obsidianVaultContext, current *obsidianDocPl
 	if strings.Contains(target, "/") {
 		if doc := vault.DocsByRel[obsidianPathKey(path.Clean(target))]; doc != nil {
 			return doc, "resolved"
+		}
+		if !rootRelative {
+			// 库根路径未匹配时，尝试相对当前文档目录的路径。
+			candidate := path.Clean(path.Join(path.Dir(current.RelPath), target))
+			if candidate == ".." || strings.HasPrefix(candidate, "../") {
+				return nil, "unsupported"
+			}
+			if doc := vault.DocsByRel[obsidianPathKey(candidate)]; doc != nil {
+				return doc, "resolved"
+			}
 		}
 		return nil, "missing"
 	}
@@ -1131,8 +1133,8 @@ func resolveObsidianDocumentFragment(doc *obsidianDocPlan, fragment string) obsi
 	if fragment == "" {
 		return obsidianResolvedTarget{Status: "resolved", Doc: doc, ID: doc.ID}
 	}
-	if strings.HasPrefix(fragment, "^") {
-		blockID := strings.TrimPrefix(fragment, "^")
+	if after, ok := strings.CutPrefix(fragment, "^"); ok {
+		blockID := after
 		if doc.DuplicateBlocks[blockID] {
 			if id := doc.BlockIDs[blockID]; id != "" {
 				return obsidianResolvedTarget{Status: "resolved", Doc: doc, ID: id, Ambiguous: true}
@@ -1159,6 +1161,7 @@ func resolveObsidianDocumentFragment(doc *obsidianDocPlan, fragment string) obsi
 }
 
 func resolveObsidianAsset(vault *obsidianVaultContext, current *obsidianDocPlan, target string) (*obsidianAssetPlan, string) {
+	rootRelative := strings.HasPrefix(target, "/")
 	target = strings.TrimSpace(strings.TrimPrefix(target, "/"))
 	if target == "" || path.Ext(target) == "" {
 		return nil, "unsupported"
@@ -1176,6 +1179,16 @@ func resolveObsidianAsset(vault *obsidianVaultContext, current *obsidianDocPlan,
 	if strings.Contains(target, "/") {
 		if asset := vault.Assets[obsidianPathKey(path.Clean(target))]; asset != nil {
 			return asset, "resolved"
+		}
+		if !rootRelative {
+			// 库根路径未匹配时，尝试相对当前文档目录的路径。
+			candidate := path.Clean(path.Join(path.Dir(current.RelPath), target))
+			if candidate == ".." || strings.HasPrefix(candidate, "../") {
+				return nil, "unsupported"
+			}
+			if asset := vault.Assets[obsidianPathKey(candidate)]; asset != nil {
+				return asset, "resolved"
+			}
 		}
 		return nil, "missing"
 	}
@@ -1246,8 +1259,8 @@ func resolveObsidianMarkdownDestination(vault *obsidianVaultContext, current *ob
 	if destination == "" {
 		return obsidianResolvedTarget{Status: "unsupported"}
 	}
-	if strings.HasPrefix(destination, "#") {
-		return resolveObsidianDocumentFragment(current, strings.TrimPrefix(destination, "#"))
+	if after, ok := strings.CutPrefix(destination, "#"); ok {
+		return resolveObsidianDocumentFragment(current, after)
 	}
 	lowerDestination := strings.ToLower(destination)
 	if strings.HasPrefix(destination, "/") || strings.Contains(destination, "://") || strings.HasPrefix(lowerDestination, "data:") ||
@@ -1286,6 +1299,7 @@ func resolveObsidianMarkdownDestination(vault *obsidianVaultContext, current *ob
 
 func scanObsidianSource(data []byte) *obsidianScanResult {
 	ret := &obsidianScanResult{Duplicates: map[string]bool{}}
+	mathCompatible := MathDelimiterCompatibilityEnabled()
 	protected := make([]bool, len(data))
 	markProtected := func(start, end int) {
 		if start < 0 {
@@ -1367,6 +1381,14 @@ func scanObsidianSource(data []byte) *obsidianScanResult {
 			continue
 		}
 		if data[i] == '\\' {
+			if mathCompatible && i+1 < len(data) && (data[i+1] == '(' || data[i+1] == '[') {
+				if _, consumed := parse.MatchLatexMath(data[i:], data[i+1] == '['); consumed > 0 {
+					// 公式内容不参与双链、注释、脚注和块 ID 的转换。
+					markProtected(i, i+consumed)
+					i += consumed
+					continue
+				}
+			}
 			i += 2
 			continue
 		}
@@ -1733,7 +1755,7 @@ func importObsidianVaultTask(ctx context.Context, taskID, notebookName string) {
 		removeObsidianTemp(taskID)
 		return
 	}
-	if err = filelock.WriteFile(filepath.Join(boxDir, ".siyuan", "sort.json"), sortData); err != nil {
+	if err = util.WriteUserFile(filepath.Join(boxDir, ".siyuan", "sort.json"), sortData); err != nil {
 		result.Incomplete = true
 		markObsidianNotebookIncomplete(boxID, notebookName)
 		failObsidianTask(taskID, "writing", err, result)
@@ -1970,26 +1992,20 @@ func obsidianWikiLinkAnchor(token obsidianWikiToken, doc *obsidianDocPlan) strin
 }
 
 func escapeObsidianBlockRefText(text string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(text, "\\", "\\\\"), "\"", "\\\"")
+	return obsidianBlockRefTextReplacer.Replace(text)
 }
 
 func escapeObsidianDynamicBlockRefText(text string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(text, "\\", "\\\\"), "'", "\\'")
+	return obsidianDynamicBlockRefTextReplacer.Replace(text)
 }
 
 func escapeObsidianMarkdownText(text string) string {
-	replacer := strings.NewReplacer("\\", "\\\\", "[", "\\[", "]", "\\]")
-	return replacer.Replace(text)
+	return obsidianMarkdownTextReplacer.Replace(text)
 }
 
 func isObsidianImage(filePath string) bool {
 	ext := strings.ToLower(path.Ext(filePath))
-	for _, imageExt := range util.SiYuanAssetsImage {
-		if ext == imageExt {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(util.SiYuanAssetsImage, ext)
 }
 
 func parseObsidianImageSize(value string) (width, height int, ok bool) {
@@ -2016,8 +2032,7 @@ func parseObsidianImageSize(value string) (width, height int, ok bool) {
 func convertObsidianFootnotes(data []byte, stats *obsidianTransformStats) []byte {
 	scan := scanObsidianSource(data)
 	masked := maskObsidianProtected(data, scan.Protected)
-	definitionPattern := regexp.MustCompile(`(?m)^\[\^([^\]\r\n]+)\]:[ \t]*(.*?)[ \t]*\r?$`)
-	matches := definitionPattern.FindAllSubmatchIndex(masked, -1)
+	matches := obsidianFootnoteDefinitionPattern.FindAllSubmatchIndex(masked, -1)
 	if len(matches) == 0 {
 		return data
 	}
@@ -2036,8 +2051,7 @@ func convertObsidianFootnotes(data []byte, stats *obsidianTransformStats) []byte
 		definitions[label] = append(definitions[label], def)
 		orderedDefinitions = append(orderedDefinitions, def)
 	}
-	refPattern := regexp.MustCompile(`\[\^([^\]\r\n]+)\]`)
-	refMatches := refPattern.FindAllSubmatchIndex(masked, -1)
+	refMatches := obsidianFootnoteReferencePattern.FindAllSubmatchIndex(masked, -1)
 	var orderedLabels []string
 	seen := map[string]bool{}
 	for _, match := range refMatches {
@@ -2137,8 +2151,8 @@ func injectObsidianBlockIAL(data []byte, doc *obsidianDocPlan) []byte {
 		}
 	}
 	ret := append([]byte(nil), data...)
-	for index := len(matches) - 1; index >= 0; index-- {
-		match := matches[index]
+	for index, match := range slices.Backward(matches) {
+
 		blockID := string(data[match[2]:match[3]])
 		if doc.BlockIDs[blockID] == "" || (doc.DuplicateBlocks[blockID] && firstMatches[blockID] != index) {
 			continue
@@ -2179,6 +2193,7 @@ func maskObsidianProtected(data []byte, spans []obsidianSpan) []byte {
 
 func parseObsidianMd(markdown []byte, vault *obsidianVaultContext, doc *obsidianDocPlan, stats *obsidianTransformStats) (*parse.Tree, error) {
 	luteEngine := util.NewStdLute()
+	setImportMathDelimiters(luteEngine)
 	luteEngine.SetYamlFrontMatter(true)
 	luteEngine.SetBlockRef(true)
 	luteEngine.SetKramdownIAL(true)
@@ -2327,7 +2342,8 @@ func assignObsidianTreeIDs(tree *parse.Tree, doc *obsidianDocPlan, reservedIDs m
 	tree.HPath = doc.HPath
 	tree.Root.Box = ""
 	tree.Root.Path = doc.TargetPath
-	tree.Root.Spec = treenode.CurrentSpec
+	tree.Root.Spec = treenode.BaseSpec
+	treenode.UpgradeSpec(tree)
 	tree.Root.SetIALAttr("id", doc.ID)
 	tree.Root.SetIALAttr("title", doc.Title)
 	tree.Root.SetIALAttr("updated", util.TimeFromID(doc.ID))
@@ -2349,7 +2365,7 @@ func writeObsidianTempTree(docsTemp string, tree *parse.Tree) error {
 	if !json.Valid(data) {
 		return fmt.Errorf("generated tree [%s] is not valid JSON", tree.HPath)
 	}
-	if !util.UseSingleLineSave {
+	if !util.UseSingleLineSave.Load() {
 		var buffer bytes.Buffer
 		if err := json.Indent(&buffer, data, "", "\t"); err != nil {
 			return err
@@ -2360,7 +2376,7 @@ func writeObsidianTempTree(docsTemp string, tree *parse.Tree) error {
 	if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 		return err
 	}
-	return filelock.WriteFile(target, data)
+	return util.WriteUserFile(target, data)
 }
 
 func copyStableObsidianFile(source *obsidianSourceFile, destination string) error {
@@ -2370,7 +2386,7 @@ func copyStableObsidianFile(source *obsidianSourceFile, destination string) erro
 	if err := os.MkdirAll(filepath.Dir(destination), 0755); err != nil {
 		return err
 	}
-	if err := filelock.Copy(source.AbsPath, destination); err != nil {
+	if err := util.CopyUserFile(source.AbsPath, destination); err != nil {
 		return err
 	}
 	return validateObsidianSourceMetadata(source)
@@ -2392,7 +2408,7 @@ func writeObsidianSortFile(tempRoot string, docs []*obsidianDocPlan) error {
 	if err != nil {
 		return err
 	}
-	return filelock.WriteFile(filepath.Join(tempRoot, "sort.json"), data)
+	return util.WriteUserFile(filepath.Join(tempRoot, "sort.json"), data)
 }
 
 func copyObsidianTreeFiles(sourceRoot, destinationRoot string) error {
@@ -2414,7 +2430,7 @@ func copyObsidianTreeFiles(sourceRoot, destinationRoot string) error {
 		if entry.Type()&os.ModeSymlink != 0 {
 			return errors.New("staged document tree contains a symbolic link")
 		}
-		return filelock.Copy(current, destination)
+		return util.CopyUserFile(current, destination)
 	})
 }
 

@@ -1,8 +1,17 @@
+import {mobileConfirmDialog} from "../../../../dialog/mobileConfirmDialog";
 import {Menu} from "../../../../plugin/Menu";
 import {Constants} from "../../../../constants";
 import {transaction} from "../../../wysiwyg/transaction";
-import {confirmDialog} from "../../../../dialog/confirmDialog";
-import * as dayjs from "dayjs";
+import dayjs from "dayjs";
+import {getAVData} from "../virtualScroll";
+import {
+    AV_MANAGE_CUSTOM_COLORS_TYPE,
+    applyAVColorPalette,
+    getAVColorGridHTML,
+    getAVColorOrder,
+    getAVCustomColors,
+} from "../color";
+import {openAVCustomColorDialog} from "../colorDialog";
 
 export const openKanbanGroupMenu = (options: {
     protyle: IProtyle,
@@ -25,16 +34,18 @@ export const openKanbanGroupMenu = (options: {
         desc?: string,
     }[];
     const option = colOptions.find(item => item.name === name);
+    const data = getAVData(options.blockElement as HTMLElement);
     if (!option) {
         return;
     }
+    applyAVColorPalette(menu.element, getAVCustomColors());
 
     menu.addItem({
         icon: "iconTrashcan",
         label: window.siyuan.languages.delete,
         warning: true,
         click() {
-            confirmDialog(
+            mobileConfirmDialog(
                 window.siyuan.languages.deleteKanbanGroupConfirm,
                 window.siyuan.languages.deleteKanbanGroupTip,
                 () => {
@@ -42,6 +53,7 @@ export const openKanbanGroupMenu = (options: {
                         action: "removeAttrViewColOption",
                         id: colID,
                         avID,
+                        blockID,
                         data: name,
                     }, {
                         action: "doUpdateUpdated",
@@ -51,6 +63,7 @@ export const openKanbanGroupMenu = (options: {
                         action: "updateAttrViewColOptions",
                         id: colID,
                         avID,
+                        blockID,
                         data: colOptions,
                     }]);
                 },
@@ -79,19 +92,29 @@ export const openKanbanGroupMenu = (options: {
         }
     });
     menu.addSeparator();
-    let colorHTML = `<div class="b3-menu__labels">${window.siyuan.languages.color}</div>
-<div class="fn__flex fn__flex-wrap" style="width: 238px">`;
-    Array.from(Array(14).keys()).forEach(index => {
-        colorHTML += `<button data-color="${index + 1}" class="color__square${parseInt(option.color) === index + 1 ? " color__square--current" : ""}" style="color: var(--b3-font-color${index + 1});background-color: var(--b3-font-background${index + 1});">A</button>`;
-    });
+    const colorHTML = `<div class="b3-menu__labels">${window.siyuan.languages.color}</div>
+<div class="fn__flex fn__flex-wrap" style="width:238px;max-height:238px;overflow:auto">${getAVColorGridHTML(
+        getAVCustomColors(), option.color, window.siyuan.languages.manageColors, getAVColorOrder())}</div>`;
     menu.addItem({
         type: "empty",
         iconHTML: "",
-        label: colorHTML + "</div>",
+        label: colorHTML,
         bind(element) {
+            element.classList.add("b3-menu__custom");
             element.addEventListener("click", (event) => {
-                const colorTarget = event.target as HTMLElement;
-                if (!colorTarget.classList.contains("color__square") ||
+                const colorTarget = (event.target as HTMLElement).closest<HTMLElement>("button");
+                if (colorTarget?.dataset.type === AV_MANAGE_CUSTOM_COLORS_TYPE) {
+                    menu.close();
+                    if (data) {
+                        openAVCustomColorDialog({
+                            protyle: options.protyle,
+                            data,
+                            blockElement: options.blockElement as HTMLElement,
+                        });
+                    }
+                    return;
+                }
+                if (!colorTarget || !colorTarget.classList.contains("color__square") ||
                     colorTarget.classList.contains("color__square--current")) {
                     return;
                 }
@@ -100,6 +123,7 @@ export const openKanbanGroupMenu = (options: {
                     action: "updateAttrViewColOption",
                     id: colID,
                     avID,
+                    blockID,
                     data: {
                         oldName: name,
                         newName: name,
@@ -115,6 +139,7 @@ export const openKanbanGroupMenu = (options: {
                     action: "updateAttrViewColOption",
                     id: colID,
                     avID,
+                    blockID,
                     data: {
                         oldName: name,
                         newName: name,

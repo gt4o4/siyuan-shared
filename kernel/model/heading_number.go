@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
@@ -78,15 +66,17 @@ func headingNumberEnabled(tree *parse.Tree, defaultEnabled bool) bool {
 
 // GetHeadingNumbers 返回文档标题块 ID 到显示编号的映射。
 func GetHeadingNumbers(rootID, boxID string) (ret map[string]string, err error) {
+	confEditorSnapshot := Conf.LoadEditor()
+
 	FlushTxQueue()
 	tree, err := loadTreeByBlockIDInBox(rootID, boxID)
 	if err != nil || nil == tree {
 		return map[string]string{}, err
 	}
-	if !headingNumberEnabled(tree, Conf.Editor.HeadingNumber) {
+	if !headingNumberEnabled(tree, confEditorSnapshot.HeadingNumber) {
 		return map[string]string{}, nil
 	}
-	return headingNumberLabels(tree, Conf.Editor.HeadingNumberFormat), nil
+	return headingNumberLabels(tree, confEditorSnapshot.HeadingNumberFormat), nil
 }
 
 func headingNumberLabels(tree *parse.Tree, format string) map[string]string {
@@ -96,6 +86,13 @@ func headingNumberLabels(tree *parse.Tree, format string) map[string]string {
 		ret[id] = entry.Label
 	}
 	return ret
+}
+
+func headingNumberPrefix(number string) string {
+	if strings.HasSuffix(number, "、") || strings.HasSuffix(number, "）") {
+		return number
+	}
+	return number + " "
 }
 
 func buildHeadingNumberEntries(tree *parse.Tree, format string) map[string]headingNumberEntry {
@@ -139,6 +136,7 @@ func collectOutlineHeadings(tree *parse.Tree) (ret []*ast.Node) {
 		if entering && ast.NodeHeading == n.Type &&
 			!n.ParentIs(ast.NodeBlockquote) &&
 			!n.ParentIs(ast.NodeCallout) &&
+			!n.ParentIs(ast.NodeTabItem) &&
 			!n.ParentIs(ast.NodeBlockQueryEmbed) {
 			ret = append(ret, n)
 			return ast.WalkSkipChildren
@@ -310,8 +308,8 @@ func chineseNumber(number int) string {
 		number /= 10000
 		unitIndex++
 	}
-	if strings.HasPrefix(ret, "一十") {
-		ret = "十" + strings.TrimPrefix(ret, "一十")
+	if after, ok := strings.CutPrefix(ret, "一十"); ok {
+		ret = "十" + after
 	}
 	return ret
 }

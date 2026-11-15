@@ -1,32 +1,24 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package mcp
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/siyuan-note/siyuan/kernel/mcp/tools"
+	"github.com/siyuan-note/siyuan/kernel/util"
 )
 
 func newTestHTTPServer(t *testing.T) (*mcpsdk.Server, *httptest.Server) {
@@ -50,6 +42,70 @@ func newTestHTTPServer(t *testing.T) (*mcpsdk.Server, *httptest.Server) {
 	httpServer := httptest.NewServer(withEncryptedBoxOperationScope(newHTTPHandler(server)))
 	t.Cleanup(httpServer.Close)
 	return server, httpServer
+}
+
+func TestPrivateCacheMiddleware(t *testing.T) {
+	discover := &mcpsdk.DiscoverResult{}
+	tools := &mcpsdk.ListToolsResult{}
+	prompts := &mcpsdk.ListPromptsResult{}
+	resources := &mcpsdk.ListResourcesResult{}
+	templates := &mcpsdk.ListResourceTemplatesResult{}
+	resource := &mcpsdk.ReadResourceResult{}
+	tests := []struct {
+		name       string
+		result     mcpsdk.Result
+		nilResult  mcpsdk.Result
+		cacheScope *string
+	}{
+		{"discover", discover, (*mcpsdk.DiscoverResult)(nil), &discover.CacheScope},
+		{"tools", tools, (*mcpsdk.ListToolsResult)(nil), &tools.CacheScope},
+		{"prompts", prompts, (*mcpsdk.ListPromptsResult)(nil), &prompts.CacheScope},
+		{"resources", resources, (*mcpsdk.ListResourcesResult)(nil), &resources.CacheScope},
+		{"templates", templates, (*mcpsdk.ListResourceTemplatesResult)(nil), &templates.CacheScope},
+		{"resource", resource, (*mcpsdk.ReadResourceResult)(nil), &resource.CacheScope},
+	}
+	handlerErr := errors.New("handler failed")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, outcome := range []struct {
+				name   string
+				result mcpsdk.Result
+				err    error
+			}{
+				{"success", test.result, nil},
+				{"error", test.result, handlerErr},
+				{"typed_nil_error", test.nilResult, handlerErr},
+				{"typed_nil_success", test.nilResult, nil},
+			} {
+				t.Run(outcome.name, func(t *testing.T) {
+					*test.cacheScope = "public"
+					handler := privateCacheMiddleware()(func(context.Context, string, mcpsdk.Request) (mcpsdk.Result, error) {
+						return outcome.result, outcome.err
+					})
+					result, err := handler(t.Context(), "test", nil)
+					if result != outcome.result || err != outcome.err {
+						t.Fatalf("handler result was not preserved: %v, %v", result, err)
+					}
+					wantScope := "public"
+					if outcome.result == test.result && outcome.err == nil {
+						wantScope = "private"
+					}
+					if *test.cacheScope != wantScope {
+						t.Fatalf("unexpected cache scope: got %q, want %q", *test.cacheScope, wantScope)
+					}
+				})
+			}
+		})
+	}
+	for _, result := range []mcpsdk.Result{nil, &mcpsdk.CallToolResult{}} {
+		handler := privateCacheMiddleware()(func(context.Context, string, mcpsdk.Request) (mcpsdk.Result, error) {
+			return result, nil
+		})
+		got, err := handler(t.Context(), "test", nil)
+		if got != result || err != nil {
+			t.Fatalf("uncacheable result was not preserved: %v, %v", got, err)
+		}
+	}
 }
 
 func TestModernProtocolClient(t *testing.T) {
@@ -128,6 +184,145 @@ func TestModernProtocolClient(t *testing.T) {
 	if !found {
 		t.Fatal("dynamically registered tool was not listed")
 	}
+}
+
+func TestContentToolDescriptionsReachMCPClients(t *testing.T) {
+	server, httpServer := newTestHTTPServer(t)
+	contentTools := map[string]struct {
+		tool     *tools.Tool
+		property string
+	}{
+		"block": {tools.BlockTool, "data"}, "document": {tools.DocumentTool, "markdown"},
+		"dailynote": {tools.DailynoteTool, "data"}, "template": {tools.TemplateTool, "content"},
+	}
+	for name, tc := range contentTools {
+		syncTool(server, name, tc.tool)
+	}
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "content-description-test", Version: "1.0.0"}, nil)
+	session, err := client.Connect(t.Context(), &mcpsdk.StreamableClientTransport{Endpoint: httpServer.URL}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { session.Close() })
+	result, err := session.ListTools(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range result.Tools {
+		tc, ok := contentTools[tool.Name]
+		if !ok {
+			continue
+		}
+		if tool.Description != tc.tool.Description {
+			t.Fatalf("MCP client did not receive the shared %s rules", tool.Name)
+		}
+		data, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var schema tools.ToolSchema
+		if err = json.Unmarshal(data, &schema); err != nil {
+			t.Fatal(err)
+		}
+		if schema.Properties[tc.property].Description != tc.tool.InputSchema.Properties[tc.property].Description {
+			t.Fatalf("MCP client did not receive the %s content syntax", tool.Name)
+		}
+		delete(contentTools, tool.Name)
+	}
+	if len(contentTools) != 0 {
+		t.Fatalf("content tools were not listed: %v", contentTools)
+	}
+}
+
+func TestToolProjectionPolicyAndExecutionRecheck(t *testing.T) {
+	server := newServer()
+	allowed := true
+	projection := newToolProjection(server, func(tool *tools.Tool) bool {
+		return allowed && tool.Source != "mcp"
+	})
+	handlerCalls := 0
+	tool := &tools.Tool{
+		Name:         "projected",
+		Description:  "Projected tool",
+		InputSchema:  tools.ToolSchema{Type: "object"},
+		CapabilityID: "native/backend/projected",
+		Handler: func(map[string]any) (tools.CallToolResult, error) {
+			handlerCalls++
+			return tools.CallToolResult{}, nil
+		},
+	}
+	projection.sync(tool.Name, tool)
+
+	httpServer := httptest.NewServer(newHTTPHandler(server))
+	t.Cleanup(httpServer.Close)
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test-client", Version: "1.0.0"}, nil)
+	session, err := client.Connect(t.Context(), &mcpsdk.StreamableClientTransport{Endpoint: httpServer.URL}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { session.Close() })
+
+	listResult, err := session.ListTools(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !toolListContains(listResult.Tools, tool.Name) {
+		t.Fatal("allowed capability was not exposed")
+	}
+
+	allowed = false
+	callResult, err := session.CallTool(t.Context(), &mcpsdk.CallToolParams{Name: tool.Name})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !callResult.IsError || handlerCalls != 0 {
+		t.Fatalf("disabled capability was executed: result=%#v calls=%d", callResult, handlerCalls)
+	}
+
+	projection.sync(tool.Name, tool)
+	listResult, err = session.ListTools(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if toolListContains(listResult.Tools, tool.Name) {
+		t.Fatal("disabled capability remained exposed")
+	}
+
+	allowed = true
+	projection.sync(tool.Name, tool)
+	callResult, err = session.CallTool(t.Context(), &mcpsdk.CallToolParams{Name: tool.Name})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if callResult.IsError || handlerCalls != 1 {
+		t.Fatalf("re-enabled capability was not executed: result=%#v calls=%d", callResult, handlerCalls)
+	}
+}
+
+func TestExternalMCPToolsAreNotReexposed(t *testing.T) {
+	if externalMCPToolAllowed(&tools.Tool{Name: "remote", Source: "mcp", Runtime: "mcp"}) {
+		t.Fatal("external MCP capability was exposed through the SiYuan MCP server")
+	}
+}
+
+func TestAgentOnlyToolsAreNotExposed(t *testing.T) {
+	for _, tool := range []*tools.Tool{tools.QuestionTool, tools.TodoWriteTool, tools.AgentLogTool} {
+		if !tool.AgentOnly {
+			t.Fatalf("Agent session tool was not marked as Agent-only: %s", tool.Name)
+		}
+		if externalMCPToolAllowed(tool) {
+			t.Fatalf("Agent session tool was exposed through the SiYuan MCP server: %s", tool.Name)
+		}
+	}
+}
+
+func toolListContains(toolList []*mcpsdk.Tool, name string) bool {
+	for _, tool := range toolList {
+		if tool.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func TestToolOutputSchemaSerialization(t *testing.T) {
@@ -301,6 +496,44 @@ func TestToolInputAndOutputValidation(t *testing.T) {
 	}
 }
 
+func TestSkillResourceContentSurvivesMCPConversion(t *testing.T) {
+	originalDataDir, originalHomeDir := util.DataDir, util.HomeDir
+	root := t.TempDir()
+	util.DataDir = filepath.Join(root, "workspace", "data")
+	util.HomeDir = filepath.Join(root, "home")
+	t.Cleanup(func() {
+		util.DataDir, util.HomeDir = originalDataDir, originalHomeDir
+	})
+
+	skillDir := filepath.Join(util.SkillsDir(), "transport-skill")
+	if err := os.MkdirAll(filepath.Join(skillDir, "references"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"),
+		[]byte("---\nname: transport-skill\ndescription: transport test\n---\nbody"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "references", "valid.txt"), []byte("中文内容"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := tools.SkillTool.Handler(map[string]any{
+		"action": "load",
+		"name":   "transport-skill/references/valid.txt",
+	})
+	if err != nil || result.IsError || len(result.Content) != 1 {
+		t.Fatalf("unexpected Skill resource result: %#v, %v", result, err)
+	}
+	converted, err := convertContentItem(result.Content[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, ok := converted.(*mcpsdk.TextContent)
+	if !ok || text.Text != "<skill_resource skill=\"transport-skill\" path=\"references/valid.txt\">\n\n中文内容\n\n</skill_resource>" {
+		t.Fatalf("Skill resource changed during MCP conversion: %#v", converted)
+	}
+}
+
 func TestNonTextToolContentIsPreserved(t *testing.T) {
 	server, httpServer := newTestHTTPServer(t)
 	var imageContent tools.ContentItem
@@ -370,6 +603,87 @@ func TestExplicitNullStructuredContent(t *testing.T) {
 	structured, ok := callResponse.Result["structuredContent"]
 	if !ok || string(structured) != "null" {
 		t.Fatalf("explicit null was not returned: %#v", callResponse.Result)
+	}
+}
+
+func TestReadMissingResourceDoesNotCrashServer(t *testing.T) {
+	for _, protocolVersion := range []string{protocolVersion20260728, "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"} {
+		t.Run(protocolVersion, func(t *testing.T) {
+			_, httpServer := newTestHTTPServer(t)
+			headers := map[string]string{"MCP-Protocol-Version": protocolVersion}
+			modern := protocolVersion == protocolVersion20260728
+			if !modern {
+				initialize := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"` + protocolVersion + `","capabilities":{},"clientInfo":{"name":"missing-resource","version":"1.0.0"}}}`
+				response := postMCP(t, httpServer.URL, initialize, nil)
+				sessionID := response.Header.Get("Mcp-Session-Id")
+				response.Body.Close()
+				if response.StatusCode != http.StatusOK || sessionID == "" {
+					t.Fatalf("unexpected initialize response: %d, session %q", response.StatusCode, sessionID)
+				}
+				headers["Mcp-Session-Id"] = sessionID
+				response = postMCP(t, httpServer.URL, `{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}`, headers)
+				response.Body.Close()
+				if response.StatusCode != http.StatusAccepted {
+					t.Fatalf("unexpected initialized status: %d", response.StatusCode)
+				}
+			}
+
+			send := func(id int, method string, params map[string]any) *http.Response {
+				t.Helper()
+				if modern {
+					params["_meta"] = map[string]any{
+						"io.modelcontextprotocol/protocolVersion":    protocolVersion,
+						"io.modelcontextprotocol/clientCapabilities": map[string]any{},
+					}
+					headers["Mcp-Method"] = method
+					delete(headers, "Mcp-Name")
+					if uri, ok := params["uri"].(string); ok {
+						headers["Mcp-Name"] = uri
+					}
+				}
+				body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return postMCP(t, httpServer.URL, string(body), headers)
+			}
+			// Modern requests are stateless and must also be safe without initialize.
+			response := send(2, "resources/read", map[string]any{"uri": "siyuan://doc/missing"})
+			wantStatus := http.StatusOK
+			if modern {
+				wantStatus = http.StatusBadRequest
+			}
+			if response.StatusCode != wantStatus {
+				response.Body.Close()
+				t.Fatalf("unexpected resources/read status: %d", response.StatusCode)
+			}
+			var errorResponse struct {
+				Error struct {
+					Code    int64  `json:"code"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			decodeResponse(t, response, &errorResponse)
+			if errorResponse.Error.Code != mcpsdk.CodeResourceNotFound || errorResponse.Error.Message != "Resource not found" {
+				t.Fatalf("unexpected resources/read error: %#v", errorResponse.Error)
+			}
+
+			response = send(3, "tools/list", map[string]any{})
+			if response.StatusCode != http.StatusOK {
+				response.Body.Close()
+				t.Fatalf("unexpected subsequent tools/list status: %d", response.StatusCode)
+			}
+			var listResponse struct {
+				Result struct {
+					Tools      []*mcpsdk.Tool `json:"tools"`
+					CacheScope string         `json:"cacheScope"`
+				} `json:"result"`
+			}
+			decodeResponse(t, response, &listResponse)
+			if !toolListContains(listResponse.Result.Tools, "echo") || listResponse.Result.CacheScope != "private" {
+				t.Fatalf("unexpected subsequent tools/list result: %#v", listResponse.Result)
+			}
+		})
 	}
 }
 
@@ -510,6 +824,43 @@ func TestLegacyInitializeDoesNotNegotiateModernProtocol(t *testing.T) {
 	}
 }
 
+func TestMCPAllowsNonLoopbackHostThroughLoopbackProxy(t *testing.T) {
+	_, httpServer := newTestHTTPServer(t)
+	tests := []struct {
+		name    string
+		body    string
+		headers map[string]string
+	}{
+		{
+			name: "modern",
+			body: `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`,
+			headers: map[string]string{
+				"Host":                 "192.168.5.77:8300",
+				"MCP-Protocol-Version": protocolVersion20260728,
+				"Mcp-Method":           "tools/list",
+			},
+		},
+		{
+			name: "legacy",
+			body: `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"legacy","version":"1.0.0"}}}`,
+			headers: map[string]string{
+				"Host": "192.168.5.77:8300",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := postMCP(t, httpServer.URL, test.body, test.headers)
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusOK {
+				data, _ := io.ReadAll(response.Body)
+				t.Fatalf("unexpected proxy response: %d %q", response.StatusCode, data)
+			}
+		})
+	}
+}
+
 func TestModernProtocolRejectsCrossOriginAndDelete(t *testing.T) {
 	_, httpServer := newTestHTTPServer(t)
 	body := `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`
@@ -547,7 +898,11 @@ func postMCP(t *testing.T, endpoint, body string, headers map[string]string) *ht
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json, text/event-stream")
 	for name, value := range headers {
-		request.Header.Set(name, value)
+		if strings.EqualFold(name, "Host") {
+			request.Host = value
+		} else {
+			request.Header.Set(name, value)
+		}
 	}
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {

@@ -1,3 +1,5 @@
+import {createDockKeymapDefaults} from "./util/dockKeymap";
+
 declare const SIYUAN_VERSION: string;
 declare const NODE_ENV: string;
 
@@ -25,7 +27,9 @@ export abstract class Constants {
 
     // drop 事件
     public static readonly SIYUAN_DROP_FILE: string = "application/siyuan-file";
+    public static readonly SIYUAN_DROP_DOCUMENTS: string = "application/siyuan-documents";
     public static readonly SIYUAN_DROP_GUTTER: string = "application/siyuan-gutter";
+    public static readonly SIYUAN_DROP_BLOCK: string = "application/siyuan-block";
     public static readonly SIYUAN_DROP_BLOCK_REF: string = "application/siyuan-block-ref";
     public static readonly SIYUAN_DROP_TAB: string = "application/siyuan-tab";
     public static readonly SIYUAN_DROP_DOCUMENT_TAB: string = "application/siyuan-document-tab";
@@ -35,21 +39,27 @@ export abstract class Constants {
     public static readonly SIYUAN_CMD: string = "siyuan-cmd";
     public static readonly SIYUAN_GET: string = "siyuan-get";
     public static readonly SIYUAN_EVENT: string = "siyuan-event";
+    public static readonly SIYUAN_WINDOW_WORKSPACE_SAVED = "siyuan-window-workspace-saved";
+
+    public static readonly SIYUAN_WINDOW_WORKSPACE_SET = "siyuan-window-workspace-set";
+    public static readonly SIYUAN_WINDOW_WORKSPACE_FOCUS = "siyuan-window-workspace-focus";
+    public static readonly SIYUAN_WINDOW_WORKSPACE_GET_OPEN = "siyuan-window-workspace-get-open";
+    public static readonly SIYUAN_WINDOW_WORKSPACE_FLUSH_ALL = "siyuan-window-workspace-flush-all";
 
     public static readonly SIYUAN_CONFIG_TRAY: string = "siyuan-config-tray";
     public static readonly SIYUAN_QUIT: string = "siyuan-quit";
     public static readonly SIYUAN_INSTALL_UPDATE: string = "siyuan-install-update";
     public static readonly SIYUAN_HOTKEY: string = "siyuan-hotkey";
+    public static readonly SIYUAN_SYNC_APP_MENU: string = "siyuan-sync-app-menu";
+    public static readonly SIYUAN_SYNC_MARKDOWN_KEYMAP: string = "siyuan-sync-markdown-keymap";
     public static readonly SIYUAN_INIT: string = "siyuan-init";
     public static readonly SIYUAN_READY_TO_SHOW: string = "siyuan-ready-to-show";
-    public static readonly SIYUAN_SEND_WINDOWS: string = "siyuan-send-windows"; // 主窗口和各新窗口之间的通信，{cmd: "closetab"|"lockscreen"|"lockscreenByMode", data: {}})
-    public static readonly SIYUAN_SAVE_CLOSE: string = "siyuan-save-close";
+    public static readonly SIYUAN_SEND_WINDOWS: string = "siyuan-send-windows"; // 主窗口和各新窗口之间的通信
+    public static readonly SIYUAN_BLOCK_DRAG: string = "siyuan-block-drag"; // 跨窗口合成拖拽通信
     public static readonly SIYUAN_AUTO_LAUNCH: string = "siyuan-auto-launch";
 
     public static readonly SIYUAN_OPEN_WORKSPACE: string = "siyuan-open-workspace";
-    public static readonly SIYUAN_OPEN_URL: string = "siyuan-open-url";
     public static readonly SIYUAN_OPEN_WINDOW: string = "siyuan-open-window";
-    public static readonly SIYUAN_OPEN_FILE: string = "siyuan-open-file";
 
     public static readonly SIYUAN_EXPORT_PDF: string = "siyuan-export-pdf";
     public static readonly SIYUAN_EXPORT_NEWWINDOW: string = "siyuan-export-newwindow";
@@ -62,22 +72,43 @@ export abstract class Constants {
 
     public static readonly SIYUAN_SHOW_WINDOW: string = "siyuan-show-window";
 
+    // 主进程调渲染进程
+    public static readonly SIYUAN_WINDOW_WORKSPACE_FLUSH = "siyuan-window-workspace-flush";
+    public static readonly SIYUAN_OPEN_URL: string = "siyuan-open-url";
+    public static readonly SIYUAN_OPEN_FILE: string = "siyuan-open-file";
+    public static readonly SIYUAN_SAVE_CLOSE: string = "siyuan-save-close";
+    public static readonly SIYUAN_OPEN_SETTING: string = "siyuan-open-setting";
+    public static readonly SIYUAN_OPEN_HELP: string = "siyuan-open-help";
+    public static readonly SIYUAN_TOPBAR_CONTEXT_MENU: string = "siyuan-topbar-context-menu"; // 顶栏拖拽区域右键转交渲染进程
+
     // custom
     public static readonly CUSTOM_REMINDER_WECHAT: string = "custom-reminder-wechat";
     public static readonly CUSTOM_RIFF_DECKS: string = "custom-riff-decks";
     public static readonly CUSTOM_SY_READONLY: string = "custom-sy-readonly";
+    public static readonly CUSTOM_SY_EMBED_BREADCRUMB_PARENT_PATH: string = "custom-sy-embed-breadcrumb-parent-path";
+    public static readonly CUSTOM_SY_SUBDOC_SORT_MODE: string = "custom-sy-subdoc-sort-mode";
     public static readonly CUSTOM_SY_FULLWIDTH: string = "custom-sy-fullwidth";
     public static readonly CUSTOM_SY_HEADING_NUMBER: string = "custom-sy-heading-number";
-    public static readonly CUSTOM_SY_SUPER_BLOCK_VERTICAL_ALIGN: string = "custom-sy-super-block-vertical-align";
     public static readonly CUSTOM_SY_AV_VIEW: string = "custom-sy-av-view";
     public static readonly CUSTOM_SY_AV_VISIBLE_VIEWS: string = "custom-sy-av-visible-views";
+    public static readonly CUSTOM_SY_LIST_MINDMAP: string = "custom-sy-list-mindmap";
+    public static readonly CUSTOM_SY_LIST_MINDMAP_DATA: string = "custom-sy-list-mindmap-data";
     public static readonly CUSTOM_SY_TITLE_EMPTY: string = "custom-sy-title-empty";
+    public static readonly CUSTOM_SY_CODE_TAB_SPACES: string = "custom-sy-code-tab-spaces";
+    public static readonly CUSTOM_SY_TABLE_RICH: string = "custom-sy-table-rich";
+    public static readonly CUSTOM_SY_TABLE_HEADER_ROW: string = "custom-sy-table-header-row";
+    public static readonly CUSTOM_SY_TABLE_HEADER_COLUMN: string = "custom-sy-table-header-column";
+    public static readonly CUSTOM_SY_AV_STATIC_TEXT: string = "custom-sy-av-s-text-";
+    public static readonly CUSTOM_SY_LIVE_PHOTO: string = "custom-sy-live-photo";
+    public static readonly CUSTOM_SY_LIVE_PHOTO_VIDEO: string = "custom-sy-live-photo-video";
 
     // 临时标记 DOM 属性以辅助完成其功能
     public static readonly ATTRIBUTE_EDITING = "data-editing";
     public static readonly ATTRIBUTE_V_SCROLL = "data-v-scroll";
     public static readonly ATTRIBUTE_DOCK_WIDTH = "data-dock-width";
     public static readonly ATTRIBUTE_MENU_KEYMAP = "data-menu-keymap";
+    // 界面密度标记仅用于根元素，不写入笔记内容。
+    public static readonly ATTRIBUTE_UI_DENSITY = "data-ui-density";
 
     // size
     public static readonly SIZE_DATABASE_MAZ_SIZE: number = 102400;
@@ -90,6 +121,9 @@ export abstract class Constants {
     public static readonly SIZE_UNDO = 64;
     public static readonly SIZE_TITLE = 512;
     public static readonly SIZE_EDITOR_WIDTH = 760;
+    public static readonly EDITOR_FONT_SIZE_DEFAULT = 16;
+    public static readonly EDITOR_FONT_SIZE_MIN = 9;
+    public static readonly EDITOR_FONT_SIZE_MAX = 72;
     public static readonly SIZE_ZOOM = [
         {
             zoom: 0.67,
@@ -160,30 +194,43 @@ export abstract class Constants {
     public static readonly LOCAL_SEARCHUNREF = "local-searchunref";
     public static readonly LOCAL_DOCINFO = "local-docinfo"; // only mobile
     public static readonly LOCAL_MOBILE_TABS = "local-mobile-tabs"; // only mobile
+    public static readonly LOCAL_MOBILE_BOTTOM_BAR = "local-mobile-bottom-bar"; // only mobile
+    public static readonly LOCAL_MOBILE_SIDE_PANEL = "local-mobile-side-panel"; // only mobile
+    public static readonly LOCAL_MOBILE_MENU_COLLAPSED = "local-mobile-menu-collapsed";
     public static readonly LOCAL_DAILYNOTEID = "local-dailynoteid"; // string
     public static readonly LOCAL_HISTORY = "local-history";
     public static readonly LOCAL_CODELANG = "local-codelang"; // string
+    public static readonly LOCAL_SLASH_FREQUENT_ENABLED = "local-slash-frequent-enabled";
+    public static readonly LOCAL_SLASH_USAGE = "local-slash-usage";
     public static readonly LOCAL_FONTSTYLES = "local-fontstyles";
     public static readonly LOCAL_EXPORTPDF = "local-exportpdf";
     public static readonly LOCAL_EXPORTWORD = "local-exportword";
     public static readonly LOCAL_EXPORTIMG = "local-exportimg";
+    public static readonly LOCAL_EXPORTPATH = "local-exportpath";
     public static readonly LOCAL_BAZAAR = "local-bazaar";
+    /** @deprecated 内置偏好改用 config.appearance.pdfTheme，不再读取此旧键 */
     public static readonly LOCAL_PDFTHEME = "local-pdftheme";
     public static readonly LOCAL_LAYOUTS = "local-layouts";
-    public static readonly LOCAL_AI = "local-ai";
+    public static readonly LOCAL_WINDOW_WORKSPACE = "local-window-workspace-";
     public static readonly LOCAL_PLUGINTOPUNPIN = "local-plugintopunpin";
     public static readonly LOCAL_FLASHCARD = "local-flashcard";
     public static readonly LOCAL_FILEPOSITION = "local-fileposition";
     public static readonly LOCAL_FILESPATHS = "local-filespaths";
+    public static readonly LOCAL_PINNED_DOC_TREE_STATE = "local-pinned-doc-tree-state";
     public static readonly LOCAL_DIALOGPOSITION = "local-dialogposition";
     public static readonly LOCAL_SESSION_FIRSTLOAD = "local-session-firstload";
+    /** @deprecated 内置偏好改用 config.appearance.outlineKeepCurrentExpand，不再读取此旧键 */
     public static readonly LOCAL_OUTLINE = "local-outline";
     public static readonly LOCAL_PLUGIN_DOCKS = "local-plugin-docks";
     public static readonly LOCAL_IMAGES = "local-images";
     public static readonly LOCAL_EMOJIS = "local-emojis";
     public static readonly LOCAL_MOVE_PATH = "local-move-path";
+    /** @deprecated 内置偏好改用 config.fileTree.recentDocsSort，不再读取此旧键 */
     public static readonly LOCAL_RECENT_DOCS = "local-recent-docs";
     public static readonly LOCAL_CLOSED_TABS = "local-closed-tabs";
+    public static readonly LOCAL_AV_CALENDAR_MODES = "local-av-calendar-modes";
+    public static readonly LOCAL_TABS_READING = "local-tabs-reading";
+    public static readonly LOCAL_MINDMAP_VIEWPORTS = "local-mindmap-viewports";
 
     // dialog
     public static readonly DIALOG_CONFIRM = "dialog-confirm";
@@ -253,6 +300,7 @@ export abstract class Constants {
     public static readonly MENU_BAR_ZOOM = "barZoom"; // 顶栏缩放菜单
     public static readonly MENU_BAR_MODE = "barmode"; // 顶栏外观菜单
     public static readonly MENU_BAR_MORE = "barmore"; // 顶栏更多菜单
+    public static readonly MENU_BAR_ENTRY = "barEntry"; // 顶栏入口显隐菜单
     public static readonly MENU_STATUS_HELP = "statusHelp"; // 状态栏帮助菜单
     public static readonly MENU_STATUS_BACKGROUND_TASK = "statusBackgroundTask"; // 状态栏后台任务菜单
     public static readonly MENU_DOCK = "menu-dock"; // 桌面端 dock 图标菜单
@@ -271,8 +319,10 @@ export abstract class Constants {
     public static readonly MENU_DOC_TREE_MORE = "docTreeMore"; // 侧栏文档树右键菜单
     public static readonly MENU_DOC_TREE_PANEL_MORE = "docTreePanelMore"; // 文档树面板更多菜单
     public static readonly MENU_FROM_DOC_TREE_MORE_NOTEBOOK = "tree-notebook"; // 侧栏文档树右键菜单，单个笔记本
+    public static readonly MENU_FROM_DOC_TREE_MORE_NOTEBOOKS = "tree-notebooks"; // 侧栏文档树右键菜单，多个笔记本
     public static readonly MENU_FROM_DOC_TREE_MORE_DOC = "tree-doc"; // 侧栏文档树右键菜单，单个文档
-    public static readonly MENU_FROM_DOC_TREE_MORE_ITEMS = "tree-items"; // 侧栏文档树右键菜单，多个文档或笔记本
+    public static readonly MENU_FROM_DOC_TREE_MORE_DOCS = "tree-docs"; // 侧栏文档树右键菜单，多个文档
+    public static readonly MENU_FROM_DOC_TREE_MORE_ITEMS = "tree-items"; // 侧栏文档树右键菜单，文档和笔记本混选
     public static readonly MENU_TAG = "tagMenu"; // 侧栏标签菜单
     public static readonly MENU_BOOKMARK = "bookmarkMenu"; // 侧栏书签菜单
     public static readonly MENU_OUTLINE_CONTEXT = "outline-context"; // 大纲标题右键菜单
@@ -302,12 +352,13 @@ export abstract class Constants {
     public static readonly MENU_SEARCH_REPLACE_HISTORY = "search-replace-history"; // 替换历史菜单
     public static readonly MENU_SEARCH_ASSET_HISTORY = "search-asset-history"; // 资源文件搜索历史菜单
     public static readonly MENU_MOVE_PATH_HISTORY = "move-path-history"; // 移动文档窗口搜索历史菜单
-    public static readonly MENU_CALLOUT_SELECT = "callout-select"; // 提示选择菜单
 
     public static readonly MENU_BACKGROUND_ASSET = "background-asset"; // 资源文件选择器菜单
     public static readonly MENU_AI = "ai"; // 块 AI 菜单
     public static readonly MENU_TAB = "tab"; // 页签右键菜单
     public static readonly MENU_TAB_LIST = "tabList"; // 页签切换菜单
+    public static readonly MENU_MOBILE_TABS = "mobileTabs"; // 移动端页签长按菜单
+    public static readonly MENU_MOBILE_TABS_OVERVIEW = "mobileTabsOverview"; // 移动端页签概览面板
 
     public static readonly MENU_INLINE_CONTEXT = "inline-context"; // 文本右键菜单
     public static readonly MENU_INLINE_IMG = "inline-img"; // 图片元素菜单
@@ -324,6 +375,7 @@ export abstract class Constants {
     public static readonly TIMEOUT_RESIZE = 200;
     public static readonly TIMEOUT_INPUT = 256;
     public static readonly TIMEOUT_LOAD = 300;
+    public static readonly TIMEOUT_TAB_SWITCH = 500;
     public static readonly TIMEOUT_SNIPPET_LOAD = 5000;
     public static readonly TIMEOUT_LONGPRESS = 460;
     public static readonly TIMEOUT_VIBRATION_DURATION = 20;
@@ -352,6 +404,7 @@ export abstract class Constants {
         th: "20210808180117-6v0mkxr",
         nl: "20210808180117-6v0mkxr",
         sk: "20210808180117-6v0mkxr",
+        sr: "20210808180117-6v0mkxr",
         tr: "20210808180117-6v0mkxr",
         uk: "20210808180117-6v0mkxr",
         "zh-TW": "20211226090932-5lcq56f",
@@ -453,13 +506,19 @@ export abstract class Constants {
     });
     // 冲突不使用 "⌘S/Q"
     // "⌘", "⇧", "⌥", "⌃"
-    // "⌘A", "⌘X", "⌘C", "⌘V", "⌘-", "⌘=", "⌘0", "⇧⌘V", "⌘/", "⇧↑", "⇧↓", "⇧→", "⇧←", "⇧⇥", "⌃D", "⇧⌘→", "⇧⌘←",
-    // "⌘Home", "⌘End", "⇧↩", "↩", "PageUp", "PageDown", "⌫", "⌦", "Escape" 不可自定义
+    // "⌘A", "⌘X", "⌘C", "⌘V", "⌘-", "⌘=", "⌘0", "⇧⌘V", "⇧↑", "⇧↓", "⇧→", "⇧←", "⇧⇥", "⌃D", "⇧⌘→", "⇧⌘←",
+    // "⌘Home", "⌘End", "⇧↩", "PageUp", "PageDown", "⌫", "⌦", "Escape" 不可自定义
     // "⌥↩" 写死，但可自定义
     public static readonly SIYUAN_KEYMAP: Config.IKeymap = {
         general: {
+            previousDatabaseRow: {default: "", custom: ""},
+            nextDatabaseRow: {default: "", custom: ""},
+            openContextMenu: {default: "⌘/", custom: "⌘/"},
             mainMenu: {default: "⌥\\", custom: "⌥\\"},
             commandPanel: {default: "⌥⇧P", custom: "⌥⇧P"},
+            increaseEditorFontSize: {default: "", custom: ""},
+            decreaseEditorFontSize: {default: "", custom: ""},
+            resetEditorFontSize: {default: "", custom: ""},
             editReadonly: {default: "⇧⌘G", custom: "⇧⌘G"},
             syncNow: {default: "F9", custom: "F9"},
             enterBack: {default: "⌥←", custom: "⌥←"},
@@ -472,16 +531,9 @@ export abstract class Constants {
             stickSearch: {default: "⇧⌘F", custom: "⇧⌘F"},
             replace: {default: "⌘R", custom: "⌘R"},
             closeTab: {default: "⌘W", custom: "⌘W"},
-            fileTree: {default: "⌃1", custom: "⌃1"},
-            outline: {default: "⌃2", custom: "⌃2"},
-            bookmark: {default: "⌃3", custom: "⌃3"},
-            tag: {default: "⌃4", custom: "⌃4"},
-            dailyNote: {default: "⌃5", custom: "⌃5"},
-            inbox: {default: "⌃6", custom: "⌃6"},
-            backlinks: {default: "⌃7", custom: "⌃7"},
-            graphView: {default: "⌃8", custom: "⌃8"},
-            globalGraph: {default: "⌃9", custom: "⌃9"},
-            riffCard: {default: "⌃0", custom: "⌃0"},
+            agentChat: {default: "", custom: ""},
+            agentSend: {default: "⌘↩", custom: "⌘↩"},
+            ...createDockKeymapDefaults("darwin"),
             config: {default: "⌥P", custom: "⌥P"},
             dataHistory: {default: "⌥H", custom: "⌥H"},
             toggleWin: {default: "⌥M", custom: "⌥M"},
@@ -498,6 +550,7 @@ export abstract class Constants {
             goToTab9: {default: "⌘9", custom: "⌘9"},
             goToTabNext: {default: "⇧⌘]", custom: "⇧⌘]"},
             goToTabPrev: {default: "⇧⌘[", custom: "⇧⌘["},
+            switchTab: {default: "", custom: ""},
             goToEditTabNext: {default: "⌃⇥", custom: "⌃⇥"},
             goToEditTabPrev: {default: "⌃⇧⇥", custom: "⌃⇧⇥"},
             recentClosed: {default: "⇧⌘T", custom: "⇧⌘T"},
@@ -506,6 +559,9 @@ export abstract class Constants {
             switchLeftDock: {default: "", custom: ""},
             switchRightDock: {default: "", custom: ""},
             switchBottomDock: {default: "", custom: ""},
+            toggleLeftDockPanel: {default: "", custom: ""},
+            toggleRightDockPanel: {default: "", custom: ""},
+            toggleBottomDockPanel: {default: "", custom: ""},
             toggleDock: {default: "", custom: ""},
             splitLR: {default: "", custom: ""},
             splitMoveR: {default: "", custom: ""},
@@ -557,15 +613,22 @@ export abstract class Constants {
                 alignLeft: {default: "⌥L", custom: "⌥L"},
                 alignCenter: {default: "⌥C", custom: "⌥C"},
                 alignRight: {default: "⌥R", custom: "⌥R"},
-                wysiwyg: {default: "⌥⌘7", custom: "⌥⌘7"},
-                preview: {default: "⌥⌘9", custom: "⌥⌘9"},
+                editMode: {default: "⌥⌘9", custom: "⌥⌘9"},
                 insertBefore: {default: "⇧⌘B", custom: "⇧⌘B"},
                 insertAfter: {default: "⇧⌘A", custom: "⇧⌘A"},
+                insertSuperBlockLeft: {default: "", custom: ""},
+                insertSuperBlockRight: {default: "", custom: ""},
                 jumpToParentNext: {default: "⇧⌘N", custom: "⇧⌘N"},
                 jumpToParentPrev: {default: "⇧⌘M", custom: "⇧⌘M"},
                 jumpToParent: {default: "⇧⌘J", custom: "⇧⌘J"},
                 moveToUp: {default: "⇧⌘↑", custom: "⇧⌘↑"},
                 moveToDown: {default: "⇧⌘↓", custom: "⇧⌘↓"},
+                goToDocumentStart: {default: "⌘Home", custom: "⌘Home"},
+                goToDocumentEnd: {default: "⌘End", custom: "⌘End"},
+                selectToPageStart: {default: "⇧Home", custom: "⇧Home"},
+                selectToPageEnd: {default: "⇧End", custom: "⇧End"},
+                scrollPageUpWithoutMovingCaret: {default: "⌥PageUp", custom: "⌥PageUp"},
+                scrollPageDownWithoutMovingCaret: {default: "⌥PageDown", custom: "⌥PageDown"},
                 duplicateCompletely: {default: "", custom: ""},
                 copyRichText: {default: "", custom: ""},
                 copyPlainText: {default: "", custom: ""},
@@ -608,9 +671,15 @@ export abstract class Constants {
                 check: {default: "⌘L", custom: "⌘L"},
                 "ordered-list": {default: "", custom: ""},
                 list: {default: "", custom: ""},
+                mindmap: {default: "", custom: ""},
                 table: {default: "⌘O", custom: "⌘O"},
                 code: {default: "⇧⌘K", custom: "⇧⌘K"},
                 quote: {default: "", custom: ""},
+                calloutNote: {default: "", custom: ""},
+                calloutTip: {default: "", custom: ""},
+                calloutImportant: {default: "", custom: ""},
+                calloutWarning: {default: "", custom: ""},
+                calloutCaution: {default: "", custom: ""},
                 clearInline: {default: "⌘\\", custom: "⌘\\"},
             },
             heading: {
@@ -625,7 +694,12 @@ export abstract class Constants {
             list: {
                 indent: {default: "⇥", custom: "⇥"},
                 outdent: {default: "⇧⇥", custom: "⇧⇥"},
-                checkToggle: {default: "⌘↩", custom: "⌘↩"},
+                checkToggle: {default: "⇧⌘L", custom: "⇧⌘L"},
+                taskCompletionToggle: {default: "", custom: ""},
+                prependListItem: {default: "", custom: ""},
+                appendListItem: {default: "", custom: ""},
+                mindmapAddSibling: {default: "⌘↩", custom: "⌘↩"},
+                mindmapAddChild: {default: "⇧⌘↩", custom: "⇧⌘↩"},
             },
             table: {
                 insertRowAbove: {default: "", custom: ""},
@@ -840,7 +914,7 @@ export abstract class Constants {
 </svg>`;
 
     // assets
-    public static readonly SIYUAN_ASSETS_IMAGE: string[] = [".apng", ".ico", ".cur", ".jpg", ".jpe", ".jpeg", ".jfif", ".pjp", ".pjpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".avif", ".tiff", ".tif"];
+    public static readonly SIYUAN_ASSETS_IMAGE: string[] = [".apng", ".ico", ".cur", ".jpg", ".jpe", ".jpeg", ".jfif", ".pjp", ".pjpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".avif", ".tiff", ".tif", ".heic", ".heif"];
     public static readonly SIYUAN_ASSETS_AUDIO: string[] = [".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac"];
     public static readonly SIYUAN_ASSETS_VIDEO: string[] = [".mov", ".weba", ".mkv", ".mp4", ".webm"];
     public static readonly SIYUAN_ASSETS_EXTS: string[] = [".pdf"].concat(Constants.SIYUAN_ASSETS_IMAGE, Constants.SIYUAN_ASSETS_AUDIO, Constants.SIYUAN_ASSETS_VIDEO);
@@ -873,7 +947,7 @@ export abstract class Constants {
         "base16/summercamp", "base16/summerfruit-dark", "base16/synth-midnight-terminal-dark", "base16/tango", "base16/tender",
         "base16/tomorrow-night", "base16/twilight", "base16/unikitty-dark", "base16/vulcan", "base16/windows-10", "base16/windows-95",
         "base16/windows-high-contrast", "base16/windows-nt", "base16/woodland", "base16/xcode-dusk", "base16/zenburn", "codepen-embed",
-        "cybertopia-cherry", "cybertopia-dimmer", "cybertopia-icecap", "cybertopia-saturated", "dark", "devibeans", "far",
+        "cybertopia-cherry", "cybertopia-dimmer", "cybertopia-icecap", "cybertopia-saturated", "dark", "devibeans", "equinox", "far",
         "felipec", "github-dark", "github-dark-dimmed", "gml", "gradient-dark", "hybrid", "ir-black", "isbl-editor-dark",
         "kimbie-dark", "lioshi", "monokai", "monokai-sublime", "night-owl", "nnfx-dark", "nord", "obsidian", "panda-syntax-dark",
         "paraiso-dark", "pojoaque", "qtcreator-dark", "rainbow", "rose-pine", "rose-pine-moon", "shades-of-purple", "srcery",
@@ -891,20 +965,21 @@ export abstract class Constants {
         "base16/ros-pine-dawn", "base16/sagelight", "base16/shapeshifter", "base16/silk-light", "base16/solar-flare-light",
         "base16/solarized-light", "base16/summerfruit-light", "base16/synth-midnight-terminal-light", "base16/tomorrow",
         "base16/unikitty-light", "base16/windows-10-light", "base16/windows-95-light", "base16/windows-high-contrast-light",
-        "brown-paper", "base16/windows-nt-light", "color-brewer", "docco", "foundation", "github", "googlecode", "gradient-light",
+        "brown-paper", "base16/windows-nt-light", "color-brewer", "docco", "equinox", "foundation", "github", "googlecode", "gradient-light",
         "grayscale", "idea", "intellij-light", "isbl-editor-light", "kimbie-light", "lightfair", "magula", "mono-blue",
         "nnfx-light", "panda-syntax-light", "paraiso-light", "purebasic", "qtcreator-light", "rose-pine-dawn", "routeros",
         "school-book", "stackoverflow-light", "tokyo-night-light", "vs", "xcode", "default"];
     public static readonly ZWSP: string = "\u200b";
+    public static readonly WORD_JOINER: string = "\u2060";
     public static readonly INLINE_TYPE: string[] = ["block-ref", "kbd", "text", "file-annotation-ref", "a", "strong", "em", "u", "s", "mark", "sup", "sub", "tag", "code", "inline-math", "inline-memo", "clear"];
     public static readonly BLOCK_HINT_KEYS: string[] = ["((", "[[", "（（", "【【"];
     public static readonly BLOCK_HINT_CLOSE_KEYS: Record<string, string> = {"((": "))", "[[": "]]", "（（": "））", "【【": "】】"};
-    // common: "bash", "c", "csharp", "cpp", "css", "diff", "go", "xml", "json", "java", "javascript", "kotlin", "less", "lua", "makefile", "markdown", "objectivec", "php", "php-template", "perl", "plaintext", "python", "python-repl", "r", "ruby", "rust", "scss", "sql", "shell", "swift", "ini", "typescript", "vbnet", "yaml", "properties", "1c", "armasm", "avrasm", "actionscript", "ada", "angelscript", "accesslog", "apache", "applescript", "arcade", "arduino", "asciidoc", "aspectj", "abnf", "autohotkey", "autoit", "awk", "basic", "bnf", "dos", "brainfuck", "cal", "cmake", "csp", "cos", "capnproto", "ceylon", "clean", "clojure", "clojure-repl", "coffeescript", "coq", "crystal", "d", "dns", "dart", "delphi", "dts", "django", "dockerfile", "dust", "erb", "elixir", "elm", "erlang", "erlang-repl", "excel", "ebnf", "fsharp", "fix", "flix", "fortran", "gcode", "gams", "gauss", "glsl", "gml", "gherkin", "golo", "gradle", "groovy", "haml", "hsp", "http", "handlebars", "haskell", "haxe", "hy", "irpf90", "isbl", "inform7", "x86asm", "jboss-cli", "julia", "julia-repl", "ldif", "llvm", "lsl", "latex", "lasso", "leaf", "lisp", "livecodeserver", "livescript", "mel", "mipsasm", "matlab", "maxima", "mercury", "axapta", "routeros", "mizar", "mojolicious", "monkey", "moonscript", "n1ql", "nsis", "nestedtext", "nginx", "nim", "nix", "node-repl", "ocaml", "openscad", "ruleslanguage", "oxygene", "pf", "parser3", "pony", "pgsql", "powershell", "processing", "prolog", "protobuf", "puppet", "purebasic", "profile", "q", "qml", "reasonml", "rib", "rsl", "roboconf", "sas", "sml", "sqf", "step21", "scala", "scheme", "scilab", "smali", "smalltalk", "stan", "stata", "stylus", "subunit", "tp", "taggerscript", "tcl", "tap", "thrift", "twig", "vbscript", "vbscript-html", "vhdl", "vala", "verilog", "vim", "wasm", "mathematica", "wren", "xl", "xquery", "zephir", "crmsh", "dsconfig", "graphql",
+    // common: "bash", "c", "csharp", "cpp", "css", "diff", "go", "xml", "json", "java", "javascript", "kotlin", "less", "lua", "makefile", "markdown", "objectivec", "php", "php-template", "perl", "plaintext", "python", "python-repl", "r", "ruby", "rust", "scss", "sql", "shell", "swift", "ini", "typescript", "vbnet", "yaml", "properties", "1c", "armasm", "avrasm", "actionscript", "ada", "angelscript", "accesslog", "apache", "applescript", "arcade", "arduino", "asciidoc", "aspectj", "abnf", "autohotkey", "autoit", "awk", "basic", "bnf", "dos", "brainfuck", "cal", "cmake", "csp", "cos", "capnproto", "ceylon", "clean", "clojure", "clojure-repl", "coffeescript", "coq", "crystal", "d", "dns", "dart", "delphi", "dts", "django", "dockerfile", "dust", "erb", "elixir", "elm", "erlang", "erlang-repl", "excel", "ebnf", "fsharp", "fix", "flix", "fortran", "freedesktop", "gcode", "gams", "gauss", "glsl", "gml", "gherkin", "golo", "gradle", "groovy", "haml", "hsp", "http", "handlebars", "haskell", "haxe", "hy", "irpf90", "isbl", "inform7", "x86asm", "jboss-cli", "julia", "julia-repl", "ldif", "llvm", "lsl", "latex", "lasso", "leaf", "lisp", "livecodeserver", "livescript", "mel", "mipsasm", "matlab", "maxima", "mercury", "axapta", "routeros", "mizar", "mojolicious", "monkey", "moonscript", "n1ql", "nsis", "nestedtext", "nginx", "nim", "nix", "node-repl", "ocaml", "openscad", "ruleslanguage", "oxygene", "pf", "parser3", "pony", "pgsql", "powershell", "processing", "prolog", "protobuf", "puppet", "purebasic", "profile", "q", "qml", "reasonml", "rib", "rsl", "roboconf", "sas", "sml", "sqf", "step21", "scala", "scheme", "scilab", "smali", "smalltalk", "stan", "stata", "stylus", "subunit", "tp", "taggerscript", "tcl", "tap", "thrift", "twig", "vbscript", "vbscript-html", "vhdl", "vala", "verilog", "vim", "wasm", "mathematica", "wren", "xl", "xquery", "zephir", "crmsh", "dsconfig", "graphql",
     // third: "yul", "solidity", "abap", "hlsl", "gdscript", "moonbit", "mlir"
     public static readonly ALIAS_CODE_LANGUAGES: string[] = [
         "js", "ts", "html", "toml", "c#", "bat"
     ];
     public static readonly SIYUAN_RENDER_CODE_LANGUAGES: string[] = [
-        "abc", "plantuml", "mermaid", "flowchart", "echarts", "mindmap", "graphviz", "math"
+        "abc", "plantuml", "mermaid", "flowchart", "echarts", "graphviz", "math"
     ];
 }

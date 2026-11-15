@@ -6,7 +6,7 @@
 		"id": "20211226120349-rbkmozu",
 		"title": "在内容區塊中遨遊",
 		"type": "doc",
-		"updated": "20260803163402"
+		"updated": "20261106164550"
 	},
 	"Children": [
 		{
@@ -15,7 +15,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20211226120415-pn9ywnd",
-				"updated": "20211226152205"
+				"updated": "20260809160000"
 			},
 			"Children": [
 				{
@@ -123,12 +123,12 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20211226120415-oalx1x3",
-				"updated": "20211225232427"
+				"updated": "20261106164550"
 			},
 			"Children": [
 				{
 					"Type": "NodeText",
-					"Data": "縮放聚焦"
+					"Data": "聚焦"
 				}
 			]
 		},
@@ -139,7 +139,7 @@
 			"Properties": {
 				"fold": "0",
 				"id": "20211226120415-x0dza6r",
-				"updated": "20220312233003"
+				"updated": "20260809232000"
 			},
 			"Children": [
 				{
@@ -151,7 +151,7 @@
 					},
 					"Properties": {
 						"id": "20211226120415-o9zkmbm",
-						"updated": "20220312233003"
+						"updated": "20260809232000"
 					},
 					"Children": [
 						{
@@ -159,12 +159,12 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20211226120415-kqz15j6",
-								"updated": "20260730184353"
+								"updated": "20260809232000"
 							},
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "在區塊標上右鍵下拉菜單中選擇聚焦後，編輯器會聚焦到該內容區塊上"
+									"Data": "在區塊標選單中選擇聚焦後，編輯器會聚焦到該內容區塊"
 								}
 							]
 						}
@@ -201,12 +201,91 @@
 			]
 		},
 		{
+			"ID": "20261105154152-v8bjzso",
+			"Type": "NodeHeading",
+			"HeadingLevel": 3,
+			"Properties": {
+				"id": "20261105154152-v8bjzso",
+				"updated": "20261106164550"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "全域導覽路徑"
+				}
+			]
+		},
+		{
+			"ID": "20261105154152-yb81e6w",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261105154152-yb81e6w",
+				"updated": "20261105154152"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "啟用 "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "設定"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " - "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "編輯器"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " - "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "行為"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " - "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "全域導覽路徑"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 後，桌面版編輯器頂部會在目前文件及其區塊路徑前顯示筆記本和父文件，合併為同一條導覽路徑。此設定預設關閉。行動版的導覽路徑選單會顯示相同的階層。"
+				}
+			]
+		},
+		{
+			"ID": "20261105154152-l6qe35h",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261105154152-l6qe35h",
+				"updated": "20261106164550"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "桌面版點擊父文件可開啟該文件，透過筆記本或父文件旁的箭頭可選擇子文件。行動版點擊父文件會顯示子文件，選擇「打開」可開啟父文件本身；沒有子文件的文件會直接開啟。現有的區塊導覽方式保持不變。筆記本和文件項目會顯示其既有的表情或自訂圖示，子文件選單中的項目也是如此。未設定圖示或圖示無效時使用預設圖示。"
+				}
+			]
+		},
+		{
 			"ID": "20211226120415-akhb2fd",
 			"Type": "NodeHeading",
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20211226120415-akhb2fd",
-				"updated": "20250115164121"
+				"updated": "20261024160716"
 			},
 			"Children": [
 				{
@@ -234,21 +313,30 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20211226120415-p7ccdta",
-				"updated": "20250115164121"
+				"updated": "20261024160716"
 			},
 			"Children": [
 				{
 					"Type": "NodeText",
-					"Data": "按住 "
+					"Data": "點擊節點可開啟對應內容區塊；按住 "
 				},
 				{
 					"Type": "NodeTextMark",
-					"TextMarkType": "kbd",
+					"TextMarkType": "code",
 					"TextMarkTextContent": "Ctrl"
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​ 單擊節點：跳轉到該節點。"
+					"Data": "（macOS 為 "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "Command"
+				},
+				{
+					"Type": "NodeText",
+					"Data": "）點擊可開啟浮窗預覽。"
 				}
 			]
 		},
@@ -258,7 +346,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20211226120415-p3ajlx2",
-				"updated": "20260803163402"
+				"updated": "20261030083650"
 			},
 			"Children": [
 				{
@@ -272,12 +360,39 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20211226120415-xb01abh",
-				"updated": "20260730184353"
+				"updated": "20260810212846"
 			},
 			"Children": [
 				{
 					"Type": "NodeText",
-					"Data": "反向連結是文檔級的，列出當前文檔中內容區塊被引用和被提及所在的區塊。"
+					"Data": "反向連結按文檔計算，列出引用或提及目前文檔中內容區塊的區塊。是否包含子區塊由 "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "設定"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " - "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "編輯器"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " - "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "反向鏈接包含子區塊"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 控制。"
 				}
 			]
 		},
@@ -287,7 +402,7 @@
 			"HeadingLevel": 3,
 			"Properties": {
 				"id": "20211226120415-id98kff",
-				"updated": "20211226152249"
+				"updated": "20260810212846"
 			},
 			"Children": [
 				{
@@ -302,7 +417,7 @@
 			"ListData": {},
 			"Properties": {
 				"id": "20211226120415-b7xvx0p",
-				"updated": "20211228134731"
+				"updated": "20260810212846"
 			},
 			"Children": [
 				{
@@ -314,7 +429,7 @@
 					},
 					"Properties": {
 						"id": "20211226120415-806dm3p",
-						"updated": "20211228134731"
+						"updated": "20260810212846"
 					},
 					"Children": [
 						{
@@ -322,12 +437,12 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20211226120415-b4ufivw",
-								"updated": "20260730184353"
+								"updated": "20260810212846"
 							},
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "滑鼠懸浮區塊引用前面的標識會彈出預覽浮窗"
+									"Data": "將滑鼠懸浮在反向連結列表的來源文檔或反向連結內容的區塊標上可進行預覽"
 								}
 							]
 						}
@@ -342,7 +457,7 @@
 					},
 					"Properties": {
 						"id": "20211226120415-2yrs5sh",
-						"updated": "20211228134546"
+						"updated": "20260809232000"
 					},
 					"Children": [
 						{
@@ -350,16 +465,87 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20211226120415-xuanj0d",
-								"updated": "20260730184353"
+								"updated": "20260809232000"
 							},
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "單擊反連列表中的區塊引用進行跳轉"
+									"Data": "單擊來源文檔可展開上下文，再單擊上下文中的引用區塊進行跳轉"
 								}
 							]
 						}
 					]
+				}
+			]
+		},
+		{
+			"ID": "20260909204559-o4vhrdw",
+			"Type": "NodeHeading",
+			"Properties": {
+				"id": "20260909204559-o4vhrdw",
+				"updated": "20260909204559"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "篩選與摺疊"
+				}
+			],
+			"HeadingLevel": 3
+		},
+		{
+			"ID": "20260909204559-p2ldpwr",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20260909204559-p2ldpwr",
+				"updated": "20260909204559"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "在底部反向連結或側欄反向連結中，打開 "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "篩選反向連結來源"
+				},
+				{
+					"Type": "NodeText",
+					"Data": "，可以篩選來源或依區塊類型摺疊項目。這兩類設定的儲存方式不同。"
+				}
+			]
+		},
+		{
+			"ID": "20260909204559-ci181fb",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20260909204559-ci181fb",
+				"updated": "20260909204559"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "日記、筆記本、排除目前文件的反向連結和排除區塊引用屬於暫時篩選，只在目前面板中生效，不會永久儲存，也不會在底部反向連結與側欄反向連結之間同步。"
+				}
+			]
+		},
+		{
+			"ID": "20260909204559-g3t1k59",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20260909204559-g3t1k59",
+				"updated": "20260909204559"
+			},
+			"Children": [
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "依區塊類型摺疊"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 的設定會被記住。例如，在文件 A 的底部反向連結中設定摺疊列表區塊，重新打開後仍會保留，文件 B 不受影響。同一份文件的底部反向連結和側欄反向連結分別記憶。檢視某個內容區塊的反向連結時，也會單獨記憶其摺疊設定。"
 				}
 			]
 		},
@@ -369,7 +555,7 @@
 			"HeadingLevel": 3,
 			"Properties": {
 				"id": "20211226120415-kqk522d",
-				"updated": "20260803163402"
+				"updated": "20261030083650"
 			},
 			"Children": [
 				{
@@ -383,7 +569,7 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20211226120415-k8yvb62",
-				"updated": "20260803163402"
+				"updated": "20261030083650"
 			},
 			"Children": [
 				{
@@ -397,7 +583,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​ - "
+					"Data": " - "
 				},
 				{
 					"Type": "NodeTextMark",
@@ -406,7 +592,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​ - "
+					"Data": " - "
 				},
 				{
 					"Type": "NodeTextMark",
@@ -415,7 +601,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": " ​ 中設置搜索範圍），搜索結果為包含這些關鍵字的內容區塊。"
+					"Data": " 中選擇關鍵字來源），搜索結果為包含這些關鍵字的內容區塊。"
 				}
 			]
 		},
@@ -424,7 +610,7 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20211228134547-inyam43",
-				"updated": "20260730184353"
+				"updated": "20261030083650"
 			},
 			"Children": [
 				{
@@ -438,18 +624,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​：提及搜索僅會在普通文字中搜索，不會在粗體、斜體等行級元素和代碼區塊、圖表等區塊級元素中搜索，這一點和"
-				},
-				{
-					"Type": "NodeTextMark",
-					"TextMarkType": "block-ref",
-					"TextMarkBlockRefID": "20211226122825-w6wxq0c",
-					"TextMarkBlockRefSubtype": "s",
-					"TextMarkTextContent": "虛擬引用探測規則"
-				},
-				{
-					"Type": "NodeText",
-					"Data": "是相同的。"
+					"Data": "​：提及會比對正文，以及其他文檔的標題、文檔命名和別名；文檔命中以標題預覽顯示，目前文檔自身不參與。標題與正文的比對規則一致：粗體、斜體和超連結文字可參與，行內程式碼、公式、程式碼區塊、圖表和區塊引用錨文字不參與。命名、別名是否參與比對，遵循已啟用的區塊級屬性搜尋選項；反連提及選項用於選擇關鍵字來源。"
 				}
 			]
 		}

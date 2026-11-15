@@ -8,6 +8,11 @@ and finds:
 - Duplicate keys: keys that appear multiple times in the same file
 using statistical methods.
 
+同时以 en.json 为基准，校验内核消息的 Go 格式参数索引和动词。
+
+另外校验 app/electron/static/window-languages.json：启动期窗口的文案单独维护在这一个文件里
+（内核尚未启动时拿不到语言包），其语言集合必须与 appearance/langs 一致，每个语言的键必须与英文基准一致。
+
 Usage:
     python scripts/check-lang-keys.py
     python scripts/check-lang-keys.py -d app/appearance/langs
@@ -18,8 +23,8 @@ Options:
     -h, --help       Show help message and exit
 
 Exit codes:
-    0    All language files have complete keys
-    1    Some language files have missing or extra keys
+    0    All language files have complete keys, compatible kernel placeholders and complete boot window text
+    1    Language files have key, format, loading, or boot window text errors
 """
 
 import json
@@ -198,6 +203,162 @@ def load_lang_file(file_path):
         return None, None, [], {}
 
 
+def format_arguments(message):
+    """按 Go fmt 的参数索引解析动词，保留每个参数的使用次数和用途。"""
+    arguments = Counter()
+    next_arg = 1
+    pos = 0
+    while pos < len(message):
+        if message[pos] != "%":
+            pos += 1
+            continue
+        start = pos
+        pos += 1
+        while pos < len(message) and message[pos] in "+-# 0":
+            pos += 1
+        # 索引可指定宽度、精度或值；每次消费参数后，后续隐式参数从下一位开始。
+        while pos < len(message):
+            char = message[pos]
+            if char == "[":
+                match = re.match(r"\[([1-9][0-9]*)\]", message[pos:])
+                if not match:
+                    raise ValueError(f"Invalid argument index at offset {pos}")
+                next_arg = int(match.group(1))
+                pos += len(match.group(0))
+            elif char == "*":
+                arguments[(next_arg, "*")] += 1
+                next_arg += 1
+                pos += 1
+            elif char in "0123456789.":
+                pos += 1
+            else:
+                break
+        if pos == len(message) or message[pos] not in "vTtbcdoOxXUeEfFgGspq%":
+            raise ValueError(f"Invalid format directive at offset {start}")
+        verb = message[pos]
+        pos += 1
+        if verb != "%":
+            arguments[(next_arg, verb)] += 1
+            next_arg += 1
+    return arguments
+
+
+def check_kernel_placeholders(lang_data):
+    """以英文数字键为基准，检查所有内核消息的参数及格式动词。"""
+    reference = lang_data.get("en.json", {}).get("_kernel")
+    if not isinstance(reference, dict):
+        print("Error: en.json must contain a _kernel object")
+        return False
+    valid = True
+    for name, data in lang_data.items():
+        kernel = data.get("_kernel", {})
+        for key, message in reference.items():
+            if not key.isdecimal():
+                continue
+            try:
+                expected = format_arguments(message)
+                actual = format_arguments(kernel[key])
+                if actual == expected:
+                    continue
+                detail = f"expected {dict(expected)}, got {dict(actual)}"
+            except (KeyError, TypeError, ValueError) as error:
+                detail = str(error)
+            print(f"Error: {name} _kernel.{key}: {detail}")
+            valid = False
+    return valid
+
+
+# 启动期窗口（init.html / workspace.html）在内核可用之前渲染，拿不到 langs/*.json，
+# 因此文案单独维护在 app/electron/static/window-languages.json（与 window.js 同目录）。
+# 键集合不在这里列举：以该文件的 en 条目为基准，改文案和加键都不需要动本脚本。
+BOOT_WINDOW_REFERENCE_LANGUAGE = "en"
+# 这些键同时存在于 langs/*.json 与启动期文案中（启动期窗口只能读到后者），
+# 两边必须逐字一致，因此这里强制校验而不是靠注释提醒。
+BOOT_WINDOW_SHARED_KEYS = ["connectRemoteKernel"]
+
+
+def check_boot_window_languages(langs_path):
+    """校验启动期窗口文案与语言包一一对应，且每个语言的键与英文基准一致。
+
+    启动期文案是手工维护的真源，与 langs/*.json 是两份不同的数据（键名基本不重叠），
+    但语言集合必须一致：新增语言包却漏了启动期文案会让启动页回退英文。
+    少数键两边都有（见 BOOT_WINDOW_SHARED_KEYS），其值必须完全相同。
+
+    Args:
+        langs_path (Path): Language files directory path
+
+    Returns:
+        bool: True if the boot window languages are complete, False otherwise
+    """
+    boot_path = langs_path.parent.parent / "electron" / "static" / "window-languages.json"
+    if not boot_path.exists():
+        print(f"Error: Boot window languages file does not exist: {boot_path}")
+        return False
+    try:
+        with open(boot_path, "r", encoding="utf-8") as f:
+            boot = json.load(f)
+    except json.JSONDecodeError as error:
+        print(f"Error: Failed to parse file {boot_path}: {error}")
+        return False
+    if not isinstance(boot, dict):
+        print(f"Error: {boot_path} must contain an object keyed by language")
+        return False
+
+    reference = boot.get(BOOT_WINDOW_REFERENCE_LANGUAGE)
+    if not isinstance(reference, dict):
+        print(f"Error: {boot_path} must contain a {BOOT_WINDOW_REFERENCE_LANGUAGE} object")
+        return False
+    reference_keys = set(reference)
+
+    expected = {path.stem for path in langs_path.glob("*.json")}
+    problems = []
+
+    for language in sorted(set(boot) - expected):
+        problems.append(f"  {language}: no matching language file in {langs_path.name}/")
+    missing_languages = sorted(expected - set(boot))
+    if missing_languages:
+        problems.append(f"  Missing languages: {', '.join(missing_languages)}")
+
+    for language in sorted(set(boot) & expected):
+        entry = boot[language]
+        if not isinstance(entry, dict):
+            problems.append(f"  {language}: must be an object")
+            continue
+        for key in sorted(reference_keys - set(entry)):
+            problems.append(f"  {language}: {key} is missing")
+        for key in sorted(set(entry) - reference_keys):
+            problems.append(f"  {language}: unexpected key {key}")
+        for key, value in entry.items():
+            if not isinstance(value, str) or not value:
+                problems.append(f"  {language}: {key} is empty")
+
+    # 两边共有的键必须逐字一致，否则同一条提示在不同窗口会显示不同文案。
+    for language in sorted(set(boot) & expected):
+        entry = boot[language]
+        if not isinstance(entry, dict):
+            continue
+        try:
+            with open(langs_path / (language + ".json"), "r", encoding="utf-8") as f:
+                interface = json.load(f)
+        except (json.JSONDecodeError, OSError) as error:
+            problems.append(f"  {language}: failed to read {language}.json: {error}")
+            continue
+        for key in BOOT_WINDOW_SHARED_KEYS:
+            if key not in entry or key not in interface:
+                continue
+            if entry[key] != interface[key]:
+                problems.append(f"  {language}: {key} differs from {language}.json: "
+                                f"{entry[key]!r} != {interface[key]!r}")
+
+    if problems:
+        print(f"Error: {boot_path} is incomplete:")
+        print("\n".join(problems))
+        print()
+        return False
+    print(f"Boot window languages: {len(expected)} languages x {len(reference_keys)} keys")
+    return True
+
+
 def check_lang_keys(langs_dir):
     """Check if language file keys are complete.
 
@@ -219,14 +380,18 @@ def check_lang_keys(langs_dir):
 
     # Load all language files
     lang_keys = {}
+    lang_data = {}
+    load_failed = False
     duplicate_keys_by_file = {}
     key_order_by_file = {}
     
     for lang_file in sorted(langs_path.glob("*.json")):
         keys, data, duplicates, key_order = load_lang_file(lang_file)
         if keys is None:
+            load_failed = True
             continue
         lang_keys[lang_file.name] = keys
+        lang_data[lang_file.name] = data
         if duplicates:
             duplicate_keys_by_file[lang_file.name] = duplicates
         key_order_by_file[lang_file.name] = key_order
@@ -266,7 +431,7 @@ def check_lang_keys(langs_dir):
     print(f"Unexpected keys: {len(unexpected_keys)}\n")
 
     # Check keys for each file
-    all_complete = True
+    all_complete = check_kernel_placeholders(lang_data) and not load_failed
     file_issues = {}  # {lang_name: {'missing': set, 'extra': set, 'duplicates': list}}
 
     for lang_name, keys in lang_keys.items():
@@ -284,8 +449,10 @@ def check_lang_keys(langs_dir):
 
     # Output results
     if all_complete and not file_issues:
-        print("All language files have complete keys!")
+        print("All language files have complete keys and compatible kernel placeholders!")
         return True
+    if not file_issues:
+        return False
 
     # Report issues grouped by file
     print("Issues found:")
@@ -368,8 +535,10 @@ def main():
     project_root = script_dir.parent
     langs_dir = project_root / args.dir
 
-    success = check_lang_keys(langs_dir)
-    exit(0 if success else 1)
+    # 两项检查独立执行，避免前者失败时看不到后者的问题。
+    langs_ok = check_lang_keys(langs_dir)
+    boot_ok = check_boot_window_languages(langs_dir)
+    exit(0 if langs_ok and boot_ok else 1)
 
 
 if __name__ == "__main__":

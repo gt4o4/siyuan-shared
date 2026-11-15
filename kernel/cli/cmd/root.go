@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package cmd
 
@@ -34,6 +22,7 @@ import (
 )
 
 var (
+	homeDirPath   string
 	workspacePath string
 	outputFormat  string
 	dryRun        bool
@@ -58,6 +47,9 @@ var rootCmd = &cobra.Command{
 		return nil
 	},
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		if err := util.SetHomeDir(homeDirPath); err != nil {
+			return err
+		}
 		// workspace 子命令不需要工作空间校验
 		if cmd.Parent() != nil && cmd.Parent().Name() == "workspace" {
 			return nil
@@ -115,8 +107,8 @@ var rootCmd = &cobra.Command{
 		sql.InitDatabase(false)
 		sql.InitHistoryDatabase(false)
 		sql.InitAssetContentDatabase(false)
-		sql.SetCaseSensitive(model.Conf.Search.CaseSensitive)
-		sql.SetIndexAssetPath(model.Conf.Search.IndexAssetPath)
+		// 数据库打开后重新应用搜索配置，使 PRAGMA case_sensitive_like 对新连接生效
+		model.ApplySearchRuntime()
 		// 让 CLI 一次性命令（如 search -m 4）也能命中语义搜索：StartEmbeddingIndexer 是死循环不能用于会立即退出的进程，这里只把开关置真
 		model.PrepareEmbeddingSearch()
 		if err := rejectEncryptedNotebookCLI(cmd, args); err != nil {
@@ -195,6 +187,29 @@ func rejectEncryptedNotebookCLI(cmd *cobra.Command, args []string) error {
 			}
 		}
 	}
+	if cmd == historyGetCmd || cmd == historyRollbackCmd {
+		historyPath, _ := cmd.Flags().GetString("path")
+		if historyPath != "" {
+			if !filepath.IsAbs(historyPath) {
+				historyPath = filepath.Join(util.WorkspaceDir, historyPath)
+			}
+			if model.IsEncryptedHistoryPath(filepath.Clean(historyPath)) {
+				return fmt.Errorf("CLI does not support encrypted notebook history")
+			}
+		}
+	}
+	if cmd.Parent() == repoFileCmd {
+		fileID, _ := cmd.Flags().GetString("id")
+		if fileID != "" {
+			boxID, err := model.ResolveRepoFileBoxID(fileID)
+			if err != nil {
+				return err
+			}
+			if boxID != "" {
+				return fmt.Errorf("CLI does not support encrypted notebook [%s]", boxID)
+			}
+		}
+	}
 	return nil
 }
 
@@ -225,7 +240,7 @@ func isEncryptedNotebookWorkspacePathWith(p, workspaceDir, dataDir string, isEnc
 	if err != nil || rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
 		return false
 	}
-	boxID := strings.Split(rel, string(filepath.Separator))[0]
+	boxID, _, _ := strings.Cut(rel, string(filepath.Separator))
 	return isEncryptedBox(boxID)
 }
 
@@ -265,6 +280,7 @@ func init() {
 	rootCmd.Short = "SiYuan Kernel v" + util.Ver
 	rootCmd.Long = "SiYuan Kernel v" + util.Ver + ". Manage workspace data directly or start the HTTP server."
 
+	rootCmd.PersistentFlags().StringVar(&homeDirPath, "home-dir", "", "base directory for user configuration (defaults to the system user home)")
 	rootCmd.PersistentFlags().StringVarP(&workspacePath, "workspace", "w", "", "workspace path")
 	rootCmd.PersistentFlags().StringVarP(&outputFormat, "format", "f", "table", "output format: table | json")
 	rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "dry run mode: validate and print what would happen without making changes")
@@ -273,13 +289,4 @@ func init() {
 
 func Execute() error {
 	return rootCmd.Execute()
-}
-
-func HasSubCommand(name string) bool {
-	for _, c := range rootCmd.Commands() {
-		if c.Name() == name {
-			return true
-		}
-	}
-	return false
 }

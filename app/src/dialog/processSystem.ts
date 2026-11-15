@@ -1,5 +1,8 @@
 import {Constants} from "../constants";
-import {fetchPost} from "../util/fetch";
+import {clearReloadSnapshot} from "../layout/reloadSnapshot";
+import {renderBazaarInstall, updateBazaarInstallProgress} from "../config/bazaar/installTask";
+import {getSettingsWindowHost} from "../config/setting/windowContext";
+import {fetchPost, fetchSyncPost} from "../util/fetch";
 /// #if !MOBILE
 import {exportLayout} from "../layout/util";
 import {getDockByType} from "../layout/tabUtil";
@@ -10,29 +13,44 @@ import {getAllEditor, getAllModels} from "../layout/getAll";
 import {ipcRenderer} from "electron";
 /// #endif
 import {hideMessage, showMessage} from "./message";
-import {Dialog} from "./index";
+import {MobileDialog as Dialog} from "./mobileDialog";
 import {isMobile} from "../util/functions";
-import {confirmDialog} from "./confirmDialog";
+import {mobileConfirmDialog as confirmDialog} from "./mobileConfirmDialog";
 import {escapeHtml} from "../util/escape";
 import {needSubscribe} from "../util/needSubscribe";
 import {hideAllElements} from "../protyle/ui/hideElements";
-import type {App} from "../index";
-import {saveScroll} from "../protyle/scroll/saveScroll";
+import {saveMobileLayout} from "../mobile/util/saveLayout";
 import {isInAndroid, isInHarmony, isInIOS, setStorageVal} from "../protyle/util/compatibility";
-import {Plugin} from "../plugin";
+import {emitToPlugins} from "../plugin/EventBusCore";
+import {createHostQuitGuard} from "./hostQuit";
+import {requestSystemExit, updateExitProgressStatus} from "./exitRequest";
+import {getHostCapabilities, sanitizeKernelHTML} from "../util/hostCapabilities";
+import {updateReindexProgressStatus} from "./progress";
+/// #if MOBILE
+import {getMobileBacklinkPanels} from "../mobile/util/backlinkPanels";
+/// #endif
 
 export const processBacklinkIndexCommit = (data: {
     rootIDs?: string[],
     backlinkChanged?: boolean,
     backlinkFull?: boolean,
 }) => {
-    /// #if !MOBILE
     if (!data?.backlinkChanged) {
         return;
     }
+    /// #if MOBILE
+    getMobileBacklinkPanels().forEach(item => {
+        item.markIndexDirty(data);
+        item.refreshAfterIndex();
+    });
+    /// #else
     getAllModels().backlink.forEach(item => {
         item.markIndexDirty(data);
         item.refreshAfterIndex();
+    });
+    window.siyuan.blockPanels.forEach(item => {
+        item.backlink?.markIndexDirty(data);
+        item.backlink?.refreshAfterIndex();
     });
     /// #endif
 };
@@ -46,7 +64,7 @@ export const setRefDynamicText = (data: {
     getAllEditor().forEach(editor => {
         // 不能对比 rootId，否则嵌入块中的锚文本无法更新
         editor.protyle.wysiwyg.element.querySelectorAll(`[data-node-id="${data.blockID}"] span[data-type~="block-ref"][data-subtype="d"][data-id="${data.defBlockID}"]`).forEach(item => {
-            item.innerHTML = data.refText;
+            item.innerHTML = sanitizeKernelHTML(data.refText);
         });
     });
 };
@@ -121,13 +139,11 @@ export const setDefRefCount = (data: {
     }
 };
 
-export const lockScreen = async (app: App) => {
+export const lockScreen = async () => {
     if (window.siyuan.config.readonly || window.siyuan.isPublish) {
         return;
     }
-    app.plugins.forEach(item => {
-        item.eventBus.emit("lock-screen");
-    });
+    emitToPlugins("lock-screen");
     /// #if !MOBILE
     exportLayout({
         errorExit: false,
@@ -136,37 +152,44 @@ export const lockScreen = async (app: App) => {
         }
     });
     /// #else
-    if (window.siyuan.mobile.editor) {
-        await saveScroll(window.siyuan.mobile.editor.protyle);
-        fetchPost("/api/system/logoutAuth");
-    }
+    await saveMobileLayout();
+    fetchPost("/api/system/logoutAuth");
     /// #endif
 
 };
 
-// forceQuit 用于内核已断连、无法走 /api/system/exit 的场景：绕过内核 HTTP，直接通知宿主（Electron 主进程 /
-// 移动端原生容器）退出。浏览器/Docker 等纯 Web 环境无宿主可调，只能关闭当前页。
+const hostQuitGuard = createHostQuitGuard();
+
+export const isHostQuitStarted = hostQuitGuard.isStarted;
+
+// forceQuit 绕过内核 HTTP，直接通知宿主（Electron 主进程 / 移动端原生容器）退出。浏览器/Docker 等纯 Web
+// 环境无宿主可调，只能关闭当前页。
 export const forceQuit = () => {
-    /// #if !BROWSER
-    ipcRenderer.send(Constants.SIYUAN_QUIT, location.port);
-    /// #else
-    if (isInAndroid()) {
-        window.JSAndroid.exit();
-        return;
-    }
-    if (isInIOS()) {
-        window.webkit.messageHandlers.exit.postMessage("");
-        return;
-    }
-    if (isInHarmony()) {
-        window.JSHarmony.exit();
-        return;
-    }
-    window.close();
-    /// #endif
+    hostQuitGuard.run(() => {
+        /// #if !BROWSER
+        ipcRenderer.send(Constants.SIYUAN_QUIT, location.port);
+        /// #else
+        if (isInAndroid()) {
+            window.JSAndroid.exit();
+            return;
+        }
+        if (isInIOS()) {
+            window.webkit.messageHandlers.exit.postMessage("");
+            return;
+        }
+        if (isInHarmony()) {
+            window.JSHarmony.exit();
+            return;
+        }
+        window.close();
+        /// #endif
+    });
 };
 
 const installNewVersion = (installPkgPath: string, setCurrentWorkspace: boolean) => {
+    if (!getHostCapabilities().ownsKernel) {
+        return;
+    }
     if (!installPkgPath) {
         showMessage(window.siyuan.languages._kernel[104], 7000, "error");
         return;
@@ -183,63 +206,58 @@ const installNewVersion = (installPkgPath: string, setCurrentWorkspace: boolean)
         showMessage(window.siyuan.languages._kernel[104], 7000, "error");
     });
     /// #else
-    fetchPost("/api/system/exit", {
+    void requestSystemExit({
         force: true,
         setCurrentWorkspace,
         execInstallPkg: 1,
-    }, () => {
-        if (isInAndroid()) {
-            window.JSAndroid.exit();
-            return;
-        }
-        if (isInIOS()) {
-            window.webkit.messageHandlers.exit.postMessage("");
-            return;
-        }
-        if (isInHarmony()) {
-            window.JSHarmony.exit();
-        }
-    });
+    }, forceQuit);
     /// #endif
 };
 
 export const exitSiYuan = async (setCurrentWorkspace = true) => {
+    clearReloadSnapshot();
+    const host = getSettingsWindowHost();
+    if (host) {
+        await host.exit(setCurrentWorkspace);
+        return;
+    }
     hideAllElements(["util"]);
-    /// #if MOBILE
-    if (window.siyuan.mobile.editor) {
-        await saveScroll(window.siyuan.mobile.editor.protyle);
+    /// #if !BROWSER
+    try {
+        if (!await ipcRenderer.invoke(Constants.SIYUAN_GET, {cmd: Constants.SIYUAN_WINDOW_WORKSPACE_FLUSH_ALL})) {
+            showMessage(window.siyuan.languages.windowWorkspaceSaveError, 6000, "error");
+            return;
+        }
+    } catch (error) {
+        console.error(error);
+        showMessage(window.siyuan.languages.windowWorkspaceSaveError, 6000, "error");
+        return;
     }
     /// #endif
-    fetchPost("/api/system/exit", {force: false, setCurrentWorkspace}, (response) => {
+    /// #if MOBILE
+    if (!await saveMobileLayout()) {
+        showMessage(window.siyuan.languages.mobileLayoutSaveError, 6000, "error");
+        return;
+    }
+    /// #endif
+    if (!getHostCapabilities().ownsKernel) {
+        forceQuit();
+        return;
+    }
+    await requestSystemExit({force: false, setCurrentWorkspace}, (response) => {
         if (response.code === 1) { // 同步执行失败
-            const msgId = showMessage(response.msg, response.data.closeTimeout, "error");
-            const buttonElement = document.querySelector(`#message [data-id="${msgId}"] button`);
-            if (buttonElement) {
-                buttonElement.addEventListener("click", () => {
+            confirmDialog(window.siyuan.languages.sync, escapeHtml(window.siyuan.languages._kernel[96]), () => {
+                void exitSiYuan(setCurrentWorkspace);
+            }, undefined, false, {
+                label: window.siyuan.languages._kernel[97],
+                callback: () => {
                     if (response.data.installPkgPath) {
                         installNewVersion(response.data.installPkgPath, setCurrentWorkspace);
                         return;
                     }
-                    fetchPost("/api/system/exit", {force: true, setCurrentWorkspace}, () => {
-                        /// #if !BROWSER
-                        ipcRenderer.send(Constants.SIYUAN_QUIT, location.port);
-                        /// #else
-                        if (isInAndroid()) {
-                            window.JSAndroid.exit();
-                            return;
-                        }
-                        if (isInIOS()) {
-                            window.webkit.messageHandlers.exit.postMessage("");
-                            return;
-                        }
-                        if (isInHarmony()) {
-                            window.JSHarmony.exit();
-                            return;
-                        }
-                        /// #endif
-                    });
-                });
-            }
+                    void requestSystemExit({force: true, setCurrentWorkspace}, forceQuit);
+                }
+            }, window.siyuan.languages.retry);
         } else if (response.code === 2) { // 提示新安装包
             hideMessage();
 
@@ -252,34 +270,14 @@ export const exitSiYuan = async (setCurrentWorkspace = true) => {
             confirmDialog(window.siyuan.languages.updateVersion, response.msg, () => {
                 installNewVersion(response.data.installPkgPath, setCurrentWorkspace);
             }, () => {
-                fetchPost("/api/system/exit", {
+                void requestSystemExit({
                     force: true,
                     setCurrentWorkspace,
                     execInstallPkg: 1 // 0：默认检查新版本，1：不返回安装包，2：返回安装包路径并退出
-                }, () => {
-                    /// #if !BROWSER
-                    ipcRenderer.send(Constants.SIYUAN_QUIT, location.port);
-                    /// #endif
-                });
+                }, forceQuit);
             });
         } else { // 正常退出
-            /// #if !BROWSER
-            ipcRenderer.send(Constants.SIYUAN_QUIT, location.port);
-            /// #else
-            if (isInAndroid()) {
-                window.JSAndroid.exit();
-                return;
-            }
-            if (isInIOS()) {
-                window.webkit.messageHandlers.exit.postMessage("");
-                return;
-            }
-
-            if (isInHarmony()) {
-                window.JSHarmony.exit();
-                return;
-            }
-            /// #endif
+            forceQuit();
         }
     });
 };
@@ -332,44 +330,15 @@ export const refreshFileTree = (cb?: () => void) => {
 
 let statusTimeout: number;
 export const progressStatus = (data: IWebSocketData) => {
+    updateExitProgressStatus(data.msg);
+    updateReindexProgressStatus(sanitizeKernelHTML(data.msg));
     const msgElement = document.querySelector("#status .status__msg");
     if (msgElement) {
         clearTimeout(statusTimeout);
-        msgElement.innerHTML = data.msg;
+        msgElement.innerHTML = sanitizeKernelHTML(data.msg);
         statusTimeout = window.setTimeout(() => {
             msgElement.innerHTML = "";
         }, 12000);
-    }
-};
-
-export const progressLoading = (data: IWebSocketData) => {
-    let progressElement = document.getElementById("progress");
-    if (!progressElement) {
-        document.body.insertAdjacentHTML("beforeend", `<div id="progress" style="z-index: ${++window.siyuan.zIndex}"></div>`);
-        progressElement = document.getElementById("progress");
-    }
-    // code 0: 有进度；1: 无进度；2: 关闭
-    if (data.code === 2) {
-        progressElement.remove();
-        return;
-    }
-    if (data.code === 0) {
-        progressElement.innerHTML = `<div class="b3-dialog__scrim" style="opacity: 1"></div>
-<div class="b3-dialog__loading">
-    <div style="text-align: right">${data.data.current}/${data.data.total}</div>
-    <div style="margin: 8px 0;height: 8px;border-radius: var(--b3-border-radius);overflow: hidden;background-color:#fff;"><div style="width: ${data.data.current / data.data.total * 100}%;transition: var(--b3-transition);background-color: var(--b3-theme-primary);height: 8px;"></div></div>
-    <div class="ft__breakword">${escapeHtml(data.msg)}</div>
-</div>`;
-    } else if (data.code === 1) {
-        if (progressElement.lastElementChild) {
-            progressElement.lastElementChild.lastElementChild.innerHTML = escapeHtml(data.msg);
-        } else {
-            progressElement.innerHTML = `<div class="b3-dialog__scrim" style="opacity: 1"></div>
-<div class="b3-dialog__loading">
-    <div style="margin: 8px 0;height: 8px;border-radius: var(--b3-border-radius);overflow: hidden;background-color:#fff;"><div style="background-color: var(--b3-theme-primary);height: 8px;background-image: linear-gradient(-45deg, rgba(255, 255, 255, 0.2) 25%, transparent 25%, transparent 50%, rgba(255, 255, 255, 0.2) 50%, rgba(255, 255, 255, 0.2) 75%, transparent 75%, transparent);animation: stripMove 450ms linear infinite;background-size: 50px 50px;"></div></div>
-    <div class="ft__breakword">${escapeHtml(data.msg)}</div>
-</div>`;
-        }
     }
 };
 
@@ -385,9 +354,13 @@ export const progressBackgroundTask = (tasks: { action: string }[]) => {
             window.siyuan.menus.menu.remove();
         }
     } else {
+        const safeTasks = tasks.map((item) => ({
+            ...item,
+            action: sanitizeKernelHTML(item.action),
+        }));
         backgroundTaskElement.classList.remove("fn__none");
-        backgroundTaskElement.setAttribute("data-tasks", JSON.stringify(tasks));
-        backgroundTaskElement.innerHTML = tasks[0].action + '<div class="fn__progress"><div></div></div>';
+        backgroundTaskElement.setAttribute("data-tasks", JSON.stringify(safeTasks));
+        backgroundTaskElement.innerHTML = safeTasks[0].action + '<div class="fn__progress"><div></div></div>';
     }
 };
 
@@ -397,7 +370,7 @@ export const bootSync = () => {
             const dialog = new Dialog({
                 width: isMobile() ? "92vw" : "50vw",
                 title: "🌩️ " + window.siyuan.languages.bootSyncFailed,
-                content: `<div class="b3-dialog__content">${response.msg}</div>
+                content: `<div class="b3-dialog__content">${sanitizeKernelHTML(response.msg)}</div>
 <div class="b3-dialog__action">
     <button class="b3-button b3-button--cancel">${window.siyuan.languages.cancel}</button><div class="fn__space"></div>
     <button class="b3-button b3-button--text">${window.siyuan.languages.syncNow}</button>
@@ -409,6 +382,13 @@ export const bootSync = () => {
                 dialog.destroy();
             });
             btnsElement[1].addEventListener("click", () => {
+                if (isMobile()) {
+                    void dialog.runPending(async () => {
+                        const result = await fetchSyncPost("/api/sync/performBootSync", {});
+                        return result.code === 0;
+                    });
+                    return;
+                }
                 if (btnsElement[1].getAttribute("disabled")) {
                     return;
                 }
@@ -425,39 +405,25 @@ export const bootSync = () => {
 };
 
 export const downloadProgress = (data: { id: string, percent: number }) => {
-    const bazaarSideElement = document.querySelector("#configBazaarReadme .item__side");
-    if (!bazaarSideElement) {
-        return;
-    }
-    if (data.id !== (bazaarSideElement.getAttribute("data-progress-id") || bazaarSideElement.getAttribute("data-repourl"))) {
-        return;
-    }
-    const installBtnElement = bazaarSideElement.querySelector('[data-type="install"]') as HTMLElement;
-    const updateBtnElement = bazaarSideElement.querySelector('[data-type="install-t"]') as HTMLElement;
-    if (!installBtnElement && !updateBtnElement) {
-        return;
-    }
-    const progressHTML = `<span style="width: ${data.percent * 100}%"></span>`;
-    if (data.percent >= 1) {
-        installBtnElement?.parentElement.classList.add("fn__none");
-        updateBtnElement?.parentElement.classList.add("fn__none");
-    } else {
-        if (installBtnElement) {
-            installBtnElement.classList.add("b3-button--progress");
-            installBtnElement.innerHTML = progressHTML;
-        }
-        if (updateBtnElement) {
-            updateBtnElement.classList.add("b3-button--progress");
-            updateBtnElement.innerHTML = progressHTML;
-        }
+    if (updateBazaarInstallProgress(data)) {
+        renderBazaarInstall(document);
     }
 };
 
-export const processSync = (data?: IWebSocketData, plugins?: Plugin[]) => {
+let lastSyncResult: number;
+
+export const processSync = (data?: IWebSocketData) => {
+    if (data?.code === 1 || data?.code === 2) {
+        lastSyncResult = data.code;
+    }
     if (data?.code === 1) {
         window.dispatchEvent(new CustomEvent("siyuan-sync-success"));
     }
     const syncDisabled = !window.siyuan.config.sync.enabled || (0 === window.siyuan.config.sync.provider && needSubscribe(""));
+    // A configuration response started before the latest event must not overwrite its result.
+    const result = lastSyncResult ?? window.siyuan.config.sync.lastResult;
+    const syncIcon = syncDisabled ? "#iconCloudOff" : result === 2 ? "#iconCloudError" :
+        result === 1 ? "#iconCloudSucc" : "#iconCloud";
     /// #if MOBILE
     const menuSyncUseElement = document.querySelector("#menuSyncNow use");
     const barSyncUseElement = document.querySelector("#toolbarSync use");
@@ -466,23 +432,23 @@ export const processSync = (data?: IWebSocketData, plugins?: Plugin[]) => {
             // 同步进行中时保持旋转状态，待同步完成后由同步结果消息更新图标 https://github.com/siyuan-note/siyuan/issues/18597
             return;
         }
-        menuSyncUseElement?.setAttribute("xlink:href", syncDisabled ? "#iconCloudOff" : "#iconCloudSucc");
-        barSyncUseElement.setAttribute("xlink:href", syncDisabled ? "#iconCloudOff" : "#iconCloudSucc");
+        menuSyncUseElement?.setAttribute("xlink:href", syncIcon);
+        barSyncUseElement?.setAttribute("xlink:href", syncIcon);
         return;
     }
-    menuSyncUseElement?.parentElement.classList.remove("fn__rotate");
-    barSyncUseElement.parentElement.classList.remove("fn__rotate");
+    menuSyncUseElement?.parentElement?.classList.remove("fn__rotate");
+    barSyncUseElement?.parentElement?.classList.remove("fn__rotate");
     if (data.code === 0) {  // syncing
-        menuSyncUseElement?.parentElement.classList.add("fn__rotate");
-        barSyncUseElement.parentElement.classList.add("fn__rotate");
+        menuSyncUseElement?.parentElement?.classList.add("fn__rotate");
+        barSyncUseElement?.parentElement?.classList.add("fn__rotate");
         menuSyncUseElement?.setAttribute("xlink:href", "#iconRefresh");
-        barSyncUseElement.setAttribute("xlink:href", "#iconRefresh");
+        barSyncUseElement?.setAttribute("xlink:href", "#iconRefresh");
     } else if (data.code === 2) {    // error
-        menuSyncUseElement?.setAttribute("xlink:href", syncDisabled ? "#iconCloudOff" : "#iconCloudError");
-        barSyncUseElement.setAttribute("xlink:href", syncDisabled ? "#iconCloudOff" : "#iconCloudError");
+        menuSyncUseElement?.setAttribute("xlink:href", syncIcon);
+        barSyncUseElement?.setAttribute("xlink:href", syncIcon);
     } else if (data.code === 1) {   // success
-        menuSyncUseElement?.setAttribute("xlink:href", syncDisabled ? "#iconCloudOff" : "#iconCloudSucc");
-        barSyncUseElement.setAttribute("xlink:href", syncDisabled ? "#iconCloudOff" : "#iconCloudSucc");
+        menuSyncUseElement?.setAttribute("xlink:href", syncIcon);
+        barSyncUseElement?.setAttribute("xlink:href", syncIcon);
     }
     /// #else
     const iconElement = document.querySelector("#barSync");
@@ -496,7 +462,7 @@ export const processSync = (data?: IWebSocketData, plugins?: Plugin[]) => {
             return;
         }
         iconElement.classList.remove("toolbar__item--active");
-        useElement.setAttribute("xlink:href", syncDisabled ? "#iconCloudOff" : "#iconCloudSucc");
+        useElement.setAttribute("xlink:href", syncIcon);
         return;
     }
     iconElement.firstElementChild.classList.remove("fn__rotate");
@@ -506,19 +472,17 @@ export const processSync = (data?: IWebSocketData, plugins?: Plugin[]) => {
         useElement.setAttribute("xlink:href", "#iconRefresh");
     } else if (data.code === 2) {    // error
         iconElement.classList.remove("toolbar__item--active");
-        useElement.setAttribute("xlink:href", syncDisabled ? "#iconCloudOff" : "#iconCloudError");
+        useElement.setAttribute("xlink:href", syncIcon);
     } else if (data.code === 1) {   // success
         iconElement.classList.remove("toolbar__item--active");
-        useElement.setAttribute("xlink:href", syncDisabled ? "#iconCloudOff" : "#iconCloudSucc");
+        useElement.setAttribute("xlink:href", syncIcon);
     }
     /// #endif
-    plugins.forEach((item) => {
-        if (data.code === 0) {
-            item.eventBus.emit("sync-start", data);
-        } else if (data.code === 1) {
-            item.eventBus.emit("sync-end", data);
-        } else if (data.code === 2) {
-            item.eventBus.emit("sync-fail", data);
-        }
-    });
+    if (data.code === 0) {
+        emitToPlugins("sync-start", data);
+    } else if (data.code === 1) {
+        emitToPlugins("sync-end", data);
+    } else if (data.code === 2) {
+        emitToPlugins("sync-fail", data);
+    }
 };

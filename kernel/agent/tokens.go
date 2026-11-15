@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package agent
 
@@ -22,9 +10,9 @@ import (
 	"sync"
 
 	"github.com/pkoukk/tiktoken-go"
-	loader "github.com/pkoukk/tiktoken-go-loader"
 	"github.com/sashabaranov/go-openai"
 	tools "github.com/siyuan-note/siyuan/kernel/mcp/tools"
+	"github.com/siyuan-note/siyuan/kernel/util"
 )
 
 // tokenCounter 用 tiktoken 对文本进行 BPE 分词计数。
@@ -32,10 +20,7 @@ type tokenCounter struct {
 	enc *tiktoken.Tiktoken
 }
 
-var (
-	tokenLoaderOnce sync.Once
-	tokenCounters   sync.Map
-)
+var tokenCounters sync.Map
 
 const (
 	estimatedLowDetailImageTokens  = 256
@@ -45,20 +30,13 @@ const (
 // getTokenCounter 按模型缓存 counter，避免切换模型后继续沿用上一个模型的编码器。
 // 未识别的模型回退到 cl100k_base。离线 BPE loader 只注册一次。
 func getTokenCounter(modelName string) (*tokenCounter, error) {
-	tokenLoaderOnce.Do(func() {
-		tiktoken.SetBpeLoader(loader.NewOfflineLoader())
-	})
 	key := strings.ToLower(strings.TrimSpace(modelName))
 	if cached, ok := tokenCounters.Load(key); ok {
 		return cached.(*tokenCounter), nil
 	}
-	enc, err := tiktoken.EncodingForModel(modelName)
+	enc, err := util.GetTokenEncoding(modelName)
 	if err != nil {
-		// 模型名未识别，回退到 cl100k_base（覆盖 GPT-3.5/4 系，最通用的编码）。
-		enc, err = tiktoken.GetEncoding("cl100k_base")
-		if err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
 	counter := &tokenCounter{enc: enc}
 	actual, _ := tokenCounters.LoadOrStore(key, counter)
@@ -266,6 +244,80 @@ func estimateChatRequestTokens(model string, messages []openai.ChatCompletionMes
 		total += value
 	}
 	return total
+}
+
+func estimateProtocolRequestTokens(model, protocol string, messages []openai.ChatCompletionMessage,
+	checkpointMessages []AgentMessage, compaction *runtimeCompaction, tools []openai.Tool) int {
+	total := estimateChatRequestTokens(model, messages, tools)
+	if util.IsAnthropicMessagesProtocol(protocol) || util.IsGeminiInteractionsProtocol(protocol) {
+		counter, _ := getTokenCounter(model)
+		for _, message := range checkpointMessages {
+			if message.NativeContent != nil && strings.EqualFold(strings.TrimSpace(message.NativeContent.Protocol), strings.TrimSpace(protocol)) {
+				// 只补计原生签名及结构开销，避免重复计算可见文本和工具参数。
+				visible := counter.count(message.Content) + counter.count(message.ReasoningContent)
+				for _, call := range message.ToolCalls {
+					arguments := call.ArgumentsJSON
+					if arguments == "" {
+						data, _ := json.Marshal(call.Arguments)
+						arguments = string(data)
+					}
+					visible += counter.count(call.Name) + counter.count(arguments)
+				}
+				total += max(responseOutputTokenCost(model, message.NativeContent.Blocks, 0)-visible, 0)
+			}
+		}
+		return total
+	}
+	if !util.IsOpenAIResponsesProtocol(protocol) {
+		return total
+	}
+	counter, err := getTokenCounter(model)
+	if err != nil {
+		counter = nil
+	}
+	for i := range checkpointMessages {
+		message := &checkpointMessages[i]
+		if len(message.ResponseOutput) == 0 {
+			continue
+		}
+		outputTokens := responseOutputTokenCost(model, message.ResponseOutput, message.ResponseOutputTokens)
+		visibleTokens := counter.count(message.Content) + counter.count(message.ReasoningContent)
+		for _, toolCall := range message.ToolCalls {
+			arguments := toolCall.ArgumentsJSON
+			if arguments == "" {
+				if data, marshalErr := json.Marshal(toolCall.Arguments); marshalErr == nil {
+					arguments = string(data)
+				}
+			}
+			visibleTokens += counter.count(toolCall.Name) + counter.count(arguments)
+		}
+		total += max(outputTokens-visibleTokens, 0)
+	}
+	if compaction != nil && len(compaction.ResponseOutput) > 0 {
+		total += responseOutputTokenCost(
+			model, compaction.ResponseOutput, compaction.ResponseOutputTokens)
+	}
+	return total
+}
+
+func responseOutputTokenCost(model string, output []json.RawMessage, reportedTokens int) int {
+	if reportedTokens > 0 {
+		return reportedTokens
+	}
+	counter, err := getTokenCounter(model)
+	if err != nil {
+		counter = nil
+	}
+	total := 0
+	for _, item := range output {
+		total += counter.count(string(item))
+	}
+	return total
+}
+
+func compactionOutputTokenCost(model string, output []json.RawMessage, reportedTokens int) int {
+	reported := responseOutputTokenCost(model, output, reportedTokens)
+	return max(reported, responseOutputTokenCost(model, output, 0))
 }
 
 func contextInputBudget(contextLimit, maxCompletionTokens int) int {

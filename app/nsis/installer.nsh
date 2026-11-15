@@ -2,6 +2,33 @@
 !include FileFunc.nsh
 Caption "${PRODUCT_NAME} ${VERSION}"
 
+!define MARKDOWN_PROG_ID "org.b3log.siyuan.markdown"
+
+!macro RegisterMarkdownOpenWith
+    # 只加入打开方式，不修改扩展名默认值或用户的 UserChoice。
+    WriteRegStr SHELL_CONTEXT "Software\Classes\${MARKDOWN_PROG_ID}" "" "SiYuan Markdown"
+    WriteRegStr SHELL_CONTEXT "Software\Classes\${MARKDOWN_PROG_ID}\DefaultIcon" "" '"$INSTDIR\resources\markdown.ico",0'
+    WriteRegStr SHELL_CONTEXT "Software\Classes\${MARKDOWN_PROG_ID}\shell\open\command" "" '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" --markdown "%1"'
+    WriteRegNone SHELL_CONTEXT "Software\Classes\.md\OpenWithProgids" "${MARKDOWN_PROG_ID}"
+    WriteRegNone SHELL_CONTEXT "Software\Classes\.markdown\OpenWithProgids" "${MARKDOWN_PROG_ID}"
+    System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
+!macroend
+
+!macro UnregisterMarkdownOpenWith
+    # 旧安装器不得移除已指向其他安装目录的登记，也不清理其他应用的键。
+    Push $R9
+    ReadRegStr $R9 SHELL_CONTEXT "Software\Classes\${MARKDOWN_PROG_ID}\shell\open\command" ""
+    ${If} $R9 == '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" --markdown "%1"'
+        DeleteRegValue SHELL_CONTEXT "Software\Classes\.md\OpenWithProgids" "${MARKDOWN_PROG_ID}"
+        DeleteRegValue SHELL_CONTEXT "Software\Classes\.markdown\OpenWithProgids" "${MARKDOWN_PROG_ID}"
+        DeleteRegKey /ifempty SHELL_CONTEXT "Software\Classes\.md\OpenWithProgids"
+        DeleteRegKey /ifempty SHELL_CONTEXT "Software\Classes\.markdown\OpenWithProgids"
+        DeleteRegKey SHELL_CONTEXT "Software\Classes\${MARKDOWN_PROG_ID}"
+        System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
+    ${EndIf}
+    Pop $R9
+!macroend
+
 !macro WriteInstallLog Stage
     Push "${Stage}"
     Call AppendInstallLog
@@ -39,7 +66,67 @@ installLogDone:
     Pop $R9
 FunctionEnd
 
+!macro StopSiYuanProcess ProcessName
+    nsProcess::_FindProcess /NOUNLOAD "${ProcessName}"
+    Pop $R8
+    ${If} $R8 == 0
+        nsProcess::_KillProcess /NOUNLOAD "${ProcessName}"
+        Pop $R8
+        !insertmacro WriteInstallLog "process-stop version=${VERSION} process=${ProcessName} result=$R8"
+    ${EndIf}
+!macroend
+
+Function StopSiYuanProcesses
+    Push $R7
+    Push $R8
+    Push $R9
+
+stopSiYuanRetry:
+    # 使用安装器内的插件关闭进程，避免依赖外部命令。
+    !insertmacro StopSiYuanProcess "SiYuan.exe"
+    !insertmacro StopSiYuanProcess "SiYuan-Kernel.exe"
+    StrCpy $R9 0
+
+stopSiYuanWait:
+    nsProcess::_FindProcess /NOUNLOAD "SiYuan.exe"
+    Pop $R8
+    nsProcess::_FindProcess /NOUNLOAD "SiYuan-Kernel.exe"
+    Pop $R7
+    # 只有明确返回未找到进程时才继续安装，检测失败不能视为进程已退出。
+    ${If} $R8 == 603
+    ${AndIf} $R7 == 603
+        !insertmacro WriteInstallLog "process-cleanup-complete version=${VERSION} app-result=$R8 kernel-result=$R7"
+        Goto stopSiYuanDone
+    ${EndIf}
+
+    IntOp $R9 $R9 + 1
+    ${If} $R9 < 10
+        Sleep 200
+        Goto stopSiYuanWait
+    ${EndIf}
+
+    !insertmacro WriteInstallLog "process-cleanup-blocked version=${VERSION} app-result=$R8 kernel-result=$R7"
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(appCannotBeClosed)" /SD IDCANCEL IDRETRY stopSiYuanRetry
+    nsProcess::_Unload
+    SetErrorLevel 1
+    Quit
+
+stopSiYuanDone:
+    nsProcess::_Unload
+    Pop $R9
+    Pop $R8
+    Pop $R7
+FunctionEnd
+
+!ifndef BUILD_UNINSTALLER
+    # 安装阶段按进程名再次检查，避免安装目录前缀命中工作空间或安装器自身。
+    !macro customCheckAppRunning
+        Call StopSiYuanProcesses
+    !macroend
+!endif
+
 !macro preInit
+    SetOutPath "$TEMP"
     ${IfNot} ${AtLeastWin10}
         !insertmacro WriteInstallLog "installer-rejected-unsupported-windows version=${VERSION}"
         MessageBox MB_ICONEXCLAMATION "非常抱歉，思源笔记无法在低于 Windows 10 的系统上进行安装$\n$\n\
@@ -48,15 +135,9 @@ FunctionEnd
     ${EndIf}
 
     !insertmacro WriteInstallLog "installer-start version=${VERSION} package=$EXEPATH"
-    Push $R8
-    Push $R7
-    nsExec::Exec 'TASKKILL /F /IM "SiYuan.exe"'
-    Pop $R8
-    nsExec::Exec 'TASKKILL /F /IM "SiYuan-Kernel.exe"'
-    Pop $R7
-    !insertmacro WriteInstallLog "process-cleanup-complete version=${VERSION} app-result=$R8 kernel-result=$R7"
-    Pop $R7
-    Pop $R8
+    !ifndef BUILD_UNINSTALLER
+        Call StopSiYuanProcesses
+    !endif
 !macroend
 
 !macro customInit
@@ -80,19 +161,25 @@ FunctionEnd
 !macroend
 
 !macro customInstall
+    !insertmacro RegisterMarkdownOpenWith
     !insertmacro WriteInstallLog "payload-extracted version=${VERSION} target=$INSTDIR"
     RMDir /r "$PROFILE\AppData\Local\siyuan-updater"
-    nsExec::ExecToLog 'cmd /c mklink /H "$INSTDIR\resources\kernel\siyuan.exe" "$INSTDIR\resources\kernel\SiYuan-Kernel.exe" 2>nul || ver>nul'
+    nsExec::ExecToLog '"$SYSDIR\cmd.exe" /c mklink /H "$INSTDIR\resources\kernel\siyuan.exe" "$INSTDIR\resources\kernel\SiYuan-Kernel.exe" 2>nul || ver>nul'
     ${If} $installMode == "all"
-        nsExec::ExecToLog 'powershell -NoProfile -Command "$k=\"$INSTDIR\resources\kernel\";$p=[Environment]::GetEnvironmentVariable(\"Path\",\"Machine\");if((-not $p) -or -not ($p.Split(\";\") -contains $k)){$p=\"$k;$p\";[Environment]::SetEnvironmentVariable(\"Path\",$p,\"Machine\")}else{Write-Host \"already in PATH\"}"'
+        nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -Command "$k=\"$INSTDIR\resources\kernel\";$p=[Environment]::GetEnvironmentVariable(\"Path\",\"Machine\");if((-not $p) -or -not ($p.Split(\";\") -contains $k)){$p=\"$k;$p\";[Environment]::SetEnvironmentVariable(\"Path\",$p,\"Machine\")}else{Write-Host \"already in PATH\"}"'
     ${Else}
-        nsExec::ExecToLog 'powershell -NoProfile -Command "$k=\"$INSTDIR\resources\kernel\";$p=[Environment]::GetEnvironmentVariable(\"Path\",\"User\");if((-not $p) -or -not ($p.Split(\";\") -contains $k)){$p=\"$k;$p\";[Environment]::SetEnvironmentVariable(\"Path\",$p,\"User\")}else{Write-Host \"already in PATH\"}"'
+        nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -Command "$k=\"$INSTDIR\resources\kernel\";$p=[Environment]::GetEnvironmentVariable(\"Path\",\"User\");if((-not $p) -or -not ($p.Split(\";\") -contains $k)){$p=\"$k;$p\";[Environment]::SetEnvironmentVariable(\"Path\",$p,\"User\")}else{Write-Host \"already in PATH\"}"'
     ${EndIf}
     !insertmacro WriteInstallLog "install-complete version=${VERSION} target=$INSTDIR"
 !macroend
 
 !macro customUnInstall
     ${IfNot} ${isUpdated}
+        !insertmacro UnregisterMarkdownOpenWith
+    ${EndIf}
+    ${IfNot} ${isUpdated}
+        # 真正卸载时清理共用安装包，更新安装期间保留缓存。
+        RMDir /r "$PROFILE\.config\siyuan\install"
         IfFileExists "$PROFILE\.config\siyuan\*.*" 0 skipConfigDelete
             MessageBox MB_YESNO "是否需要彻底删除全局配置（$PROFILE\.config\siyuan\）？$\n$\n\
                 Do you want to delete the global configuration ($PROFILE\.config\siyuan\)?$\n" \
@@ -116,9 +203,9 @@ FunctionEnd
 
     RMDir /r "$PROFILE\AppData\Local\siyuan-updater"
     ${If} $installMode == "all"
-        nsExec::ExecToLog 'powershell -NoProfile -Command "$k=\"$INSTDIR\resources\kernel\";$p=[Environment]::GetEnvironmentVariable(\"Path\",\"Machine\");if($p){$a=$p.Split(\";\") | ?{$_ -and ($_ -ne $k)};$p=[string]::Join(\";\",$a);[Environment]::SetEnvironmentVariable(\"Path\",$p,\"Machine\")}"'
+        nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -Command "$k=\"$INSTDIR\resources\kernel\";$p=[Environment]::GetEnvironmentVariable(\"Path\",\"Machine\");if($p){$a=$p.Split(\";\") | ?{$_ -and ($_ -ne $k)};$p=[string]::Join(\";\",$a);[Environment]::SetEnvironmentVariable(\"Path\",$p,\"Machine\")}"'
     ${Else}
-        nsExec::ExecToLog 'powershell -NoProfile -Command "$k=\"$INSTDIR\resources\kernel\";$p=[Environment]::GetEnvironmentVariable(\"Path\",\"User\");if($p){$a=$p.Split(\";\") | ?{$_ -and ($_ -ne $k)};$p=[string]::Join(\";\",$a);[Environment]::SetEnvironmentVariable(\"Path\",$p,\"User\")}"'
+        nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -Command "$k=\"$INSTDIR\resources\kernel\";$p=[Environment]::GetEnvironmentVariable(\"Path\",\"User\");if($p){$a=$p.Split(\";\") | ?{$_ -and ($_ -ne $k)};$p=[string]::Join(\";\",$a);[Environment]::SetEnvironmentVariable(\"Path\",$p,\"User\")}"'
     ${EndIf}
 !macroend
 

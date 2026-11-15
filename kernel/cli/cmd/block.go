@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package cmd
 
@@ -216,21 +204,19 @@ var blockInsertCmd = &cobra.Command{
 		}
 
 		dom := markdownToBlockDOM(data)
-		transactions := []*model.Transaction{{
-			DoOperations: []*model.Operation{{
-				Action:     "insert",
-				Data:       dom,
-				ParentID:   parentID,
-				PreviousID: previousID,
-			}},
-		}}
-		model.PerformTransactions(&transactions)
-		model.FlushTxQueue()
+		operation := &model.Operation{
+			Action:     "insert",
+			Data:       dom,
+			ParentID:   parentID,
+			PreviousID: previousID,
+		}
+		if err = model.PerformTxSync(&model.Transaction{DoOperations: []*model.Operation{operation}}); err != nil {
+			return err
+		}
 		if bt := treenode.GetBlockTree(parentID); bt != nil {
 			model.AppendPushReloadProtyleEntry(bt.RootID)
 		}
-		fmt.Println("ok")
-		return nil
+		return printBlockWriteResult(operation.ID)
 	},
 }
 
@@ -259,20 +245,18 @@ var blockAppendCmd = &cobra.Command{
 		}
 
 		dom := markdownToBlockDOM(data)
-		transactions := []*model.Transaction{{
-			DoOperations: []*model.Operation{{
-				Action:   "appendInsert",
-				Data:     dom,
-				ParentID: parentID,
-			}},
-		}}
-		model.PerformTransactions(&transactions)
-		model.FlushTxQueue()
+		operation := &model.Operation{
+			Action:   "appendInsert",
+			Data:     dom,
+			ParentID: parentID,
+		}
+		if err = model.PerformTxSync(&model.Transaction{DoOperations: []*model.Operation{operation}}); err != nil {
+			return err
+		}
 		if bt := treenode.GetBlockTree(parentID); bt != nil {
 			model.AppendPushReloadProtyleEntry(bt.RootID)
 		}
-		fmt.Println("ok")
-		return nil
+		return printBlockWriteResult(operation.ID)
 	},
 }
 
@@ -301,21 +285,39 @@ var blockPrependCmd = &cobra.Command{
 		}
 
 		dom := markdownToBlockDOM(data)
-		transactions := []*model.Transaction{{
-			DoOperations: []*model.Operation{{
-				Action:   "prependInsert",
-				Data:     dom,
-				ParentID: parentID,
-			}},
-		}}
-		model.PerformTransactions(&transactions)
-		model.FlushTxQueue()
+		operation := &model.Operation{
+			Action:   "prependInsert",
+			Data:     dom,
+			ParentID: parentID,
+		}
+		if err = model.PerformTxSync(&model.Transaction{DoOperations: []*model.Operation{operation}}); err != nil {
+			return err
+		}
 		if bt := treenode.GetBlockTree(parentID); bt != nil {
 			model.AppendPushReloadProtyleEntry(bt.RootID)
 		}
-		fmt.Println("ok")
-		return nil
+		return printBlockWriteResult(operation.ID)
 	},
+}
+
+func printBlockWriteResult(id string) error {
+	return writeBlockWriteResult(os.Stdout, id)
+}
+
+func writeBlockWriteResult(output io.Writer, id string) error {
+	if id == "" {
+		return fmt.Errorf("block write failed: empty block ID")
+	}
+	if outputFormat == "json" {
+		data, err := json.MarshalIndent(map[string]string{"id": id}, "", "  ")
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(output, string(data))
+		return err
+	}
+	_, err := fmt.Fprintln(output, id)
+	return err
 }
 
 var blockUpdateCmd = &cobra.Command{
@@ -365,21 +367,21 @@ var blockDeleteCmd = &cobra.Command{
 			return fmt.Errorf("--id is required")
 		}
 
+		bt := treenode.GetBlockTree(id)
+		if bt == nil {
+			return fmt.Errorf("block not found: %s", id)
+		}
+		if bt.Type == "d" {
+			return fmt.Errorf("document cannot be deleted as a block [%s]", id)
+		}
 		if dryRun {
 			fmt.Printf("[dry-run] Would delete block %s\n", id)
 			return nil
 		}
 
-		bt := treenode.GetBlockTree(id)
-
-		transactions := []*model.Transaction{{
-			DoOperations: []*model.Operation{{
-				Action: "delete",
-				ID:     id,
-			}},
-		}}
-		model.PerformTransactions(&transactions)
-		model.FlushTxQueue()
+		if _, err := model.PerformBlockOperation(&model.Operation{Action: "delete", ID: id}); err != nil {
+			return err
+		}
 
 		if bt != nil {
 			model.AppendPushReloadProtyleEntry(bt.RootID)
@@ -518,9 +520,9 @@ var blockBatchKramdownCmd = &cobra.Command{
 			var sb strings.Builder
 			for _, id := range ids {
 				if kd, ok := kramdowns[id]; ok {
-					sb.WriteString(fmt.Sprintf("--- %s ---\n%s\n\n", id, kd))
+					fmt.Fprintf(&sb, "--- %s ---\n%s\n\n", id, kd)
 				} else {
-					sb.WriteString(fmt.Sprintf("--- %s ---\n(not found)\n\n", id))
+					fmt.Fprintf(&sb, "--- %s ---\n(not found)\n\n", id)
 				}
 			}
 			fmt.Print(sb.String())

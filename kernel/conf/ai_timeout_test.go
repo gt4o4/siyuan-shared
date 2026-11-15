@@ -1,14 +1,25 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package conf
 
 import "testing"
+
+func TestAgentTimeoutDefaults(t *testing.T) {
+	if DefaultAgentSessionTimeout != 1800 {
+		t.Fatalf("default session timeout changed: %d", DefaultAgentSessionTimeout)
+	}
+	if MaxAgentSessionTimeout != 3600 {
+		t.Fatalf("max session timeout changed: %d", MaxAgentSessionTimeout)
+	}
+	if DefaultAgentConfirmTimeout != 600 {
+		t.Fatalf("default confirmation timeout changed: %d", DefaultAgentConfirmTimeout)
+	}
+	if DefaultAgentSessionTimeout > MaxAgentSessionTimeout {
+		t.Fatalf("default session timeout %d exceeds the max %d", DefaultAgentSessionTimeout, MaxAgentSessionTimeout)
+	}
+}
 
 func TestAINormalizeAgentTimeoutsAndRetries(t *testing.T) {
 	tests := []struct {
@@ -18,9 +29,9 @@ func TestAINormalizeAgentTimeoutsAndRetries(t *testing.T) {
 		wantStreamIdle int
 		wantMaxRetries int
 	}{
-		{name: "defaults", agent: nil, wantSession: 600, wantStreamIdle: 120, wantMaxRetries: 3},
+		{name: "defaults", agent: nil, wantSession: DefaultAgentSessionTimeout, wantStreamIdle: 120, wantMaxRetries: 3},
 		{name: "zero means unlimited session and no retries", agent: &Agent{}, wantSession: 0, wantStreamIdle: 120, wantMaxRetries: 0},
-		{name: "clamps upper bounds", agent: &Agent{SessionTimeout: 7200, StreamIdleTimeout: 900, MaxRetries: 20}, wantSession: 3600, wantStreamIdle: 600, wantMaxRetries: 10},
+		{name: "clamps upper bounds", agent: &Agent{SessionTimeout: 7200, StreamIdleTimeout: 900, MaxRetries: 20}, wantSession: MaxAgentSessionTimeout, wantStreamIdle: 600, wantMaxRetries: 10},
 		{name: "normalizes negative values", agent: &Agent{SessionTimeout: -1, StreamIdleTimeout: -1, MaxRetries: -1}, wantSession: 0, wantStreamIdle: 120, wantMaxRetries: 0},
 	}
 
@@ -43,7 +54,9 @@ func TestAINormalizeAgentTimeoutsAndRetries(t *testing.T) {
 
 func TestNewAIReadsAgentStreamIdleTimeoutFromEnvironment(t *testing.T) {
 	t.Setenv("SIYUAN_OPENAI_AGENT_STREAM_IDLE_TIMEOUT", "240")
-	if got := NewAI().Agent.StreamIdleTimeout; got != 240 {
+	ai := NewAI()
+	ApplyAIEnvironment(ai)
+	if got := ai.Agent.StreamIdleTimeout; got != 240 {
 		t.Fatalf("stream idle timeout = %d, want 240", got)
 	}
 }
@@ -64,6 +77,7 @@ func TestNewAIDefaultProviderRequestTimeout(t *testing.T) {
 	t.Setenv("SIYUAN_OPENAI_API_MODEL", "test-model")
 	t.Setenv("SIYUAN_OPENAI_API_BASE_URL", "https://example.com/v1")
 	ai := NewAI()
+	ApplyAIEnvironment(ai)
 	if len(ai.Providers) != 1 || ai.Providers[0].RequestTimeout != 120 {
 		t.Fatalf("unexpected default provider request timeout: %#v", ai.Providers)
 	}

@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
@@ -20,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -39,9 +26,14 @@ import (
 var localStorageLock = sync.Mutex{}
 
 func GetLocalStorage() (ret map[string]any) {
+	ret, _ = getLocalStorageWithError()
+	return
+}
+
+func getLocalStorageWithError() (map[string]any, error) {
 	localStorageLock.Lock()
 	defer localStorageLock.Unlock()
-	return getLocalStorage()
+	return readLocalStorage()
 }
 
 func SetLocalStorage(val map[string]any) (err error) {
@@ -55,7 +47,10 @@ func SetLocalStorageVals(keyVals map[string]any) (setKeyVals map[string]any, err
 	defer localStorageLock.Unlock()
 
 	setKeyVals = make(map[string]any, len(keyVals))
-	localStorage := getLocalStorage()
+	localStorage, err := readLocalStorage()
+	if err != nil {
+		return nil, err
+	}
 	for k, v := range keyVals {
 		if v == nil {
 			err = fmt.Errorf("local storage value for key [%s] must not be empty", k)
@@ -72,22 +67,24 @@ func RemoveLocalStorageVals(keys []string) (err error) {
 	localStorageLock.Lock()
 	defer localStorageLock.Unlock()
 
-	localStorage := getLocalStorage()
+	localStorage, err := readLocalStorage()
+	if err != nil {
+		return err
+	}
 	for _, key := range keys {
 		delete(localStorage, key)
 	}
 	return setLocalStorage(localStorage)
 }
 
-func getLocalStorage() (ret map[string]any) {
+func readLocalStorage() (ret map[string]any, err error) {
 	// When local.json is corrupted, clear the file to avoid being unable to enter the main interface https://github.com/siyuan-note/siyuan/issues/7911
 	ret = map[string]any{}
 	lsPath := filepath.Join(util.DataDir, "storage/local.json")
-	if !filelock.IsExist(lsPath) {
-		return
-	}
-
 	data, err := filelock.ReadFile(lsPath)
+	if os.IsNotExist(err) {
+		return ret, nil
+	}
 	if err != nil {
 		logging.LogErrorf("read storage [local] failed: %s", err)
 		return
@@ -123,20 +120,27 @@ func setLocalStorage(val map[string]any) (err error) {
 }
 
 type Criterion struct {
-	Name         string                 `json:"name"`
-	Sort         int                    `json:"sort"`       // 0：按块类型（默认），1：按创建时间升序，2：按创建时间降序，3：按更新时间升序，4：按更新时间降序，5：按内容顺序（仅在按文档分组时）
+	Name string `json:"name"`
+	// 排序方式：0 按块类型（默认），1 按创建时间升序，2 按创建时间降序，3 按更新时间升序，4 按更新时间降序，
+	// 5 按内容顺序，6 按相关度升序，7 按相关度降序
+	Sort         int                    `json:"sort"`
 	Group        int                    `json:"group"`      // 0：不分组，1：按文档分组
 	HasReplace   bool                   `json:"hasReplace"` // 是否有替换
-	Method       int                    `json:"method"`     // 0：文本，1：查询语法，2：SQL，3：正则表达式
+	Method       int                    `json:"method"`     // 0：文本，1：查询语法，2：SQL，3：正则表达式，4：语义搜索
 	HPath        string                 `json:"hPath"`
 	IDPath       []string               `json:"idPath"`
 	K            string                 `json:"k"`            // 搜索关键字
 	R            string                 `json:"r"`            // 替换关键字
 	Types        *CriterionTypes        `json:"types"`        // 类型过滤选项
+	SubTypes     SearchSubTypes         `json:"subTypes"`     // 子类型过滤选项
 	ReplaceTypes *CriterionReplaceTypes `json:"replaceTypes"` // 替换类型过滤选项
 }
 
 type CriterionTypes struct {
+	Mindmap     *bool `json:"mindmap,omitempty"`
+	MindmapItem *bool `json:"mindmapItem,omitempty"`
+	CustomBlock *bool `json:"customBlock,omitempty"`
+
 	MathBlock     bool `json:"mathBlock"`
 	Table         bool `json:"table"`
 	Blockquote    bool `json:"blockquote"`
@@ -155,6 +159,8 @@ type CriterionTypes struct {
 	IFrameBlock   bool `json:"iframeBlock"`
 	WidgetBlock   bool `json:"widgetBlock"`
 	Callout       bool `json:"callout"`
+	Tabs          bool `json:"tabs"`
+	TabItem       bool `json:"tabItem"`
 }
 
 type CriterionReplaceTypes struct {
@@ -220,6 +226,9 @@ func SetCriterion(criterion *Criterion) (err error) {
 	}
 
 	err = setCriteria(criteria)
+	if err == nil {
+		IncSyncIfNeeded(filepath.Join(util.DataDir, "storage", "criteria.json"))
+	}
 	return
 }
 
@@ -240,6 +249,9 @@ func RemoveCriterion(name string) (err error) {
 	}
 
 	err = setCriteria(criteria)
+	if err == nil {
+		IncSyncIfNeeded(filepath.Join(util.DataDir, "storage", "criteria.json"))
+	}
 	return
 }
 
@@ -307,6 +319,13 @@ func GetRecentDocs(sortBy string) (ret []*RecentDoc, err error) {
 	recentDocLock.Lock()
 	defer recentDocLock.Unlock()
 	return getRecentDocs(sortBy)
+}
+
+// ClearRecentDocs 清空当前工作区的浏览、打开和关闭记录，后续访问继续记录。
+func ClearRecentDocs() error {
+	recentDocLock.Lock()
+	defer recentDocLock.Unlock()
+	return setRecentDocs([]*RecentDoc{})
 }
 
 // UpdateRecentDocOpenTime 更新文档打开时间（只在第一次从文档树加载到页签时调用）
@@ -481,7 +500,20 @@ func loadRecentDocsRaw() (ret []*RecentDoc, err error) {
 	return
 }
 
+func buildRecentDocsByTimeStmt(sortBy string, hiddenRootIDs []string, limit int) (stmt string, args []any) {
+	orderBy := "updated"
+	if "created" == sortBy {
+		orderBy = "created"
+	}
+	boxDocFilter, args := buildRootIDExclusionFilter(hiddenRootIDs)
+	stmt = "SELECT * FROM blocks WHERE type = 'd'" + boxDocFilter + " ORDER BY " + orderBy + " DESC, id DESC" +
+		fmt.Sprintf(" LIMIT %d", limit)
+	return
+}
+
 func getRecentDocs(sortBy string) (ret []*RecentDoc, err error) {
+	confFileTreeSnapshot := Conf.LoadFileTree()
+
 	ret = []*RecentDoc{} // 初始化为空切片，确保 API 始终返回非 nil
 	recentDocs, err := loadRecentDocsRaw()
 	if err != nil {
@@ -510,7 +542,7 @@ func getRecentDocs(sortBy string) (ret []*RecentDoc, err error) {
 		}
 
 		if merged, ok := mergedDocs[bt.RootID]; !ok {
-			doc.Title = path.Base(bt.HPath) // Recent docs not updated after renaming https://github.com/siyuan-note/siyuan/issues/7827
+			doc.Title = documentTitleText(bt.BoxID, bt.RootID)
 			mergedDocs[bt.RootID] = doc
 			rootIDs = append(rootIDs, bt.RootID)
 		} else {
@@ -558,17 +590,10 @@ func getRecentDocs(sortBy string) (ret []*RecentDoc, err error) {
 
 	// 根据排序参数进行排序
 	switch sortBy {
-	case "updated": // 按更新时间排序
-		// 从数据库查询最近修改的文档
-		boxDocFilter, boxDocArgs := buildRootIDExclusionFilter(hiddenBoxDocRootIDs())
-		var sqlBlocks []*sql.Block
-		if "" == boxDocFilter {
-			sqlBlocks = sql.SelectBlocksRawStmt("SELECT * FROM blocks WHERE type = 'd' ORDER BY updated DESC", 1, Conf.FileTree.RecentDocsMaxListCount)
-		} else {
-			stmt := "SELECT * FROM blocks WHERE type = 'd'" + boxDocFilter + " ORDER BY updated DESC" +
-				fmt.Sprintf(" LIMIT %d", Conf.FileTree.RecentDocsMaxListCount)
-			sqlBlocks = sql.SelectBlocksRawStmtArgs(stmt, boxDocArgs, Conf.FileTree.RecentDocsMaxListCount)
-		}
+	case "created", "updated": // 按创建时间或更新时间排序
+		// 从数据库查询最近创建或修改的文档
+		stmt, boxDocArgs := buildRecentDocsByTimeStmt(sortBy, hiddenBoxDocRootIDs(), confFileTreeSnapshot.RecentDocsMaxListCount)
+		sqlBlocks := sql.SelectBlocksRawStmtArgs(stmt, boxDocArgs, confFileTreeSnapshot.RecentDocsMaxListCount)
 		ret = []*RecentDoc{}
 		if 1 > len(sqlBlocks) {
 			return
@@ -601,7 +626,7 @@ func getRecentDocs(sortBy string) (ret []*RecentDoc, err error) {
 				}
 			}
 			// 获取文档标题
-			title := path.Base(bt.HPath)
+			title := documentTitleText(bt.BoxID, bt.RootID)
 			doc := &RecentDoc{
 				RootID: sqlBlock.ID,
 				Icon:   icon,
@@ -656,7 +681,7 @@ func getRecentDocs(sortBy string) (ret []*RecentDoc, err error) {
 
 // normalizeRecentDocs 规范化最近文档列表：去重、清空 Title/Icon、按类型截取配置的最大数量记录
 func normalizeRecentDocs(recentDocs []*RecentDoc) []*RecentDoc {
-	maxCount := Conf.FileTree.RecentDocsMaxListCount
+	maxCount := Conf.FileTree.Load().RecentDocsMaxListCount
 
 	// 去重
 	seen := make(map[string]struct{}, len(recentDocs))

@@ -1,28 +1,54 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/88250/lute/ast"
 	"github.com/siyuan-note/siyuan/kernel/av"
 	"github.com/siyuan-note/siyuan/kernel/treenode"
 )
+
+func TestSortAttrViewBindingIDs(t *testing.T) {
+	tests := []struct {
+		name       string
+		avIDs      []string
+		avID       string
+		previousID string
+		expected   []string
+		hasErr     bool
+	}{
+		{name: "move to beginning", avIDs: []string{"a", "b", "c"}, avID: "c", expected: []string{"c", "a", "b"}},
+		{name: "move to middle", avIDs: []string{"a", "b", "c"}, avID: "c", previousID: "a", expected: []string{"a", "c", "b"}},
+		{name: "move to end", avIDs: []string{"a", "b", "c"}, avID: "a", previousID: "c", expected: []string{"b", "c", "a"}},
+		{name: "same position", avIDs: []string{"a", "b", "c"}, avID: "b", previousID: "a", expected: []string{"a", "b", "c"}},
+		{name: "same ID", avIDs: []string{"a", "b", "c"}, avID: "b", previousID: "b", expected: []string{"a", "b", "c"}},
+		{name: "missing binding", avIDs: []string{"a", "b", "c"}, avID: "d", hasErr: true},
+		{name: "missing previous binding", avIDs: []string{"a", "b", "c"}, avID: "b", previousID: "d", hasErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			actual, err := sortAttrViewBindingIDs(test.avIDs, test.avID, test.previousID)
+			if test.hasErr {
+				if nil == err {
+					t.Fatal("expected an error")
+				}
+				return
+			}
+			if nil != err {
+				t.Fatalf("unexpected error: %s", err)
+			}
+			if !reflect.DeepEqual(test.expected, actual) {
+				t.Fatalf("expected %v, got %v", test.expected, actual)
+			}
+		})
+	}
+}
 
 func TestRemoveAttributeViewBoundBlocks(t *testing.T) {
 	deletedValue1 := &av.Value{Block: &av.ValueBlock{ID: "20260805000000-deleted1"}}

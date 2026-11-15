@@ -1,298 +1,141 @@
-import {popSearch} from "./search";
-import {closeModel, closePanel} from "../util/closePanel";
-import {mountHelp, newDailyNote, newEncryptedNotebook, newNotebook} from "../../util/mount";
-import {exitSiYuan, lockScreen, processSync} from "../../dialog/processSystem";
-import {openHistory} from "../../history/history";
-import {syncGuide} from "../../sync/syncGuide";
-import {openCard} from "../../card/openCard";
+import {closeModel, closePanel, MOBILE_MENU_CLOSE_EVENT} from "../util/closePanel";
 import {activeBlur} from "../util/keyboardToolbar";
-import {getRecentDocs} from "./getRecentDocs";
 import type {App} from "../../index";
-import {isInMobileApp} from "../../protyle/util/compatibility";
-import {newFile} from "../../util/newFile";
-import {afterLayoutReady} from "../../plugin/loader";
-import {commandPanel} from "../../boot/globalEvent/command/panel";
-import {openTopBarMenu} from "../../plugin/openTopBarMenu";
-import {settingTabToMenuId, getSettingTab, getSettingTabDefs, type ISettingTabShell, type TSettingTab} from "../../config/setting/tabs";
-import {bindSettingSaveDelegation} from "../../config/setting/save";
-import {isMobile} from "../../util/functions";
-import {openModel} from "./model";
+import {getSettingTabDefs, type TSettingTab} from "../../config/setting/tabs";
+import {getSettingTabFromMenuTarget, getMobileMainMenuHandler, renderMobileMainMenuHTML} from "./mainMenu";
+import {createMainMenuSearch, type IMainMenuSearch} from "./mainMenuSearch";
+import {openSettingTab} from "./settingPanel";
 import {getCurrentEditor} from "../editor";
-import {openDataMigration} from "../../menus/dataMigration";
+import {getMobilePluginDockEntries, MOBILE_PLUGIN_DOCKS_CHANGE_EVENT} from "../dock/pluginDockState";
+import {openDock} from "../dock/util";
+import {escapeAttr, escapeHtml} from "../../util/escape";
+import {processSync} from "../../dialog/processSystem";
+import {afterLayoutReady} from "../../plugin/loader";
+import {syncMainMenuGroupCollapse, toggleMainMenuGroup} from "./mainMenuCollapse";
 
-const getSettingTabFromMenuTarget = (target: HTMLElement): ISettingTabShell<TSettingTab> | undefined => {
-    const item = target.closest(".b3-menu__item") as HTMLElement | null;
-    if (!item?.id) {
-        return undefined;
-    }
-    return getSettingTabDefs().find(def => settingTabToMenuId(def.id) === item.id);
-};
+let mobileMenuReturnCallback: (() => void) | undefined;
 
-const getSettingTabsMenuHTML = () => getSettingTabDefs().map(def =>
-    `<div class="b3-menu__item${def.hidden ? " fn__none" : ""}" id="${settingTabToMenuId(def.id)}">
-        <svg class="b3-menu__icon"><use xlink:href="#${def.icon}"></use></svg>
-        <span class="b3-menu__label">${def.title}</span>
-    </div>`).join("");
-
-const openSettingTab = (app: App, settingTabDef: ISettingTabShell<TSettingTab>, returnCallback?: () => void) => {
-    openModel({
-        title: settingTabDef.title,
-        icon: "iconLeft",
-        html: `<div class="config${isMobile() ? " config--mobile" : ""}"></div>`,
-        bindEvent(modelMainElement: HTMLElement) {
-            const root = modelMainElement.firstElementChild as HTMLElement;
-            bindSettingSaveDelegation(root);
-            void getSettingTab(settingTabDef.id).mount(root, undefined, app);
-        },
-        backCallback() {
-            if (returnCallback) {
-                returnCallback();
-            } else {
-                openSettingMenu(app, "back");
-            }
-        },
-        transition: "forward",
-    });
-};
-
-const openSettingMenu = (app: App, transition?: "back", returnCallback?: () => void) => {
-    openModel({
-        title: window.siyuan.languages.config,
-        icon: "iconLeft",
-        html: `<div class="b3-menu__groups">
-    <div class="b3-menu__group">
-        <div class="b3-menu__group-items">${getSettingTabsMenuHTML()}</div>
-    </div>
-</div>`,
-        bindEvent(modelMainElement: HTMLElement) {
-            modelMainElement.addEventListener("click", (event) => {
-                const def = getSettingTabFromMenuTarget(event.target as HTMLElement);
-                if (def) {
-                    openSettingTab(app, def, () => openSettingMenu(app, "back", returnCallback));
-                }
-            });
-        },
-        backCallback() {
-            if (returnCallback) {
-                returnCallback();
-            } else {
-                closeModel();
-            }
-        },
-        transition,
-    });
+const takeMobileMenuReturnCallback = () => {
+    const callback = mobileMenuReturnCallback;
+    mobileMenuReturnCallback = undefined;
+    return callback;
 };
 
 export const openMobileSetting = (app: App, tab?: TSettingTab, returnCallback?: () => void) => {
-    activeBlur();
-    const settingTabDef = tab ? getSettingTabDefs().find(def => def.id === tab) : undefined;
-    if (settingTabDef) {
-        openSettingTab(app, settingTabDef, returnCallback);
+    if (!tab) {
+        popMenu();
+        if (document.getElementById("menu")?.style.transform === "translateX(0px)") {
+            mobileMenuReturnCallback = returnCallback;
+        }
         return;
     }
-    openSettingMenu(app, undefined, returnCallback);
+    const callback = returnCallback || takeMobileMenuReturnCallback();
+    activeBlur();
+    document.getElementById("menu")?.dispatchEvent(new CustomEvent(MOBILE_MENU_CLOSE_EVENT));
+    const settingTabDef = getSettingTabDefs().find(def => def.id === tab);
+    if (!settingTabDef || settingTabDef.hidden) {
+        return;
+    }
+    openSettingTab(app, settingTabDef, callback);
 };
 
 export const popMenu = () => {
+    mobileMenuReturnCallback = undefined;
     if (getCurrentEditor()?.protyle.toolbar.isMultiSelectMode()) {
         return;
     }
     activeBlur();
-    document.getElementById("menu").style.transform = "translateX(0px)";
+    closePanel();
+    const menuElement = document.getElementById("menu");
+    menuElement.style.zIndex = (++window.siyuan.zIndex).toString();
+    menuElement.style.transform = "translateX(0px)";
+};
+
+/** 重新生成插件停靠栏条目，由 `#menuPluginDocks` 占位元素定位 */
+const renderMobilePluginDockMenu = (app: App, menuElement: HTMLElement) => {
+    menuElement.querySelectorAll('[data-type="mobile-plugin-dock"]').forEach(item => item.remove());
+    const markerElement = menuElement.querySelector("#menuPluginDocks");
+    if (!markerElement) {
+        return;
+    }
+    const html = getMobilePluginDockEntries(app).map((entry) =>
+        `<div class="b3-menu__item" data-type="mobile-plugin-dock" data-plugin-dock-key="${escapeAttr(entry.key)}">
+            <svg class="b3-menu__icon"><use xlink:href="#${escapeAttr(entry.config.icon)}"></use></svg>
+            <span class="b3-menu__label">${escapeHtml(`${entry.pluginDisplayName} - ${entry.config.title}`)}</span>
+        </div>`).join("");
+    markerElement.insertAdjacentHTML("beforebegin", html);
+};
+
+/** 分发单层元素的点击：handled 表示已响应，ignored 表示继续向上查找，abort 表示终止本次事件处理 */
+const dispatchMobileMainMenuClick = (app: App, target: HTMLElement, search: IMainMenuSearch):
+    "handled" | "ignored" | "abort" => {
+    if (target.dataset.type === "toggle-menu-group") {
+        toggleMainMenuGroup(target);
+        return "handled";
+    }
+    if (target.dataset.type === "close-menu") {
+        closePanel();
+        return "handled";
+    }
+    const settingTabDef = getSettingTabFromMenuTarget(target);
+    if (settingTabDef) {
+        if (search.keywords()) {
+            // 搜索态下点击设置项只就地展开结果，无匹配时不响应本次点击
+            return search.selectSettingTab(settingTabDef.id) ? "handled" : "abort";
+        }
+        openSettingTab(app, settingTabDef, takeMobileMenuReturnCallback() || closeModel);
+        return "handled";
+    }
+    if (target.dataset.type === "mobile-plugin-dock") {
+        const pluginDockEntry = getMobilePluginDockEntries(app)
+            .find(entry => entry.key === target.dataset.pluginDockKey);
+        closePanel();
+        if (pluginDockEntry) {
+            openDock(pluginDockEntry.type);
+        }
+        return "handled";
+    }
+    const handler = getMobileMainMenuHandler(target.id);
+    if (handler) {
+        handler(app);
+        return "handled";
+    }
+    return "ignored";
 };
 
 export const initRightMenu = (app: App) => {
     const menuElement = document.getElementById("menu");
-    menuElement.innerHTML = `<div class="b3-menu__title">
-    <svg class="b3-menu__icon"><use xlink:href="#iconLeft"></use></svg>
-    <span class="b3-menu__label">${window.siyuan.languages.back}</span>
-</div>
-<div class="b3-menu__items b3-menu__groups">
-    <div class="b3-menu__group">
-        <div class="b3-menu__group-title">${window.siyuan.languages.mobileMenuQuickActions}</div>
-        <div class="b3-menu__group-items">
-            <div id="menuRecent" class="b3-menu__item">
-                <svg class="b3-menu__icon"><use xlink:href="#iconList"></use></svg><span class="b3-menu__label">${window.siyuan.languages.recentDocs}</span>
-            </div>
-            <div id="menuSearch" class="b3-menu__item">
-                <svg class="b3-menu__icon"><use xlink:href="#iconSearch"></use></svg><span class="b3-menu__label">${window.siyuan.languages.search}</span>
-            </div>
-            <div id="menuAgentChat" class="b3-menu__item${window.siyuan.config.readonly || window.siyuan.isPublish ? " fn__none" : ""}">
-                <svg class="b3-menu__icon"><use xlink:href="#iconSparkles"></use></svg>
-                <span class="b3-menu__label">${window.siyuan.languages.agentChat}</span>
-                <span data-type="agent-status" class="b3-menu__accelerator fn__none"></span>
-            </div>
-            <div id="menuCommand" class="b3-menu__item">
-                <svg class="b3-menu__icon"><use xlink:href="#iconTerminal"></use></svg><span class="b3-menu__label">${window.siyuan.languages.commandPanel}</span>
-            </div>
-            <div id="menuCard" class="b3-menu__item${window.siyuan.config.readonly ? " fn__none" : ""}">
-                <svg class="b3-menu__icon"><use xlink:href="#iconRiffCard"></use></svg><span class="b3-menu__label">${window.siyuan.languages.spaceRepetition}</span>
-            </div>
-            <div class="b3-menu__item${window.siyuan.config.readonly ? " fn__none" : ""}" id="menuLock">
-                <svg class="b3-menu__icon"><use xlink:href="#iconLock"></use></svg><span class="b3-menu__label">${window.siyuan.languages.lockScreen}</span>
-            </div>
-            <div class="b3-menu__item b3-menu__item--warning${isInMobileApp() ? "" : " fn__none"}" id="menuSafeQuit">
-                <svg class="b3-menu__icon"><use xlink:href="#iconQuit"></use></svg><span class="b3-menu__label">${window.siyuan.languages.safeQuit}</span>
-            </div>
-        </div>
-    </div>
-    <div class="b3-menu__group${window.siyuan.config.readonly ? " fn__none" : ""}">
-        <div class="b3-menu__group-title">${window.siyuan.languages.mobileMenuCreate}</div>
-        <div class="b3-menu__group-items">
-            <div class="b3-menu__item${window.siyuan.config.readonly ? " fn__none" : ""}" id="menuNewDoc">
-                <svg class="b3-menu__icon"><use xlink:href="#iconFile"></use></svg><span class="b3-menu__label">${window.siyuan.languages.newFile}</span>
-            </div>
-            <div id="menuNewDaily" class="b3-menu__item${window.siyuan.config.readonly ? " fn__none" : ""}">
-                <svg class="b3-menu__icon"><use xlink:href="#iconCalendar"></use></svg><span class="b3-menu__label">${window.siyuan.languages.dailyNote}</span>
-            </div>
-            <div class="b3-menu__item${window.siyuan.config.readonly ? " fn__none" : ""}" id="menuNewNotebook">
-                <svg class="b3-menu__icon"><use xlink:href="#iconNewNoteBook"></use></svg><span class="b3-menu__label">${window.siyuan.languages.newNotebook}</span>
-            </div>
-            <div class="b3-menu__item${(window.siyuan.config.readonly || !window.siyuan.config.notebookCrypto?.enabled) ? " fn__none" : ""}" id="menuNewEncryptedNotebook">
-                <svg class="b3-menu__icon"><use xlink:href="#iconLock"></use></svg><span class="b3-menu__label">${window.siyuan.languages.newEncryptedNotebook}</span>
-            </div>
-        </div>
-    </div>
-    <div class="b3-menu__group${window.siyuan.config.readonly ? " fn__none" : ""}">
-        <div class="b3-menu__group-title">${window.siyuan.languages.mobileMenuDataManagement}</div>
-        <div class="b3-menu__group-items">
-            <div class="b3-menu__item${window.siyuan.config.readonly ? " fn__none" : ""}" id="menuSyncNow">
-                <svg class="b3-menu__icon"><use xlink:href="#iconCloudSucc"></use></svg><span class="b3-menu__label">${window.siyuan.languages.syncNow}</span>
-            </div>
-            <div class="b3-menu__item${window.siyuan.config.readonly ? " fn__none" : ""}" id="menuHistory">
-                <svg class="b3-menu__icon"><use xlink:href="#iconHistory"></use></svg><span class="b3-menu__label">${window.siyuan.languages.dataHistory}</span>
-            </div>
-            <div class="b3-menu__item${window.siyuan.config.readonly ? " fn__none" : ""}" id="menuImport">
-                <svg class="b3-menu__icon"><use xlink:href="#iconDatabaseBackup"></use></svg><span class="b3-menu__label">${window.siyuan.languages.dataMigration}</span>
-            </div>
-        </div>
-    </div>
-    <div class="b3-menu__group">
-        <div class="b3-menu__group-title">${window.siyuan.languages.extensions}</div>
-        <div class="b3-menu__group-items">
-            <div class="b3-menu__item" id="menuPlugin">
-                <svg class="b3-menu__icon"><use xlink:href="#iconPlugin"></use></svg><span class="b3-menu__label">${window.siyuan.languages.plugin}</span>
-            </div>
-            <div id="menuPluginTopBar" class="fn__none"></div>
-        </div>
-    </div>
-    <div class="b3-menu__group">
-        <div class="b3-menu__group-title">${window.siyuan.languages.mobileMenuSettingsAndHelp}</div>
-        <div class="b3-menu__group-items">
-            <div class="b3-menu__item" id="menuSettings">
-                <svg class="b3-menu__icon"><use xlink:href="#iconSettings"></use></svg><span class="b3-menu__label">${window.siyuan.languages.config}</span>
-            </div>
-            <div class="b3-menu__item${window.siyuan.config.readonly ? " fn__none" : ""}" id="menuHelp">
-                <svg class="b3-menu__icon"><use xlink:href="#iconHelp"></use></svg><span class="b3-menu__label">${window.siyuan.languages.userGuide}</span>
-            </div>
-            <a class="b3-menu__item" href="${"zh-CN" === window.siyuan.config.lang || "zh-TW" === window.siyuan.config.lang ? "https://ld246.com/article/1649901726096" : "https://liuyun.io/article/1686530886208"}" target="_blank">
-                <svg class="b3-menu__icon"><use xlink:href="#iconFeedback"></use></svg>
-                <span class="b3-menu__label">${window.siyuan.languages.feedback}</span>
-            </a>
-        </div>
-    </div>
-</div>`;
+    menuElement.innerHTML = renderMobileMainMenuHTML();
+    syncMainMenuGroupCollapse(menuElement, false);
+    renderMobilePluginDockMenu(app, menuElement);
+    window.addEventListener(MOBILE_PLUGIN_DOCKS_CHANGE_EVENT, () => {
+        renderMobilePluginDockMenu(app, menuElement);
+    });
+    const search = createMainMenuSearch(app, menuElement);
+    menuElement.addEventListener(MOBILE_MENU_CLOSE_EVENT, (event: CustomEvent<{preserveKeyboard?: boolean}>) => {
+        search.reset(event.detail?.preserveKeyboard);
+        const callback = takeMobileMenuReturnCallback();
+        if (callback) {
+            window.setTimeout(callback);
+        }
+    });
     window.siyuan.mobile.agentChatController?.refreshStatus();
     processSync();
     afterLayoutReady(app);
     // 只能用 click，否则无法上下滚动 https://github.com/siyuan-note/siyuan/issues/6628
     menuElement.addEventListener("click", (event) => {
         let target = event.target as HTMLElement;
+        const topLevelMenuItem = target.closest(".b3-menu__item") as HTMLElement | null;
+        if (topLevelMenuItem?.parentElement?.classList.contains("b3-menu__group-items") &&
+            topLevelMenuItem.dataset.type !== "setting-tab") {
+            mobileMenuReturnCallback = undefined;
+        }
         while (target && !target.isEqualNode(menuElement)) {
-            if (target.classList.contains("b3-menu__title")) {
-                closePanel();
-                event.preventDefault();
-                event.stopPropagation();
-                break;
-            } else if (target.id === "menuRecent") {
-                getRecentDocs(app);
-                event.preventDefault();
-                event.stopPropagation();
-                break;
-            } else if (target.id === "menuSearch") {
-                popSearch(app);
-                event.preventDefault();
-                event.stopPropagation();
-                break;
-            } else if (target.id === "menuAgentChat") {
-                void import("../agent/MobileAgentChat").then(({openMobileAgent}) => openMobileAgent(app));
-                event.preventDefault();
-                event.stopPropagation();
-                break;
-            } else if (target.id === "menuCommand") {
-                closePanel();
-                commandPanel(app);
-                event.preventDefault();
-                event.stopPropagation();
-                break;
-            } else if (target.id === "menuSyncNow") {
-                syncGuide();
-                event.preventDefault();
-                event.stopPropagation();
-                break;
-            } else if (target.id === "menuNewDoc") {
-                newFile(app);
-                closePanel();
-                event.preventDefault();
-                event.stopPropagation();
-                break;
-            } else if (target.id === "menuNewNotebook") {
-                newNotebook();
-                closePanel();
-                event.preventDefault();
-                event.stopPropagation();
-                break;
-            } else if (target.id === "menuNewEncryptedNotebook") {
-                newEncryptedNotebook();
-                closePanel();
-                event.preventDefault();
-                event.stopPropagation();
-                break;
-            } else if (target.id === "menuImport") {
-                closePanel();
-                openDataMigration();
-                event.preventDefault();
-                event.stopPropagation();
-                break;
-            } else if (target.id === "menuNewDaily") {
-                newDailyNote(app);
-                closePanel();
-                event.preventDefault();
-                event.stopPropagation();
-                break;
-            } else if (target.id === "menuCard") {
-                openCard(app);
-                closePanel();
-                event.preventDefault();
-                event.stopPropagation();
-                break;
-            } else if (target.id === "menuLock") {
-                lockScreen(app);
-                event.preventDefault();
-                event.stopPropagation();
-                break;
-            } else if (target.id === "menuHistory") {
-                openHistory(app);
-                event.preventDefault();
-                event.stopPropagation();
-                break;
-            } else if (target.id === "menuSafeQuit") {
-                event.preventDefault();
-                event.stopPropagation();
-                exitSiYuan();
-                break;
-            } else if (target.id === "menuSettings") {
-                openMobileSetting(app);
-                event.preventDefault();
-                event.stopPropagation();
-                break;
-            } else if (target.id === "menuPlugin") {
-                openTopBarMenu(app);
-                event.preventDefault();
-                event.stopPropagation();
-                break;
-            } else if (target.id === "menuHelp") {
-                mountHelp();
+            const result = dispatchMobileMainMenuClick(app, target, search);
+            if (result === "abort") {
+                return;
+            }
+            if (result === "handled") {
                 event.preventDefault();
                 event.stopPropagation();
                 break;

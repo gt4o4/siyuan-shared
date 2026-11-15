@@ -1,7 +1,7 @@
 <p align="center">
 <img alt="SiYuan" src="https://b3log.org/images/brand/siyuan-128.png">
 <br>
-<em>重构你的思维</em>
+<em>从思考到洞见，与智能体同行</em>
 <br><br>
 <a title="Build Status" target="_blank" href="https://github.com/siyuan-note/siyuan/actions/workflows/cd.yml"><img src="https://img.shields.io/github/actions/workflow/status/siyuan-note/siyuan/cd.yml?style=flat-square"></a>
 <a title="Releases" target="_blank" href="https://github.com/siyuan-note/siyuan/releases"><img src="https://img.shields.io/github/release/siyuan-note/siyuan.svg?style=flat-square&color=9CF"></a>
@@ -11,7 +11,7 @@
 <a title="Docker Image Size" target="_blank" href="https://hub.docker.com/r/b3log/siyuan"><img src="https://img.shields.io/docker/image-size/b3log/siyuan.svg?style=flat-square&color=ff96b4"></a>
 <a title="Hits" target="_blank" href="https://github.com/siyuan-note/siyuan"><img src="https://hits.b3log.org/siyuan-note/siyuan.svg"></a>
 <br>
-<a title="AGPLv3" target="_blank" href="https://www.gnu.org/licenses/agpl-3.0.txt"><img src="http://img.shields.io/badge/license-AGPLv3-orange.svg?style=flat-square"></a>
+<a title="AGPLv3" target="_blank" href="https://www.gnu.org/licenses/agpl-3.0.txt"><img src="https://img.shields.io/badge/license-AGPLv3-orange.svg?style=flat-square"></a>
 <a title="Code Size" target="_blank" href="https://github.com/siyuan-note/siyuan"><img src="https://img.shields.io/github/languages/code-size/siyuan-note/siyuan.svg?style=flat-square&color=yellow"></a>
 <a title="GitHub Pull Requests" target="_blank" href="https://github.com/siyuan-note/siyuan/pulls"><img src="https://img.shields.io/github/issues-pr-closed/siyuan-note/siyuan.svg?style=flat-square&color=FF9966"></a>
 <br>
@@ -28,6 +28,7 @@
 | <b>中文</b>
 | <a href="README.ja.md">日本語</a>
 | <a href="README.tr.md">Türkçe</a>
+| <a href="README.pt-BR.md">Português</a>
 </p>
 
 ---
@@ -43,6 +44,7 @@
   - [安装包](#安装包)
   - [包管理器](#包管理器)
   - [Docker 部署](#docker-部署)
+  - [Kubernetes 部署](#kubernetes-部署)
   - [Unraid 部署](#unraid-部署)
   - [TrueNAS 部署](#truenas-部署)
   - [宝塔面板部署](#宝塔面板部署)
@@ -101,7 +103,7 @@
 - 数据库
   - 表格视图
 - 闪卡间隔重复
-- 接入 OpenAI 接口支持人工智能写作和问答聊天
+- 连接 OpenAI 接口支持人工智能写作和问答聊天
 - Tesseract OCR
 - 模板片段
 - JavaScript/CSS 代码片段
@@ -114,7 +116,7 @@
 
 ## 🏗️ 架构和生态
 
-![思源笔记架构设计](screenshots/SiYuan_Arch.png "思源笔记架构设计")
+![思源笔记架构设计](screenshots/SiYuan_Arch.svg "思源笔记架构设计")
 
 | Project                                                  | Description  | Forks                                                                           | Stars                                                                                | 
 |----------------------------------------------------------|--------------|---------------------------------------------------------------------------------|--------------------------------------------------------------------------------------|
@@ -192,7 +194,7 @@
 
 入口点在构建 Docker 镜像时设置：`ENTRYPOINT ["/opt/siyuan/entrypoint.sh"]`。该脚本允许更改将在容器内运行的用户的 `PUID` 和 `PGID`。这对于解决从主机挂载目录时的权限问题尤为重要。`PUID` 和 `PGID` 可以作为环境变量传递，这样在访问主机挂载的目录时就能更容易地确保正确的权限。
 
-使用 `docker run b3log/siyuan` 运行容器时，请带入以下参数：
+使用 `docker run b3log/siyuan` 运行容器时，请指定以下参数：
 
 - `--workspace`：指定工作空间文件夹路径，在宿主机上通过 `-v` 挂载到容器中
 - `--accessAuthCode`：指定锁屏密码
@@ -200,6 +202,8 @@
 > **注意：** 自 v3.7.0 起，必须显式传入 `serve` 子命令（例如 `docker run b3log/siyuan serve --workspace=...`）。运行 `docker run --rm b3log/siyuan serve --help` 可查看全部伺服参数。
 
 更多的参数可参考 `--help`。下面是一条启动命令示例：
+
+请先将 `AuthCode` 设置为你自己的强密码（Bash 中使用 `export AuthCode='你的强密码'`，Compose 也可从同目录的 `.env` 文件读取）。未设置或为空时，示例会报错并停止。
 
 ```bash
 docker run -d \
@@ -210,7 +214,7 @@ docker run -d \
   b3log/siyuan \
   serve \
   --workspace=workspace_dir_container \
-  --accessAuthCode=xxx
+  --accessAuthCode="${AuthCode:?Set AuthCode}"
 ```
 
 - `PUID`: 自定义用户 ID（可选，如果未提供，默认为 `1000`）
@@ -221,10 +225,20 @@ docker run -d \
 - `accessAuthCode`：锁屏密码，请**务必修改**，否则任何人都可以读写你的数据
   - 另外，也可以通过 `SIYUAN_ACCESS_AUTH_CODE` 环境变量设置锁屏密码。如果两者都设置了，命令行的值将优先
   - 可通过设置环境变量 `SIYUAN_ACCESS_AUTH_CODE_BYPASS=true` 禁用锁屏密码
+- OIDC 可替代锁屏密码作为 Docker 访问鉴权。设置 `SIYUAN_OIDC_ENABLED=true`、`SIYUAN_OIDC_PROVIDER`（`custom`、`google`、`microsoft` 或 `github`）、`SIYUAN_OIDC_CLIENT_ID` 以及下方的提供商相关配置。GitHub 使用其 OAuth 2.0 用户 API 适配器；其余提供商使用 OpenID Connect 发现与 ID Token 校验。在已启用 OIDC 且配置无效、又没有锁屏密码可用时，Docker 启动会直接终止
+  - `SIYUAN_OIDC_ISSUER_URL`：`custom` 和 `microsoft` 提供商所需的 Issuer URL；Microsoft 必须使用租户专属的 issuer，例如 `https://login.microsoftonline.com/<tenant-id>/v2.0`
+  - `SIYUAN_OIDC_CLIENT_SECRET`：OpenID Connect 提供商可选的客户端密钥；GitHub OAuth 适配器必须提供。所有授权码流程均使用 PKCE
+  - `SIYUAN_OIDC_SCOPES`：逗号或空格分隔的 scopes；始终包含 `openid`
+  - `SIYUAN_OIDC_REDIRECT_URL`：以 `/api/system/oidc/callback` 结尾的公网 HTTPS 回调 URL，远程浏览器访问时必填
+  - `SIYUAN_OIDC_ALLOW_ALL`：明确授予提供商认证的所有身份 SiYuan 管理员权限
+  - `SIYUAN_OIDC_CLAIM_RULES`：禁用 allow-all 时使用的声明规则 JSON 数组，例如 `[{"claim":"email","operator":"equals","values":["user@example.com"]},{"claim":"email_verified","operator":"equals","values":["true"]}]`；规则内取值为 OR，规则之间为 AND
+  - 原生移动应用使用固定的回调 URI `siyuan:/oidc-callback`；请按原样注册。移动端配置在保存前会使用该回调进行校验。自定义提供商、Microsoft 和 GitHub 仅在其应用注册接受该回调 URI 时可用；Google 的 Android 客户端类型不接受该私有 URI，因此 Google 登录仅限浏览器和桌面端流程
 - `SIYUAN_LANG`：界面语言（可选，Docker 下未设置时默认为 `en`）。接受 BCP 47 标签如 `zh-CN`/`zh-TW`/`en`/`ja`/`pt-BR`；旧下划线值如 `zh_CN`/`en_US` 也兼容。若希望**设置**中选择的语言在重启后仍生效，部署时请去掉该变量；若设置了，每次启动都会应用该值并覆盖已保存的语言设置
   - 也可通过 `--lang` 命令行参数设置。如果两者都设置了，命令行的值将优先
 
 为了简化，建议将 workspace 文件夹路径在宿主机和容器上配置为一致的，比如将 `workspace_dir_host` 和 `workspace_dir_container` 都配置为 `/siyuan/workspace`，对应的启动命令示例：
+
+请先将 `AuthCode` 设置为你自己的强密码（Bash 中使用 `export AuthCode='你的强密码'`，Compose 也可从同目录的 `.env` 文件读取）。未设置或为空时，示例会报错并停止。
 
 ```bash
 docker run -d \
@@ -235,19 +249,21 @@ docker run -d \
   b3log/siyuan \
   serve \
   --workspace=/siyuan/workspace/ \
-  --accessAuthCode=xxx
+  --accessAuthCode="${AuthCode:?Set AuthCode}"
 ```
 
 #### Docker Compose
 
 对于使用 Docker Compose 运行思源的用户，可以通过环境变量 `PUID` 和 `PGID` 来自定义用户和组的 ID。下面是一个 Docker Compose 配置示例：
 
+请先将 `AuthCode` 设置为你自己的强密码（Bash 中使用 `export AuthCode='你的强密码'`，Compose 也可从同目录的 `.env` 文件读取）。未设置或为空时，示例会报错并停止。
+
 ```yaml
 version: "3.9"
 services:
   main:
     image: b3log/siyuan
-    command: ['serve', '--workspace=/siyuan/workspace/', '--accessAuthCode=${AuthCode}']
+    command: ['serve', '--workspace=/siyuan/workspace/', '--accessAuthCode=${AuthCode:?Set AuthCode}']
     ports:
       - 6806:6806
     volumes:
@@ -262,14 +278,14 @@ services:
 
 在此设置中：
 
-- PUID “和 ”PGID "是动态设置并传递给容器的
-- 如果没有提供这些变量，将使用默认的 `1000`
+- `PUID` 和 `PGID` 是动态设置并传递给容器的
+- 如果没有提供这些变量，则使用默认的 `1000`
 
 在环境中指定 `PUID` 和 `PGID` 后，就无需在 compose 文件中明确设置 `user` 指令（`user: '1000:1000'`）。容器将在启动时根据这些环境变量动态调整用户和组。
 
 #### 用户权限
 
-在镜像中，“entrypoint.sh ”脚本确保以指定的 “PUID ”和 “PGID ”创建 “siyuan ”用户和组。因此，当主机创建工作区文件夹时，请注意设置文件夹的用户和组所有权，使其与计划使用的 `PUID` 和 `PGID` 匹配。例如
+在镜像中，`entrypoint.sh` 脚本确保以指定的 `PUID` 和 `PGID` 创建 `siyuan` 用户和组。因此，当主机创建工作区文件夹时，请注意设置文件夹的用户和组所有权，使其与计划使用的 `PUID` 和 `PGID` 匹配。例如：
 
 ```bash
 chown -R 1001:1002 /siyuan/workspace
@@ -282,6 +298,8 @@ chown -R 1001:1002 /siyuan/workspace
 使用 NGINX 反向代理可以隐藏 6806 端口，请注意：
 
 - 配置 WebSocket 反代 `/ws`
+- 普通请求和 `/ws` 的反向代理都需要保留原始 `Host` 请求头及端口，在 NGINX 的两处代理配置中均设置 `proxy_set_header Host $http_host;`。使用 `$host` 会丢失非标准端口（如 `8443`），可能导致来源校验失败，表现为登录后停留在 LOGO 并反复刷新、接口返回 `401` 或 WebSocket 连接失败
+- 在两处代理配置中设置 `proxy_set_header X-Forwarded-For $remote_addr;`，让内核获取真实客户端地址。不要原样透传调用方提供的 `X-Forwarded-For`，否则远程客户端可能被误判为本机管理员
 
 #### 注意
 
@@ -293,6 +311,35 @@ chown -R 1001:1002 /siyuan/workspace
 - 不支持桌面端和移动端应用连接，仅支持在浏览器上使用
 - 不支持导出 PDF、HTML 和 Word 格式
 - 不支持导入 Markdown 文件
+
+</details>
+
+### Kubernetes 部署
+
+<details>
+<summary>Kubernetes 部署文档</summary>
+
+[HelmForge 思源 Chart](https://github.com/helmforgedev/charts/tree/main/charts/siyuan) 由 HelmForge 社区维护，使用官方 `b3log/siyuan` 镜像，并非思源官方 Chart。Chart 相关问题请反馈至 [HelmForge](https://github.com/helmforgedev/charts/issues)。
+
+准备好 Helm、kubectl，以及默认 StorageClass 能够动态创建 10Gi ReadWriteOnce 存储卷的 Kubernetes 集群后，执行以下命令：
+
+```bash
+helm repo add helmforge https://repo.helmforge.dev
+helm repo update
+helm install siyuan helmforge/siyuan --namespace siyuan --create-namespace --wait
+kubectl -n siyuan get secret siyuan-siyuan-auth -o go-template='{{index .data "access-code" | base64decode}}{{"\n"}}'
+kubectl -n siyuan port-forward service/siyuan-siyuan 6806:6806
+```
+
+打开 <http://localhost:6806>，输入生成的锁屏密码。请妥善保管该密码；它与 API Token 不同。以上资源名称以 Chart 默认配置和 Helm 实例名称 `siyuan` 为前提。
+
+远程访问时，请使用独立的 HTTPS 域名，以及支持代理 `/ws` WebSocket 连接的 Ingress 控制器，不要进行 URL 重写。配置 `ingress`，并通过 `networkPolicy.ingressFrom` 允许控制器所在命名空间的流量；默认策略仅允许同命名空间的入站流量和 DNS 出站流量。云端同步等外部服务需要显式配置出站规则。TLS、现有 Secret 和存储配置请参阅 [Chart 指南及生产环境示例](https://helmforge.dev/docs/charts/siyuan)。
+
+- **一个工作区只能有一个写入实例：** 不要增加副本数，也不要将同一工作区挂载到另一个运行中的实例，即使使用 ReadWriteMany 存储也不例外。Chart 使用 `Recreate` 策略，升级时会先停止旧实例，再启动新实例，因此会有服务中断。
+- **持久化：** 完整工作区挂载在 `/siyuan/workspace`。默认情况下，卸载 Chart 会保留其创建的 PVC，但删除命名空间或 PVC 仍可能导致数据丢失。可通过 `persistence.existingClaim` 复用保留或恢复后的存储卷声明。
+- **备份与升级：** 备份完整工作区前，请正常停止写入实例，或使用能够保证应用一致性的备份流程。仅复制运行中的 SQLite 索引文件无法保证备份完整且一致。请妥善保管保存锁屏密码的 Secret、加密密钥和加密笔记本恢复密码，并在独立 PVC 上测试恢复。升级前先备份，并确认新版本是否涉及存储格式变更：Helm 回滚不会撤销数据迁移。
+
+Docker 部署的限制同样适用：仅支持浏览器访问，不支持桌面端和移动端应用连接，不支持导出 PDF、HTML 和 Word 格式，也不支持导入 Markdown 文件。
 
 </details>
 
@@ -308,7 +355,7 @@ chown -R 1001:1002 /siyuan/workspace
 ```
 Web UI: 6806
 Container Port: 6806
-Container Path: /home/siyuan
+Container Path: /siyuan/workspace
 Host path: /mnt/user/appdata/siyuan
 PUID: 1000
 PGID: 1000
@@ -335,18 +382,21 @@ chmod 755 /mnt/Pool_1/Apps_Data/siyuan
 
 模板参考：
 
+部署前，请将下面的 `SIYUAN_ACCESS_AUTH_CODE=` 补全为你自己的强密码；不要留空。
+
 ```yaml
 services:
   siyuan:
     image: b3log/siyuan
     container_name: siyuan
-    command: ['serve', '--workspace=/siyuan/workspace/', '--accessAuthCode=2222']
+    command: ['serve', '--workspace=/siyuan/workspace/']
     ports:
       - 6806:6806
     volumes:
       - /mnt/Pool_1/Apps_Data/siyuan:/siyuan/workspace  # Adjust to your dataset path 
     restart: unless-stopped
     environment:
+      - SIYUAN_ACCESS_AUTH_CODE=
       - TZ=Asia/Shanghai  # 按需替换为你的时区
       - PUID=1001
       - PGID=1002
@@ -383,7 +433,7 @@ services:
 #### 访问思源笔记
 
 - 如果你填写了域名，请在浏览器输入域名访问
-- 如你选择了 `IP+端口`，请在浏览器地输入 `http://<宝塔面板IP>:6806` 访问
+- 如你选择了 `IP+端口`，请在浏览器中输入 `http://<宝塔面板IP>:6806` 访问
 
 </details>
 
@@ -442,7 +492,7 @@ services:
 #### 访问思源笔记
 
 - 如果你通过`OpenResty`反向代理反代了网站，并且填写了域名，请在浏览器输入`域名`访问
-- 如你选择了 `端口外部访问`，请在浏览器地输入 `http://<1Panel面板IP>:6806` 访问
+- 如你选择了 `端口外部访问`，请在浏览器中输入 `http://<1Panel面板IP>:6806` 访问
 
 </details>
 
@@ -453,6 +503,8 @@ services:
 ## ⌨️ 命令行接口
 
 内置 CLI，直接访问工作空间数据，无需启动内核服务。
+
+CLI 不支持操作加密笔记本；请通过应用内的专用流程解锁和操作。
 
 ### 快速开始
 
@@ -493,24 +545,17 @@ siyuan export md --id <block-id> -w ~/SiYuan
 
 CLI 可执行文件为 `<安装目录>/resources/kernel/SiYuan-Kernel`，可通过 `siyuan` 命令调用。
 
-- **Windows**：安装程序自动将内核目录加入 `PATH`，可直接使用 `siyuan`。微软商店版运行在 MSIX 沙箱中，无法自动修改 `PATH`；可部署一个 `siyuan.cmd` 转发器（一次性，商店版更新后依然有效）：
+- **Windows**：安装程序自动将内核目录加入 `PATH`，可直接使用 `siyuan`。微软商店版（3.8.7 及以上）在 Windows 10 1607（内部版本 14393）及以上系统中注册 `siyuan.exe` 应用执行别名。安装或更新后，打开新的终端并运行 `siyuan --help`
   ```powershell
-  # 仅适用于微软商店版 —— 在 PowerShell 中运行一次
-  $shimDir = "$env:LOCALAPPDATA\Microsoft\WindowsApps"   # 该目录默认已在 PATH 中
-  @(
-      '@echo off'
-      'setlocal'
-      'set "ROOT="'
-      'for /f "delims=" %%i in (''powershell -NoProfile -Command "(Get-AppxPackage *SiYuan*).InstallLocation"'') do set "ROOT=%%i"'
-      'if not defined ROOT goto :noshim'
-      '"%ROOT%\app\resources\kernel\SiYuan-Kernel.exe" %*'
-      'exit /b %ERRORLEVEL%'
-      ':noshim'
-      '1>&2 echo siyuan: 未找到微软商店版'
-      'exit /b 1'
-  ) | Set-Content "$shimDir\siyuan.cmd"
+  siyuan --help
+
+  # 检查实际使用的命令
+  Get-Command siyuan -All
+  where.exe siyuan
   ```
-  卸载商店版时如需清理：`Remove-Item "$env:LOCALAPPDATA\Microsoft\WindowsApps\siyuan.cmd"`。
+  如果找不到命令，请检查 Windows 中思源的应用执行别名是否已启用，以及 `%LOCALAPPDATA%\Microsoft\WindowsApps` 是否在 `PATH` 中。上述命令可检查命令解析结果；同时安装多个思源版本或 `PATH` 顺序可能导致调用其他可执行文件
+
+  如果曾创建旧的 `siyuan.cmd` 转发器，请先运行 `& "$env:LOCALAPPDATA\Microsoft\WindowsApps\siyuan.exe" --help` 确认商店版别名可用，再按需删除转发器：`Remove-Item "$env:LOCALAPPDATA\Microsoft\WindowsApps\siyuan.cmd"`
 - **macOS**：安装后创建软链接：
   ```bash
   ln -s /Applications/SiYuan.app/Contents/Resources/kernel/SiYuan-Kernel /usr/local/bin/siyuan
@@ -534,7 +579,7 @@ CLI 可执行文件为 `<安装目录>/resources/kernel/SiYuan-Kernel`，可通�
 
 ### 思源是如何存储数据的？
 
-数据保存在工作空间文件夹下，在工作空间 data 文件夹下：
+数据保存在工作空间 data 文件夹下：
 
 - `assets` 用于保存所有插入的资源文件
 - `emojis` 用于保存自定义图标表情图片
@@ -544,13 +589,13 @@ CLI 可执行文件为 `<安装目录>/resources/kernel/SiYuan-Kernel`，可通�
 - `widgets` 用于保存挂件
 - `plugins` 用于保存插件
 - `public` 用于保存公开的数据
-- 其余文件夹就是用户自己创建的笔记本文件夹，笔记本文件夹下 `.sy` 后缀的文件用于保存文档数据，数据格式为 JSON
+- 其余笔记本文件夹用于保存文档数据。普通笔记本的 `.sy` 文档以 JSON 保存，加密笔记本的 `.sy` 文档以密文保存。
 
 ### 支持通过第三方同步盘进行数据同步吗？
 
 不支持通过第三方同步盘进行数据同步，否则可能会导致数据损坏。
 
-虽然不支持第三方同步盘，但是支持对接第三方云端存储（会员特权）。
+虽然不支持第三方同步盘，但是支持连接第三方云端存储（会员特权）。
 
 ### 思源是开源的吗？
 
@@ -580,14 +625,18 @@ CLI 可执行文件为 `<安装目录>/resources/kernel/SiYuan-Kernel`，可通�
 
 ### 数据仓库密钥遗失怎么办？
 
-- 如果之前在多个设备上正确初始化过数据仓库密钥的话，那么该密钥在所有设备上都是相同的，可以在 <kbd>设置</kbd> - <kbd>账号与同步</kbd> - <kbd>本地数据仓库</kbd> - <kbd>数据仓库密钥</kbd> - <kbd>复制密钥字符串</kbd> 找回
+数据仓库密钥用于快照和同步，与加密笔记本的主密码及密钥备份不同。重置数据仓库不能恢复遗失的加密笔记本主密码，也不能替代匹配的加密密钥备份。
+
+重置前，请先正常退出思源并备份完整工作空间；如有加密笔记本，还应单独保存匹配的加密密钥备份，并确认主密码可用。完成新同步并确认数据完整、恢复材料已妥善保存后，再按需删除旧同步目录和云端快照。
+
+- 如果之前在多个设备上正确初始化过数据仓库密钥的话，那么该密钥在所有设备上都是相同的，可以在 <kbd>设置</kbd> - <kbd>账号与同步</kbd> - <kbd>数据仓库</kbd> - <kbd>数据仓库密钥</kbd> - <kbd>复制密钥字符串</kbd> 找回
 - 如果之前没有正确配置（比如多个设备上密钥不一致）或者所有设备均不可用，已经无法获得密钥字符串，则可通过如下步骤重置密钥：
 
-  1. 手动备份好数据，可通过 <kbd>导出 Data</kbd> 或者直接在文件系统上复制 <kbd>工作空间/data/</kbd> 文件夹
-  2. <kbd>设置</kbd> - <kbd>账号与同步</kbd> - <kbd>本地数据仓库</kbd> - <kbd>数据仓库密钥</kbd> - <kbd>重置数据仓库</kbd>
+  1. 正常退出思源后，备份完整工作空间；如有加密笔记本，同时保留匹配的加密密钥备份和主密码
+  2. <kbd>设置</kbd> - <kbd>账号与同步</kbd> - <kbd>数据仓库</kbd> - <kbd>数据仓库密钥</kbd> - <kbd>重置数据仓库</kbd>
   3. 重新初始化数据仓库密钥，在一台设备上初始化密钥以后，其他设备导入密钥
-  4. 云端使用新的同步目录，旧的同步目录已经无法使用，可以删除
-  5. 已有的云端快照已经无法使用，可以删除
+  4. 云端改用新的同步目录；完成新同步并确认数据完整、恢复材料已妥善保存后，再按需删除旧同步目录
+  5. 完成新同步并确认数据完整、恢复材料已妥善保存后，再按需删除旧云端快照
 
 ### 使用需要付费吗？
 

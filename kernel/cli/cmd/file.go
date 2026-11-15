@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package cmd
 
@@ -215,59 +203,12 @@ var fileCopyCmd = &cobra.Command{
 			return nil
 		}
 
-		if err := copyPath(src, dst); err != nil {
+		if err := util.CopyPath(src, dst); err != nil {
 			return err
 		}
 		fmt.Println("ok")
 		return nil
 	},
-}
-
-func copyPath(src, dst string) error {
-	srcInfo, err := os.Stat(src)
-	if err != nil {
-		return err
-	}
-	if srcInfo.IsDir() {
-		return copyDir(src, dst)
-	}
-	return copyFile(src, dst)
-}
-
-func copyDir(src, dst string) error {
-	if err := os.MkdirAll(dst, 0755); err != nil {
-		return err
-	}
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return err
-	}
-	for _, e := range entries {
-		srcPath := filepath.Join(src, e.Name())
-		dstPath := filepath.Join(dst, e.Name())
-		if err := copyPath(srcPath, dstPath); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func copyFile(src, dst string) error {
-	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
-		return err
-	}
-	srcF, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer srcF.Close()
-	dstF, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer dstF.Close()
-	_, err = io.Copy(dstF, srcF)
-	return err
 }
 
 var fileGrepCmd = &cobra.Command{
@@ -290,7 +231,7 @@ var fileGrepCmd = &cobra.Command{
 		ctx, _ := cmd.Flags().GetInt("context")
 		max, _ := cmd.Flags().GetInt("limit")
 		if max <= 0 {
-			max = 200
+			max = int(^uint(0) >> 1)
 		}
 		results, err := gulu.File.Grep(abs, include, pattern, ctx, max)
 		if err != nil {
@@ -329,9 +270,6 @@ var fileFindCmd = &cobra.Command{
 		}
 		include, _ := cmd.Flags().GetString("include")
 		max, _ := cmd.Flags().GetInt("limit")
-		if max <= 0 {
-			max = 200
-		}
 		var results []string
 		total := 0
 		err = filepath.WalkDir(abs, func(path string, d os.DirEntry, err error) error {
@@ -348,18 +286,18 @@ var fileFindCmd = &cobra.Command{
 			if !d.Type().IsRegular() {
 				return nil
 			}
-			if include != "" && !matchGlob(d.Name(), include) {
+			if include != "" && !util.MatchGlob(d.Name(), include) {
 				return nil
 			}
 			total++
-			if len(results) < max {
+			if max <= 0 || len(results) < max {
 				rel, relErr := filepath.Rel(util.WorkspaceDir, path)
 				if relErr != nil {
 					rel = path
 				}
 				results = append(results, rel)
 			}
-			if total >= max {
+			if max > 0 && total >= max {
 				return filepath.SkipAll
 			}
 			return nil
@@ -372,7 +310,7 @@ var fileFindCmd = &cobra.Command{
 			data, _ := json.MarshalIndent(results, "", "  ")
 			fmt.Println(string(data))
 		default:
-			if max < total {
+			if max > 0 && max < total {
 				fmt.Printf("Found %d files (showing first %d):\n\n", total, max)
 			} else {
 				fmt.Printf("Found %d files:\n\n", len(results))
@@ -415,35 +353,6 @@ var fileStatCmd = &cobra.Command{
 		}
 		return nil
 	},
-}
-
-func matchGlob(filename, pattern string) bool {
-	for _, p := range expandGlobBrace(pattern) {
-		if matched, _ := filepath.Match(p, filename); matched {
-			return true
-		}
-	}
-	return false
-}
-
-func expandGlobBrace(pattern string) []string {
-	i := strings.Index(pattern, "{")
-	if i < 0 {
-		return []string{pattern}
-	}
-	j := strings.Index(pattern[i:], "}")
-	if j < 0 {
-		return []string{pattern}
-	}
-	j += i
-	prefix := pattern[:i]
-	body := pattern[i+1 : j]
-	suffix := pattern[j+1:]
-	var result []string
-	for opt := range strings.SplitSeq(body, ",") {
-		result = append(result, expandGlobBrace(prefix+strings.TrimSpace(opt)+suffix)...)
-	}
-	return result
 }
 
 func init() {

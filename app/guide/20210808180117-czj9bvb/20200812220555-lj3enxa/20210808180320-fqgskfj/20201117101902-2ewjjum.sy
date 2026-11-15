@@ -6,7 +6,7 @@
 		"id": "20201117101902-2ewjjum",
 		"title": "嵌入内容块",
 		"type": "doc",
-		"updated": "20260612202926"
+		"updated": "20261030073929"
 	},
 	"Children": [
 		{
@@ -15,7 +15,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20210111224435-y1fesd1",
-				"updated": "20260612202926"
+				"updated": "20261024163828"
 			},
 			"Children": [
 				{
@@ -29,12 +29,41 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20201224120447-1ros46z",
-				"updated": "20260612202926"
+				"updated": "20261024163828"
 			},
 			"Children": [
 				{
 					"Type": "NodeText",
-					"Data": "嵌入内容块主要用于汇总所需内容块，通过 "
+					"Data": "嵌入内容块根据查询在当前位置展示所需内容块，适合汇总任务、整理主题或集中查看分散的笔记。"
+				}
+			]
+		},
+		{
+			"ID": "20261024163828-zud01rx",
+			"Type": "NodeHeading",
+			"Properties": {
+				"id": "20261024163828-zud01rx",
+				"updated": "20261024163828"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "插入 SQL 嵌入"
+				}
+			],
+			"HeadingLevel": 3
+		},
+		{
+			"ID": "20261024163828-w2n84jl",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261024163828-w2n84jl",
+				"updated": "20261024163828"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "将 SQL 查询放在 "
 				},
 				{
 					"Type": "NodeTextMark",
@@ -43,7 +72,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​ 和 "
+					"Data": " 和 "
 				},
 				{
 					"Type": "NodeTextMark",
@@ -52,7 +81,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​ 将 SQL 脚本包裹起来并独占一行："
+					"Data": " 之间，并独占一行，例如 "
 				},
 				{
 					"Type": "NodeTextMark",
@@ -61,27 +90,33 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​，数据库表请参考"
+					"Data": "。可查询的表和字段见 "
 				},
 				{
 					"Type": "NodeTextMark",
 					"TextMarkType": "block-ref",
-					"TextMarkBlockRefID": "20201117103851-l9cahuc",
+					"TextMarkBlockRefID": "20201222093044-rx4zjoy",
 					"TextMarkBlockRefSubtype": "s",
-					"TextMarkTextContent": "这里"
+					"TextMarkTextContent": "SQL 索引表"
 				},
 				{
 					"Type": "NodeText",
 					"Data": "。"
-				},
+				}
+			]
+		},
+		{
+			"ID": "20261024163828-3he7riq",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261024163828-3he7riq",
+				"updated": "20261024163828"
+			},
+			"Children": [
 				{
 					"Type": "NodeTextMark",
 					"TextMarkType": "tag",
 					"TextMarkTextContent": "内容块/嵌入"
-				},
-				{
-					"Type": "NodeText",
-					"Data": "​"
 				}
 			]
 		},
@@ -91,7 +126,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20201224120447-e6zyfti",
-				"updated": "20201224120447"
+				"updated": "20261016111305"
 			},
 			"Children": [
 				{
@@ -106,7 +141,7 @@
 			"ListData": {},
 			"Properties": {
 				"id": "20201224120447-znjkoy5",
-				"updated": "20210503152123"
+				"updated": "20261016111305"
 			},
 			"Children": [
 				{
@@ -190,7 +225,7 @@
 					},
 					"Properties": {
 						"id": "20201224120447-s8m8new",
-						"updated": "20201224120447"
+						"updated": "20261016111305"
 					},
 					"Children": [
 						{
@@ -239,7 +274,7 @@
 							"IsFencedCodeBlock": true,
 							"Properties": {
 								"id": "20201224120447-0y91i5d",
-								"updated": "20201224120447"
+								"updated": "20261016111305"
 							},
 							"Children": [
 								{
@@ -252,7 +287,7 @@
 								},
 								{
 									"Type": "NodeCodeBlockCode",
-									"Data": "{{ SELECT * FROM blocks WHERE content LIKE '%内容块%' AND content LIKE '%引用%' AND type = 'p') }}\n"
+									"Data": "{{ SELECT * FROM blocks WHERE content LIKE '%内容块%' AND content LIKE '%引用%' AND type = 'p' }}\n"
 								},
 								{
 									"Type": "NodeCodeBlockFenceCloseMarker",
@@ -351,7 +386,7 @@
 			"HeadingLevel": 3,
 			"Properties": {
 				"id": "20201224120447-fnapz6h",
-				"updated": "20201224120447"
+				"updated": "20260809232000"
 			},
 			"Children": [
 				{
@@ -365,46 +400,12 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20201224120447-acd7hwp",
-				"updated": "20201224120447"
+				"updated": "20260809232000"
 			},
 			"Children": [
 				{
 					"Type": "NodeText",
-					"Data": "查询同时包含 "
-				},
-				{
-					"Type": "NodeTextMark",
-					"TextMarkType": "code",
-					"TextMarkTextContent": "在思源中"
-				},
-				{
-					"Type": "NodeText",
-					"Data": "​ 和 "
-				},
-				{
-					"Type": "NodeTextMark",
-					"TextMarkType": "code",
-					"TextMarkTextContent": "核心概念"
-				},
-				{
-					"Type": "NodeText",
-					"Data": "​ 文本的"
-				},
-				{
-					"Type": "NodeText",
-					"Data": "段落块"
-				},
-				{
-					"Type": "NodeText",
-					"Data": "，并排除当前文档（否则当"
-				},
-				{
-					"Type": "NodeText",
-					"Data": "段落块"
-				},
-				{
-					"Type": "NodeText",
-					"Data": "也会包含到结果集中，因为当前段落同样包含了这两个文本，下面的案例类似）："
+					"Data": "查询最近更新的 7 个非空段落块："
 				}
 			]
 		},
@@ -413,7 +414,7 @@
 			"Type": "NodeBlockQueryEmbed",
 			"Properties": {
 				"id": "20210111224926-ju1sd4d",
-				"updated": "20240508085440"
+				"updated": "20260809232000"
 			},
 			"Children": [
 				{
@@ -424,7 +425,7 @@
 				},
 				{
 					"Type": "NodeBlockQueryEmbedScript",
-					"Data": "SELECT * FROM blocks WHERE content LIKE '%在思源中%' AND content LIKE '%核心概念%' AND type = 'p' AND hpath NOT LIKE '%嵌入内容块%'"
+					"Data": "SELECT * FROM blocks WHERE type = 'p' AND content != '' ORDER BY updated DESC LIMIT 7"
 				},
 				{
 					"Type": "NodeCloseBrace"
@@ -440,7 +441,7 @@
 			"HeadingLevel": 3,
 			"Properties": {
 				"id": "20201224120447-ickbh88",
-				"updated": "20240731204712"
+				"updated": "20261016111305"
 			},
 			"Children": [
 				{
@@ -494,7 +495,7 @@
 			"Type": "NodeBlockQueryEmbed",
 			"Properties": {
 				"id": "20201224120447-veyqmvr",
-				"updated": "20240731204356"
+				"updated": "20261016111305"
 			},
 			"Children": [
 				{
@@ -505,7 +506,7 @@
 				},
 				{
 					"Type": "NodeBlockQueryEmbedScript",
-					"Data": "SELECT * FROM blocks WHERE (content LIKE '%#内容块/嵌入#%' OR content LIKE '%#内容块/引用#%') AND hpath NOT LIKE '%嵌入内容块%'"
+					"Data": "SELECT * FROM blocks WHERE (content LIKE '%#内容块/嵌入#%' OR content LIKE '%#内容块/引用#%') AND hpath NOT LIKE '%嵌入内容块%' AND type = 'p'"
 				},
 				{
 					"Type": "NodeCloseBrace"
@@ -668,12 +669,91 @@
 			]
 		},
 		{
+			"ID": "20261028115947-gtztcve",
+			"Type": "NodeHeading",
+			"Properties": {
+				"id": "20261028115947-gtztcve",
+				"updated": "20261028115947"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "转换嵌入结果"
+				}
+			],
+			"HeadingLevel": 2
+		},
+		{
+			"ID": "20261028115947-d4wqrmp",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261028115947-d4wqrmp",
+				"updated": "20261030073929"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "打开嵌入块的块菜单，选择 "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "嵌入块"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " - "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "转为普通内容"
+				},
+				{
+					"Type": "NodeText",
+					"Data": "，即可按显示顺序将当前结果转为独立副本，保留格式及子块，包括折叠内容。标题内容遵循嵌入显示模式，并保留源标题层级。内容中已有的引用、嵌套嵌入和数据库保留各自原有行为，此操作不会冻结所有关联数据。插入的标题遵循普通文档的折叠规则，后续内容可能被纳入其折叠范围。"
+				}
+			]
+		},
+		{
+			"ID": "20261028115947-ix0w916",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261028115947-ix0w916",
+				"updated": "20261028115947"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "选择 "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "嵌入块"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " - "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "转为块引用"
+				},
+				{
+					"Type": "NodeText",
+					"Data": "，即可按显示顺序为每个当前结果生成一个动态块引用，仍然依赖源块。两种转换均可撤销。没有结果，或 JavaScript 仅输出自定义内容而没有返回块结果时，无法转换。"
+				}
+			]
+		},
+		{
 			"ID": "20260612202058-4nvpz56",
 			"Type": "NodeHeading",
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20260612202058-4nvpz56",
-				"updated": "20260612202058"
+				"updated": "20261024162311"
 			},
 			"Children": [
 				{
@@ -687,7 +767,7 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20260612202058-q54zwf8",
-				"updated": "20260612202058"
+				"updated": "20261016202635"
 			},
 			"Children": [
 				{
@@ -701,7 +781,21 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​ 前缀执行 JavaScript 代码，动态决定要嵌入哪些块，适合 SQL 查询无法满足的复杂场景"
+					"Data": "​ 前缀执行 JavaScript 代码，动态决定要嵌入哪些块，适合 SQL 查询无法满足的复杂场景。"
+				}
+			]
+		},
+		{
+			"ID": "20260924143000-ohuxobn",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20260924143000-ohuxobn",
+				"updated": "20260924143000"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "导出图片或 PDF 时会渲染 JavaScript 嵌入块，并等待脚本和块查询完成后再导出。安全模式和远程内核环境仍然禁止执行脚本。"
 				}
 			]
 		},
@@ -711,7 +805,7 @@
 			"HeadingLevel": 3,
 			"Properties": {
 				"id": "20260612202058-1tfila8",
-				"updated": "20260612202058"
+				"updated": "20261016202635"
 			},
 			"Children": [
 				{
@@ -725,7 +819,7 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20260612202058-paqopye",
-				"updated": "20260612202058"
+				"updated": "20261016202635"
 			},
 			"Children": [
 				{
@@ -739,7 +833,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​ 开头的代码即可进入 JS 模式"
+					"Data": "​ 开头的代码即可进入 JS 模式。"
 				}
 			]
 		},
@@ -749,7 +843,7 @@
 			"HeadingLevel": 3,
 			"Properties": {
 				"id": "20260612202058-u31815k",
-				"updated": "20260612202058"
+				"updated": "20261016111305"
 			},
 			"Children": [
 				{
@@ -769,7 +863,7 @@
 			"Properties": {
 				"colgroup": "||",
 				"id": "20260612202058-ef6nmf4",
-				"updated": "20260612202058"
+				"updated": "20261016111305"
 			},
 			"Children": [
 				{
@@ -848,7 +942,7 @@
 								{
 									"Type": "NodeTextMark",
 									"TextMarkType": "code",
-									"TextMarkTextContent": "(url, data, callback?) =\u0026gt; void"
+									"TextMarkTextContent": "(url, data?, headers?, process?, signal?) =&gt; Promise&lt;IWebSocketData&gt;"
 								},
 								{
 									"Type": "NodeText",
@@ -862,7 +956,7 @@
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "发起同步 POST 请求"
+									"Data": "发起异步 POST 请求，使用 await 或 .then() 读取响应；第三个参数是请求头对象，不是回调函数"
 								}
 							]
 						}
@@ -1010,7 +1104,7 @@
 								{
 									"Type": "NodeTextMark",
 									"TextMarkType": "code",
-									"TextMarkTextContent": "number \u0026#124; undefined"
+									"TextMarkTextContent": "number &#124; undefined"
 								},
 								{
 									"Type": "NodeText",
@@ -1038,7 +1132,7 @@
 			"HeadingLevel": 3,
 			"Properties": {
 				"id": "20260612202058-8ljs229",
-				"updated": "20260612202058"
+				"updated": "20261024162311"
 			},
 			"Children": [
 				{
@@ -1052,12 +1146,12 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20260612202058-7u53ctj",
-				"updated": "20260612202058"
+				"updated": "20261016111305"
 			},
 			"Children": [
 				{
 					"Type": "NodeText",
-					"Data": "需要"
+					"Data": "要自动渲染内容块，请"
 				},
 				{
 					"Type": "NodeTextMark",
@@ -1094,7 +1188,7 @@
 			"IsFencedCodeBlock": true,
 			"Properties": {
 				"id": "20260612202058-2dobv32",
-				"updated": "20260612202058"
+				"updated": "20261024162311"
 			},
 			"Children": [
 				{
@@ -1107,7 +1201,48 @@
 				},
 				{
 					"Type": "NodeCodeBlockCode",
-					"Data": "// 同步返回\nreturn [\"20240601150405-a1b2c3d\", \"20240601150405-e4f5g6h\"];\n\n// 异步返回（Promise 会被自动 await）\nreturn fetchSyncPost(\"/api/search/fulltextSearch\", { query: \"待办\" })\n    .then(r =\u003e r.data.blocks.map(b =\u003e b.id));\n"
+					"Data": "//!js\n// 同步返回\nreturn [\"20240601150405-a1b2c3d\", \"20240601150405-e4f5g6h\"];\n"
+				},
+				{
+					"Type": "NodeCodeBlockFenceCloseMarker",
+					"Data": "```"
+				}
+			]
+		},
+		{
+			"ID": "20261024162311-5z8dz71",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261024162311-5z8dz71",
+				"updated": "20261024162311"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "也可以返回 Promise。下面是另一种写法，与上面的同步示例分别使用："
+				}
+			]
+		},
+		{
+			"ID": "20261024162311-uhu20nv",
+			"Type": "NodeCodeBlock",
+			"IsFencedCodeBlock": true,
+			"Properties": {
+				"id": "20261024162311-uhu20nv",
+				"updated": "20261024162311"
+			},
+			"Children": [
+				{
+					"Type": "NodeCodeBlockFenceOpenMarker",
+					"Data": "```"
+				},
+				{
+					"Type": "NodeCodeBlockFenceInfoMarker",
+					"CodeBlockInfo": "anM="
+				},
+				{
+					"Type": "NodeCodeBlockCode",
+					"Data": "//!js\n// 异步返回（Promise 会被自动 await）\nreturn fetchSyncPost(\"/api/search/fulltextSearch\", { query: \"待办\" })\n    .then(r => r.data.blocks.map(b => b.id));\n"
 				},
 				{
 					"Type": "NodeCodeBlockFenceCloseMarker",
@@ -1120,12 +1255,12 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20260612202058-81vbloa",
-				"updated": "20260612202058"
+				"updated": "20261016202635"
 			},
 			"Children": [
 				{
 					"Type": "NodeText",
-					"Data": "返回数组中 ID 的顺序即为最终显示顺序"
+					"Data": "返回数组中 ID 的顺序即为最终显示顺序。"
 				}
 			]
 		},
@@ -1135,7 +1270,7 @@
 			"HeadingLevel": 3,
 			"Properties": {
 				"id": "20260612202058-dt9gwb2",
-				"updated": "20260612202058"
+				"updated": "20261016111305"
 			},
 			"Children": [
 				{
@@ -1149,13 +1284,12 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20260612202058-8quyqb9",
-				"updated": "20260612202058"
+				"updated": "20260810212846"
 			},
 			"Children": [
 				{
-					"Type": "NodeTextMark",
-					"TextMarkType": "strong",
-					"TextMarkTextContent": "嵌入固定的几个块："
+					"Type": "NodeText",
+					"Data": "嵌入固定的几个块："
 				}
 			]
 		},
@@ -1165,7 +1299,7 @@
 			"IsFencedCodeBlock": true,
 			"Properties": {
 				"id": "20260612202058-tv6co88",
-				"updated": "20260612202058"
+				"updated": "20260809232000"
 			},
 			"Children": [
 				{
@@ -1178,7 +1312,7 @@
 				},
 				{
 					"Type": "NodeCodeBlockCode",
-					"Data": "{{ //!js\nreturn [\n    \"20240601150405-a1b2c3d\",\n    \"20240601150405-e4f5g6h\"\n];\n}}\n"
+					"Data": "//!js\nreturn [\n    \"20240601150405-a1b2c3d\",\n    \"20240601150405-e4f5g6h\"\n];\n"
 				},
 				{
 					"Type": "NodeCodeBlockFenceCloseMarker",
@@ -1191,13 +1325,12 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20260612202058-nzro8zw",
-				"updated": "20260612202058"
+				"updated": "20260810212846"
 			},
 			"Children": [
 				{
-					"Type": "NodeTextMark",
-					"TextMarkType": "strong",
-					"TextMarkTextContent": "通过全文搜索动态获取："
+					"Type": "NodeText",
+					"Data": "通过全文搜索动态获取："
 				}
 			]
 		},
@@ -1207,7 +1340,7 @@
 			"IsFencedCodeBlock": true,
 			"Properties": {
 				"id": "20260612202058-wp4nan2",
-				"updated": "20260612202058"
+				"updated": "20261016111305"
 			},
 			"Children": [
 				{
@@ -1220,7 +1353,7 @@
 				},
 				{
 					"Type": "NodeCodeBlockCode",
-					"Data": "{{ //!js\nconst resp = fetchSyncPost(\"/api/search/fulltextSearch\", { query: \"待办\" });\nreturn resp.data.blocks.map(b =\u003e b.id);\n}}\n"
+					"Data": "//!js\nconst resp = await fetchSyncPost(\"/api/search/fulltextSearch\", { query: \"待办\" });\nif (resp.code !== 0) {\n    throw new Error(resp.msg);\n}\nreturn resp.data.blocks.map(b => b.id);\n"
 				},
 				{
 					"Type": "NodeCodeBlockFenceCloseMarker",
@@ -1233,13 +1366,12 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20260612202058-2v9xnq8",
-				"updated": "20260612202058"
+				"updated": "20261016111305"
 			},
 			"Children": [
 				{
-					"Type": "NodeTextMark",
-					"TextMarkType": "strong",
-					"TextMarkTextContent": "获取当前文档下所有子块："
+					"Type": "NodeText",
+					"Data": "获取当前文档的直接子块："
 				}
 			]
 		},
@@ -1249,7 +1381,7 @@
 			"IsFencedCodeBlock": true,
 			"Properties": {
 				"id": "20260612202058-wvrepjj",
-				"updated": "20260612202058"
+				"updated": "20261016111305"
 			},
 			"Children": [
 				{
@@ -1262,7 +1394,7 @@
 				},
 				{
 					"Type": "NodeCodeBlockCode",
-					"Data": "{{ //!js\nconst docID = protyle.block.rootID;\nconst resp = fetchSyncPost(\"/api/block/getChildBlocks\", { id: docID });\nreturn resp.data.blocks.map(b =\u003e b.id);\n}}\n"
+					"Data": "//!js\nconst docID = protyle.block.rootID;\nconst resp = await fetchSyncPost(\"/api/block/getChildBlocks\", { id: docID });\nif (resp.code !== 0) {\n    throw new Error(resp.msg);\n}\nreturn resp.data.map(b => b.id);\n"
 				},
 				{
 					"Type": "NodeCodeBlockFenceCloseMarker",
@@ -1275,13 +1407,12 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20260612202058-kb0mobj",
-				"updated": "20260612202058"
+				"updated": "20260810212846"
 			},
 			"Children": [
 				{
-					"Type": "NodeTextMark",
-					"TextMarkType": "strong",
-					"TextMarkTextContent": "按自定义属性过滤："
+					"Type": "NodeText",
+					"Data": "按自定义属性过滤："
 				}
 			]
 		},
@@ -1291,7 +1422,7 @@
 			"IsFencedCodeBlock": true,
 			"Properties": {
 				"id": "20260612202058-6kivtwm",
-				"updated": "20260612202058"
+				"updated": "20261016111305"
 			},
 			"Children": [
 				{
@@ -1304,7 +1435,7 @@
 				},
 				{
 					"Type": "NodeCodeBlockCode",
-					"Data": "{{ //!js\nconst resp = fetchSyncPost(\"/api/attr/batchGetBlockAttrs\", {\n    ids: [\"20240601150405-a1b2c3d\", \"20240601150405-e4f5g6h\"]\n});\nconst filtered = Object.entries(resp.data)\n    .filter(([id, attrs]) =\u003e attrs[\"custom-tag\"] === \"重要\")\n    .map(([id]) =\u003e id);\nreturn filtered;\n}}\n"
+					"Data": "//!js\nconst resp = await fetchSyncPost(\"/api/attr/batchGetBlockAttrs\", {\n    ids: [\"20240601150405-a1b2c3d\", \"20240601150405-e4f5g6h\"]\n});\nif (resp.code !== 0) {\n    throw new Error(resp.msg);\n}\nconst filtered = Object.entries(resp.data)\n    .filter(([id, attrs]) => attrs[\"custom-tag\"] === \"重要\")\n    .map(([id]) => id);\nreturn filtered;\n"
 				},
 				{
 					"Type": "NodeCodeBlockFenceCloseMarker",
@@ -1318,7 +1449,7 @@
 			"HeadingLevel": 3,
 			"Properties": {
 				"id": "20260612202058-7o8g0fu",
-				"updated": "20260612202058"
+				"updated": "20261016111305"
 			},
 			"Children": [
 				{
@@ -1335,7 +1466,7 @@
 			},
 			"Properties": {
 				"id": "20260612202058-ih0e8zv",
-				"updated": "20260612202058"
+				"updated": "20261016111305"
 			},
 			"Children": [
 				{
@@ -1349,7 +1480,7 @@
 					},
 					"Properties": {
 						"id": "20260612202058-x78zwd5",
-						"updated": "20260612202058"
+						"updated": "20260810212846"
 					},
 					"Children": [
 						{
@@ -1357,13 +1488,12 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20260612202058-eixyatk",
-								"updated": "20260612202058"
+								"updated": "20260810212846"
 							},
 							"Children": [
 								{
-									"Type": "NodeTextMark",
-									"TextMarkType": "strong",
-									"TextMarkTextContent": "不做自动索引"
+									"Type": "NodeText",
+									"Data": "不做自动索引"
 								},
 								{
 									"Type": "NodeText",
@@ -1384,7 +1514,7 @@
 					},
 					"Properties": {
 						"id": "20260612202058-zjwzokw",
-						"updated": "20260612202058"
+						"updated": "20260810212846"
 					},
 					"Children": [
 						{
@@ -1392,13 +1522,12 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20260612202058-57rsop5",
-								"updated": "20260612202058"
+								"updated": "20260810212846"
 							},
 							"Children": [
 								{
-									"Type": "NodeTextMark",
-									"TextMarkType": "strong",
-									"TextMarkTextContent": "最大嵌套 4 层"
+									"Type": "NodeText",
+									"Data": "最大嵌套 4 层"
 								},
 								{
 									"Type": "NodeText",
@@ -1419,7 +1548,7 @@
 					},
 					"Properties": {
 						"id": "20260612202058-niuyc9c",
-						"updated": "20260612202058"
+						"updated": "20260810212846"
 					},
 					"Children": [
 						{
@@ -1427,13 +1556,12 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20260612202058-0x1tkd6",
-								"updated": "20260612202058"
+								"updated": "20260810212846"
 							},
 							"Children": [
 								{
-									"Type": "NodeTextMark",
-									"TextMarkType": "strong",
-									"TextMarkTextContent": "不嵌套自身类型"
+									"Type": "NodeText",
+									"Data": "不嵌套自身类型"
 								},
 								{
 									"Type": "NodeText",
@@ -1463,7 +1591,7 @@
 					},
 					"Properties": {
 						"id": "20260612202058-vuy2gbe",
-						"updated": "20260612202058"
+						"updated": "20261016111305"
 					},
 					"Children": [
 						{
@@ -1471,17 +1599,12 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20260612202058-c32za6h",
-								"updated": "20260612202058"
+								"updated": "20261016111305"
 							},
 							"Children": [
 								{
-									"Type": "NodeTextMark",
-									"TextMarkType": "strong",
-									"TextMarkTextContent": "错误提示"
-								},
-								{
 									"Type": "NodeText",
-									"Data": "：JS 执行异常或返回非数组时，显示\"引用已过期\""
+									"Data": "渲染与错误提示：返回块 ID 数组时自动渲染对应内容块，无结果时显示“引用已过期”；返回非数组时保留脚本自定义的 DOM 并结束加载；执行异常时显示实际错误信息"
 								}
 							]
 						}
@@ -1498,7 +1621,7 @@
 					},
 					"Properties": {
 						"id": "20260612202058-8zhr6r3",
-						"updated": "20260612202058"
+						"updated": "20260810212846"
 					},
 					"Children": [
 						{
@@ -1506,13 +1629,12 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20260612202058-qh54hmx",
-								"updated": "20260612202058"
+								"updated": "20260810212846"
 							},
 							"Children": [
 								{
-									"Type": "NodeTextMark",
-									"TextMarkType": "strong",
-									"TextMarkTextContent": "安全性"
+									"Type": "NodeText",
+									"Data": "安全性"
 								},
 								{
 									"Type": "NodeText",
@@ -1521,7 +1643,7 @@
 								{
 									"Type": "NodeTextMark",
 									"TextMarkType": "code",
-									"TextMarkTextContent": "\u0026lt;script\u0026gt;"
+									"TextMarkTextContent": "&lt;script&gt;"
 								},
 								{
 									"Type": "NodeText",

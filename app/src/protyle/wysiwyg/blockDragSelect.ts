@@ -1,5 +1,15 @@
 type TDragSelectRect = Pick<DOMRect, "left" | "right" | "top" | "bottom">;
 
+export const getBlockDragSelectContentBounds = (editorLeft: number, editorRight: number,
+                                                 paddingLeft: string, paddingRight: string) => {
+    const parsedPaddingLeft = parseFloat(paddingLeft);
+    const parsedPaddingRight = parseFloat(paddingRight);
+    return {
+        left: editorLeft + (Number.isNaN(parsedPaddingLeft) ? 24 : parsedPaddingLeft) + 1,
+        right: editorRight - (Number.isNaN(parsedPaddingRight) ? 16 : parsedPaddingRight) - 2,
+    };
+};
+
 type TResolveDragSelectBlockOptions = {
     x: number,
     top: number,
@@ -21,7 +31,17 @@ export const getBlockDragSelectBlock = (element: Element, boundaryElement: Eleme
     let parentElement = block.parentElement;
     while (parentElement && parentElement !== boundaryElement) {
         if (isContainerBlock(parentElement)) {
-            return isListItem(parentElement) ? parentElement : block;
+            if (!isListItem(parentElement)) {
+                return block;
+            }
+            // 列表项的首个直属块代表列表项主内容，其他子块可单独划选。
+            for (let i = 0; i < parentElement.children.length; i++) {
+                const childElement = parentElement.children[i];
+                if (getBlock(childElement) === childElement) {
+                    return childElement === block ? parentElement : block;
+                }
+            }
+            return parentElement;
         }
         parentElement = parentElement.parentElement;
     }

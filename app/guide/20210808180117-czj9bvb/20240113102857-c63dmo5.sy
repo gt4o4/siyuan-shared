@@ -7,7 +7,7 @@
 		"id": "20240113102857-c63dmo5",
 		"title": "移动端 App",
 		"type": "doc",
-		"updated": "20260803171606"
+		"updated": "20261105161700"
 	},
 	"Children": [
 		{
@@ -16,7 +16,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20240113102857-aof1w7f",
-				"updated": "20250114214155"
+				"updated": "20261012014930"
 			},
 			"Children": [
 				{
@@ -342,12 +342,110 @@
 			]
 		},
 		{
+			"ID": "20261012014537-ygn9gm0",
+			"Type": "NodeHeading",
+			"Properties": {
+				"id": "20261012014537-ygn9gm0",
+				"updated": "20261105161700"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "界面导航"
+				}
+			],
+			"HeadingLevel": 2
+		},
+		{
+			"ID": "20260921090531-bcyyegw",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20260921090531-bcyyegw",
+				"updated": "20260921210136"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "在编辑器中向右滑动可打开左侧栏，向左滑动可打开右侧栏。应用启动后，首次打开侧栏时显示该侧首个可见功能，之后再次打开会恢复该侧上次使用的功能。可在 "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "设置"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " - "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "外观"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " - "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "左右布局"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 中调整功能顺序。"
+				}
+			]
+		},
+		{
+			"ID": "20261103014800-m7zqk4n",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261103014800-m7zqk4n",
+				"updated": "20261105161700"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "底部抽屉不显示 X 图标、关闭或全屏、恢复按钮，需要确认的表单在内容下方显示确定、取消等业务按钮。普通抽屉打开时按内容高度显示，最高为屏幕高度的 56%。上下拖动顶部抓手可连续调整高度，不影响内容区域的滚动和文本选择。键盘弹出时会临时限制高度，收起后恢复；自行调整的高度仅在本次打开期间保留。可通过返回、点击遮罩，或将顶部抓手拉到最低高度后不松手继续下拉来关闭抽屉。关闭仍遵循原有的取消和保存规则；正在保存或必须处理的提示会限制关闭，请按界面提供的操作继续。"
+				}
+			]
+		},
+		{
+			"ID": "20261103083411-80e11ad",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261103083411-80e11ad",
+				"updated": "20261103083411"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "在移动端抽屉中编辑引用内容、反链或闪卡内容后，关闭时会等待保存完成。保存失败会保留编辑器和草稿；连接恢复后，再次关闭即可重试失败的文本修改，无需再输入字符。"
+				}
+			]
+		},
+		{
+			"ID": "20261010114821-9zssb7v",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261010114821-9zssb7v",
+				"updated": "20261020133924"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "在 Android 上使用桌面布局时，系统返回键会先关闭当前最上层的弹窗、菜单、编辑浮层、图片预览或浮动抽屉，每次只关闭一层并保留底层浏览状态。没有可关闭的浮层时，沿应用内文档历史返回，不会重新加载整个界面。到达历史起点后会提示再次返回，提示显示期间再按一次返回键即可回到系统桌面。"
+				}
+			]
+		},
+		{
 			"ID": "20240113104101-rz1z8en",
 			"Type": "NodeHeading",
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20240113104101-rz1z8en",
-				"updated": "20260803171606"
+				"updated": "20260819122705"
 			},
 			"Children": [
 				{
@@ -361,12 +459,12 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20240113104141-5jvccmj",
-				"updated": "20240113104506"
+				"updated": "20260819224004"
 			},
 			"Children": [
 				{
 					"Type": "NodeText",
-					"Data": "因为应用商店审核原因，目前无法直接在 App 上提供集市。"
+					"Data": "部分应用商店版本可能因审核要求不在 App 内提供集市。"
 				}
 			]
 		},
@@ -375,12 +473,12 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20240113104506-ko5m727",
-				"updated": "20260803171606"
+				"updated": "20260819114702"
 			},
 			"Children": [
 				{
 					"Type": "NodeText",
-					"Data": "如需使用集市，请启用 "
+					"Data": "受限版本仍可使用集市，请启用 "
 				},
 				{
 					"Type": "NodeTextMark",
@@ -389,7 +487,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​ - "
+					"Data": " - "
 				},
 				{
 					"Type": "NodeTextMark",
@@ -398,7 +496,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​，然后在桌面端浏览器上访问配置。"
+					"Data": "，然后使用桌面端浏览器访问思源。"
 				}
 			]
 		},
@@ -408,7 +506,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20240113103753-6tsixvt",
-				"updated": "20250114214413"
+				"updated": "20261024163013"
 			},
 			"Children": [
 				{
@@ -428,7 +526,7 @@
 			"ListData": {},
 			"Properties": {
 				"id": "20240113104525-jtaztd5",
-				"updated": "20240113105513"
+				"updated": "20261024163013"
 			},
 			"Children": [
 				{
@@ -440,7 +538,7 @@
 					},
 					"Properties": {
 						"id": "20240113104818-gc1i41e",
-						"updated": "20240113104818"
+						"updated": "20261024162311"
 					},
 					"Children": [
 						{
@@ -448,12 +546,12 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20240113104818-pxt6yql",
-								"updated": "20240113104831"
+								"updated": "20261024162311"
 							},
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "卸载 App 会导致本地数据被完全删除且无法恢复"
+									"Data": "卸载 App 会删除本地数据。卸载前请完成同步，并在应用之外保存可恢复的备份；没有备份的数据可能无法恢复"
 								}
 							]
 						}
@@ -468,7 +566,7 @@
 					},
 					"Properties": {
 						"id": "20240113104832-8e6vs9t",
-						"updated": "20240113105513"
+						"updated": "20261024163013"
 					},
 					"Children": [
 						{
@@ -476,12 +574,21 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20240113104832-2hvn950",
-								"updated": "20240113105513"
+								"updated": "20261024163013"
 							},
 							"Children": [
 								{
 									"Type": "NodeText",
-									"Data": "退出应用请使用右侧面板中的 "
+									"Data": "退出应用请使用 "
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "更多"
+								},
+								{
+									"Type": "NodeText",
+									"Data": " - "
 								},
 								{
 									"Type": "NodeTextMark",
@@ -490,7 +597,7 @@
 								},
 								{
 									"Type": "NodeText",
-									"Data": "​ 进行正常退出，直接划走会强制结束应用，导致数据同步未被执行"
+									"Data": " 进行正常退出，直接划走会强制结束应用，导致数据同步未被执行"
 								}
 							]
 						}
@@ -773,7 +880,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20260613174109-kf9rdvq",
-				"updated": "20260803163243"
+				"updated": "20261024163013"
 			},
 			"Children": [
 				{
@@ -802,7 +909,7 @@
 			"HeadingLevel": 3,
 			"Properties": {
 				"id": "20260613174109-bccohoq",
-				"updated": "20260613174109"
+				"updated": "20261024162311"
 			},
 			"Children": [
 				{
@@ -817,7 +924,7 @@
 			"ListData": {},
 			"Properties": {
 				"id": "20260613174109-6e5twqf",
-				"updated": "20260613174109"
+				"updated": "20261024162311"
 			},
 			"Children": [
 				{
@@ -862,7 +969,7 @@
 					},
 					"Properties": {
 						"id": "20260613174109-wuyfmvn",
-						"updated": "20260613174109"
+						"updated": "20261024162311"
 					},
 					"Children": [
 						{
@@ -870,21 +977,89 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20260613174109-0vtxbwq",
-								"updated": "20260613174109"
+								"updated": "20261024162311"
 							},
 							"Children": [
 								{
-									"Type": "NodeTextMark",
-									"TextMarkType": "strong",
-									"TextMarkTextContent": "自动转入"
-								},
-								{
 									"Type": "NodeText",
-									"Data": "：速记创建后，系统每 7 秒自动检查本地速记目录，将新速记转入文档面板中配置的目标位置"
+									"Data": "自动转入：思源运行时每 7 秒检查本地速记目录，将新速记转入文档面板中配置的目标位置"
 								}
 							]
 						}
 					]
+				}
+			]
+		},
+		{
+			"ID": "20261004052629-tczd7hi",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261004052629-tczd7hi",
+				"updated": "20261004052629"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "新导入的闪念速记遵循 "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "设置"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " - "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "编辑器"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 中的 Markdown 语法开关。启用的行级语法、中点代码围栏（"
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "···"
+				},
+				{
+					"Type": "NodeText",
+					"Data": "）和全角任务快捷语法（"
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "【】"
+				},
+				{
+					"Type": "NodeText",
+					"Data": "、"
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "code",
+					"TextMarkTextContent": "【X】"
+				},
+				{
+					"Type": "NodeText",
+					"Data": "）会在导入时直接转换，无需再次编辑触发转换。"
+				}
+			]
+		},
+		{
+			"ID": "20261004052629-5dh5rgu",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261004052629-5dh5rgu",
+				"updated": "20261004052629"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "每条速记单独解析，未闭合的代码块不会影响下一条速记。已导入的文档不会重新解析。"
 				}
 			]
 		},
@@ -894,7 +1069,7 @@
 			"HeadingLevel": 3,
 			"Properties": {
 				"id": "20260613174109-f6x4sin",
-				"updated": "20260803163243"
+				"updated": "20261024163013"
 			},
 			"Children": [
 				{
@@ -908,7 +1083,7 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20260613174109-mq2h4ye",
-				"updated": "20260803163243"
+				"updated": "20261024163013"
 			},
 			"Children": [
 				{
@@ -922,7 +1097,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​ - "
+					"Data": " - "
 				},
 				{
 					"Type": "NodeTextMark",
@@ -931,7 +1106,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​ - "
+					"Data": " - "
 				},
 				{
 					"Type": "NodeTextMark",
@@ -940,7 +1115,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​ - "
+					"Data": " - "
 				},
 				{
 					"Type": "NodeTextMark",
@@ -949,7 +1124,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": " ​ 中配置闪念速记的存放位置："
+					"Data": " 中配置闪念速记的存放位置："
 				}
 			]
 		},

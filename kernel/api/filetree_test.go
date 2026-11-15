@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package api
 
@@ -30,7 +18,9 @@ import (
 	"github.com/88250/lute/ast"
 	"github.com/88250/lute/parse"
 	"github.com/gin-gonic/gin"
+	"github.com/siyuan-note/siyuan/kernel/cache"
 	"github.com/siyuan-note/siyuan/kernel/conf"
+	"github.com/siyuan-note/siyuan/kernel/filesys"
 	"github.com/siyuan-note/siyuan/kernel/model"
 	"github.com/siyuan-note/siyuan/kernel/treenode"
 	"github.com/siyuan-note/siyuan/kernel/util"
@@ -72,6 +62,79 @@ func TestSetSortRejectsInvalidRequest(t *testing.T) {
 	}
 }
 
+func TestReorderDocsRejectsInvalidRequest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.POST("/api/filetree/reorderDocs", reorderDocs)
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "empty", body: `{}`},
+		{name: "invalid source ID", body: `{"sourceIDs":["invalid"],"targetID":"20260718000002-abcdefg","position":"before"}`},
+		{name: "invalid target ID", body: `{"sourceIDs":["20260718000001-abcdefg"],"targetID":"invalid","position":"before"}`},
+		{name: "invalid position", body: `{"sourceIDs":["20260718000001-abcdefg"],"targetID":"20260718000002-abcdefg","position":"middle"}`},
+		{name: "target in sources", body: `{"sourceIDs":["20260718000002-abcdefg"],"targetID":"20260718000002-abcdefg","position":"after"}`},
+		{name: "duplicate source", body: `{"sourceIDs":["20260718000001-abcdefg","20260718000001-abcdefg"],"targetID":"20260718000002-abcdefg","position":"after"}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/api/filetree/reorderDocs", strings.NewReader(test.body))
+			request.Header.Set("Content-Type", "application/json")
+			engine.ServeHTTP(recorder, request)
+
+			response := &struct {
+				Code int `json:"code"`
+			}{}
+			if err := json.Unmarshal(recorder.Body.Bytes(), response); nil != err {
+				t.Fatalf("unmarshal response failed: %v", err)
+			}
+			if -1 != response.Code {
+				t.Fatalf("invalid request returned code %d: %s", response.Code, recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestSetDocSortModeRejectsInvalidRequest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.POST("/api/filetree/setDocSortMode", setDocSortMode)
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "empty", body: `{}`},
+		{name: "missing sort mode", body: `{"id":"20260718000001-abcdefg"}`},
+		{name: "invalid ID", body: `{"id":"invalid","sortMode":0}`},
+		{name: "fractional sort mode", body: `{"id":"20260718000001-abcdefg","sortMode":1.5}`},
+		{name: "string sort mode", body: `{"id":"20260718000001-abcdefg","sortMode":"1"}`},
+		{name: "notebook fallback mode", body: `{"id":"20260718000001-abcdefg","sortMode":15}`},
+		{name: "internal unassigned mode", body: `{"id":"20260718000001-abcdefg","sortMode":256}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/api/filetree/setDocSortMode", strings.NewReader(test.body))
+			request.Header.Set("Content-Type", "application/json")
+			engine.ServeHTTP(recorder, request)
+
+			response := &struct {
+				Code int `json:"code"`
+			}{}
+			if err := json.Unmarshal(recorder.Body.Bytes(), response); nil != err {
+				t.Fatalf("unmarshal response failed: %v", err)
+			}
+			if -1 != response.Code {
+				t.Fatalf("invalid request returned code %d: %s", response.Code, recorder.Body.String())
+			}
+		})
+	}
+}
+
 func TestAuthFilePublishAccessReturnsUniformFailure(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -97,14 +160,15 @@ func TestAuthFilePublishAccessReturnsUniformFailure(t *testing.T) {
 	oldLangs := util.Langs
 	util.DataDir = t.TempDir()
 	model.Conf = model.NewAppConf()
+	model.Conf.Sync.Store(conf.NewSync())
 	model.Conf.Lang = "test"
 	util.Langs = map[string]map[int]string{
 		"test": {285: passwordIncorrect},
 		"en":   {285: passwordIncorrect},
 	}
 	t.Cleanup(func() {
+		defer func() { model.Conf = oldConf }()
 		util.DataDir = oldDataDir
-		model.Conf = oldConf
 		util.Langs = oldLangs
 		if oldDataDir != "" {
 			if err := model.SetPublishAccess(oldPublishAccess); err != nil {
@@ -231,14 +295,15 @@ func TestAuthFilePublishAccessThrottlesBruteForce(t *testing.T) {
 	oldLangs := util.Langs
 	util.DataDir = t.TempDir()
 	model.Conf = model.NewAppConf()
+	model.Conf.Sync.Store(conf.NewSync())
 	model.Conf.Lang = "test"
 	util.Langs = map[string]map[int]string{
 		"test": {285: "Password is incorrect", 354: passwordLocked},
 		"en":   {285: "Password is incorrect", 354: passwordLocked},
 	}
 	t.Cleanup(func() {
+		defer func() { model.Conf = oldConf }()
 		util.DataDir = oldDataDir
-		model.Conf = oldConf
 		util.Langs = oldLangs
 		if oldDataDir != "" {
 			if err := model.SetPublishAccess(oldPublishAccess); err != nil {
@@ -271,7 +336,7 @@ func TestAuthFilePublishAccessThrottlesBruteForce(t *testing.T) {
 	defer util.AuthThrottleReset(attackerIP)
 
 	// 前 5 次失败为普通失败响应，第 6 次失败触发锁定但本次仍返回普通响应（与 util.AuthThrottleFail 语义一致）
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		recorder := post(passwordWrong)
 		if recorder.Code != http.StatusOK {
 			t.Fatalf("attempt %d expected %d, got %d", i+1, http.StatusOK, recorder.Code)
@@ -356,6 +421,7 @@ func TestPublishAccessConfigurationRejectsEncryptedNotebook(t *testing.T) {
 	oldLangs := util.Langs
 	util.DataDir = t.TempDir()
 	model.Conf = model.NewAppConf()
+	model.Conf.Sync.Store(conf.NewSync())
 	model.Conf.Lang = "test"
 	util.Langs = map[string]map[int]string{
 		"test": {313: "Encrypted notebooks do not support this operation"},
@@ -365,8 +431,8 @@ func TestPublishAccessConfigurationRejectsEncryptedNotebook(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
+		defer func() { model.Conf = oldConf }()
 		util.DataDir = oldDataDir
-		model.Conf = oldConf
 		util.Langs = oldLangs
 		if oldDataDir != "" {
 			if err := model.SetPublishAccess(oldPublishAccess); err != nil {
@@ -450,9 +516,13 @@ func TestPublishReaderCannotBrowseEncryptedNotebook(t *testing.T) {
 		docID = "20260726000001-encrypt"
 	)
 	oldDataDir := util.DataDir
+	oldConf := model.Conf
 	util.DataDir = t.TempDir()
+	model.Conf = model.NewAppConf()
+	model.Conf.FileTree.Store(conf.NewFileTree())
 	t.Cleanup(func() {
 		util.DataDir = oldDataDir
+		model.Conf = oldConf
 	})
 
 	boxConf := conf.NewBoxConf()
@@ -495,13 +565,14 @@ func TestPublishReaderCannotBrowseEncryptedNotebook(t *testing.T) {
 	docRequest := httptest.NewRequest(
 		http.MethodPost,
 		"/api/filetree/getDoc",
-		strings.NewReader(`{"id":"`+docID+`","notebook":"`+boxID+`"}`),
+		strings.NewReader(`{"id":"`+docID+`","notebook":"`+boxID+`","includeDocInfo":true}`),
 	)
 	docRequest.Header.Set("Content-Type", "application/json")
 	engine.ServeHTTP(docRecorder, docRequest)
 
 	docResponse := &struct {
-		Code int `json:"code"`
+		Code int            `json:"code"`
+		Data map[string]any `json:"data"`
 	}{}
 	if err := json.Unmarshal(docRecorder.Body.Bytes(), docResponse); err != nil {
 		t.Fatalf("unmarshal document response failed: %v", err)
@@ -509,9 +580,99 @@ func TestPublishReaderCannotBrowseEncryptedNotebook(t *testing.T) {
 	if docResponse.Code != 3 {
 		t.Fatalf("publish reader accessed encrypted document: %s", docRecorder.Body.String())
 	}
+	if _, ok := docResponse.Data["docInfo"]; ok {
+		t.Fatalf("publish reader received encrypted document info: %s", docRecorder.Body.String())
+	}
+}
+
+func TestGetDocOptionallyReturnsEmbeddedDocInfo(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	const boxID = "20260812000000-boxinfo"
+	originalConf := model.Conf
+	originalDataDir := util.DataDir
+	originalBlockTreeDBPath := util.BlockTreeDBPath
+	tempDir := t.TempDir()
+	util.DataDir = filepath.Join(tempDir, "data")
+	util.BlockTreeDBPath = filepath.Join(tempDir, "blocktree.db")
+	model.Conf = model.NewAppConf()
+	model.Conf.Editor.Store(conf.NewEditor())
+	model.Conf.Export.Store(conf.NewExport())
+	model.Conf.FileTree.Store(conf.NewFileTree())
+	model.Conf.NotebookCrypto = conf.NewNotebookCrypto()
+	model.Conf.Sync.Store(conf.NewSync())
+
+	box := &model.Box{ID: boxID}
+	boxConf := conf.NewBoxConf()
+	boxConf.Name = "Embedded document info test"
+	boxConf.Closed = false
+	if err := box.SaveConf(boxConf); nil != err {
+		t.Fatalf("save test notebook config failed: %v", err)
+	}
+	treenode.InitBlockTree(true)
+	tree := treenode.NewTree(boxID, "/20260812000001-docinfo.sy", "/Document", "Document")
+	if _, err := filesys.WriteTree(tree); nil != err {
+		t.Fatalf("write test tree failed: %v", err)
+	}
+	treenode.UpsertBlockTree(tree)
+	t.Cleanup(func() {
+		cache.RemoveTreeData(tree.ID)
+		cache.RemoveDocIAL(tree.Path)
+		treenode.CloseDatabase()
+		model.Conf = originalConf
+		util.DataDir = originalDataDir
+		util.BlockTreeDBPath = originalBlockTreeDBPath
+		if "" != originalBlockTreeDBPath {
+			treenode.InitBlockTree(false)
+		}
+	})
+
+	engine := gin.New()
+	engine.POST("/api/filetree/getDoc", getDoc)
+	request := func(body string) (data map[string]json.RawMessage) {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/filetree/getDoc", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		engine.ServeHTTP(recorder, req)
+		response := &struct {
+			Code int                        `json:"code"`
+			Msg  string                     `json:"msg"`
+			Data map[string]json.RawMessage `json:"data"`
+		}{}
+		if err := json.Unmarshal(recorder.Body.Bytes(), response); nil != err {
+			t.Fatalf("unmarshal document response failed: %v", err)
+		}
+		if 0 != response.Code {
+			t.Fatalf("get document failed with code %d and message %q: %s", response.Code, response.Msg, recorder.Body.String())
+		}
+		return response.Data
+	}
+
+	withoutInfo := request(`{"id":"` + tree.ID + `"}`)
+	if _, ok := withoutInfo["docInfo"]; ok {
+		t.Fatalf("document info should be absent by default: %s", withoutInfo["docInfo"])
+	}
+
+	withInfo := request(`{"id":"` + tree.Root.FirstChild.ID + `","includeDocInfo":true}`)
+	infoJSON, ok := withInfo["docInfo"]
+	if !ok {
+		t.Fatal("requested embedded document info is absent")
+	}
+	info := &model.BlockInfo{}
+	if err := json.Unmarshal(infoJSON, info); nil != err {
+		t.Fatalf("unmarshal embedded document info failed: %v", err)
+	}
+	if info.ID != tree.ID || info.RootID != tree.ID || info.Name != "Document" {
+		t.Fatalf("unexpected embedded document info: %#v", info)
+	}
 }
 
 func TestFilterFileTreePublishAccess(t *testing.T) {
+	previousConf := model.Conf
+	model.Conf = model.NewAppConf()
+	model.Conf.Sync.Store(conf.NewSync())
+	t.Cleanup(func() { model.Conf = previousConf })
 	const (
 		boxID             = "20260725000000-boxid01"
 		publicID          = "20260725000001-public1"
@@ -596,5 +757,115 @@ func TestFilterFileTreePublishAccess(t *testing.T) {
 	}
 	if filtered := filterFileTreeBlockIDsByPublishDiscoverability(c, allIDs, boxID); !slices.Equal(filtered, allIDs) {
 		t.Fatalf("administrator IDs should remain unchanged: %v", filtered)
+	}
+}
+
+// TestListDocsByPathFiltersSubFileCountForPublishReader 验证发布读者看到的文档树
+// 下级文档数只统计发布可见的文档，避免据此推断被排除文档的数量。
+func TestListDocsByPathFiltersSubFileCountForPublishReader(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	const (
+		boxID       = "20260726000000-boxid01"
+		parentID    = "20260726000001-parent1"
+		publicID    = "20260726000002-public1"
+		hiddenID    = "20260726000003-hidden1"
+		forbiddenID = "20260726000004-forbid1"
+	)
+	oldDataDir, oldConf := util.DataDir, model.Conf
+	oldPublishAccess := model.GetPublishAccess()
+	util.DataDir = t.TempDir()
+	model.Conf = model.NewAppConf()
+	model.Conf.Sync.Store(conf.NewSync())
+	model.Conf.FileTree.Store(conf.NewFileTree())
+	const testLang = "filetree-subfile-count-test"
+	installAPITestTimeLangs(t, testLang)
+	model.Conf.Lang = testLang
+	t.Cleanup(func() {
+		if err := model.SetPublishAccess(oldPublishAccess); err != nil {
+			t.Errorf("restore publish access failed: %v", err)
+		}
+		util.DataDir, model.Conf = oldDataDir, oldConf
+	})
+	if err := model.SetPublishAccess(model.PublishAccess{}); err != nil {
+		t.Fatal(err)
+	}
+
+	boxConf := conf.NewBoxConf()
+	boxConf.Closed = false
+	if err := (&model.Box{ID: boxID}).SaveConf(boxConf); err != nil {
+		t.Fatal(err)
+	}
+	boxDir := filepath.Join(util.DataDir, boxID)
+	if err := os.MkdirAll(filepath.Join(boxDir, parentID), 0755); err != nil {
+		t.Fatal(err)
+	}
+	// 文档属性必须非空，否则会被当作损坏数据移出笔记本
+	writeDoc := func(dir, id string) {
+		t.Helper()
+		content := `{"Properties":{"id":"` + id + `","title":"` + id + `"}}`
+		if err := os.WriteFile(filepath.Join(boxDir, dir, id+".sy"), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeDoc(".", parentID)
+	writeDoc(parentID, publicID)
+	writeDoc(parentID, hiddenID)
+	writeDoc(parentID, forbiddenID)
+
+	requestSubFileCount := func(role model.Role) int {
+		t.Helper()
+
+		engine := gin.New()
+		engine.Use(func(c *gin.Context) {
+			c.Set(model.RoleContextKey, role)
+			c.Next()
+		})
+		engine.POST("/api/filetree/listDocsByPath", listDocsByPath)
+
+		recorder := httptest.NewRecorder()
+		httpRequest := httptest.NewRequest(
+			http.MethodPost,
+			"/api/filetree/listDocsByPath",
+			strings.NewReader(`{"notebook":"`+boxID+`","path":"/"}`),
+		)
+		httpRequest.Header.Set("Content-Type", "application/json")
+		engine.ServeHTTP(recorder, httpRequest)
+		requireAPIContract(t, http.MethodPost, "/api/filetree/listDocsByPath", recorder)
+
+		response := &struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+			Data struct {
+				Files []*model.File `json:"files"`
+			} `json:"data"`
+		}{}
+		if err := json.Unmarshal(recorder.Body.Bytes(), response); err != nil {
+			t.Fatalf("unmarshal list response failed: %v", err)
+		}
+		if 0 != response.Code {
+			t.Fatalf("list docs by path failed: %s", recorder.Body.String())
+		}
+		for _, file := range response.Data.Files {
+			if file.ID == parentID {
+				return file.SubFileCount
+			}
+		}
+		t.Fatalf("parent document not found: %s", recorder.Body.String())
+		return -1
+	}
+
+	if actual := requestSubFileCount(model.RoleAdministrator); 3 != actual {
+		t.Fatalf("administrator subfile count = %d, want 3", actual)
+	}
+
+	if err := model.SetPublishAccess(model.PublishAccess{
+		{ID: hiddenID, Visible: false},
+		{ID: forbiddenID, Visible: false, Disable: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if actual := requestSubFileCount(model.RoleReader); 1 != actual {
+		t.Fatalf("reader subfile count = %d, want only the published one", actual)
 	}
 }

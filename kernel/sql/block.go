@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package sql
 
@@ -25,7 +13,6 @@ import (
 
 	"github.com/88250/gulu"
 	"github.com/88250/lute/ast"
-	"github.com/88250/lute/editor"
 	"github.com/88250/lute/html"
 	"github.com/88250/lute/parse"
 	"github.com/siyuan-note/logging"
@@ -109,6 +96,9 @@ func queryBlockRowIDsTx(tx *sql.Tx, blocks []*Block) (ret map[string]int64, err 
 		}
 		ret[id] = rowID
 	}
+	if err = rows.Err(); err != nil {
+		logging.LogErrorf("iterate block rowids failed: %s", err)
+	}
 	return
 }
 
@@ -170,37 +160,43 @@ func indexNode(tx *sql.Tx, id, boxID string) (err error) {
 		return
 	}
 
-	content := nodeStaticContent(node, nil, true, indexAssetPath, true, true)
-	content = strings.ReplaceAll(content, editor.Zwsp, "")
+	block, _ := buildBlockFromNode(node, tree)
 	var rowID int64
 	if rowID, err = blockRowIDByBlockID(tx, id); err != nil {
 		tx.Rollback()
 		return
 	}
-	stmt := "UPDATE blocks_fts SET content = ? WHERE rowid = ?"
-	if err = execStmtTx(tx, stmt, content, rowID); err != nil {
+	stmt := "UPDATE blocks_fts SET content = ?, fcontent = ? WHERE rowid = ?"
+	if err = execStmtTx(tx, stmt, block.Content, block.FContent, rowID); err != nil {
 		tx.Rollback()
 		return
 	}
-	stmt = "UPDATE blocks SET content = ? WHERE id = ?"
-	if err = execStmtTx(tx, stmt, content, id); err != nil {
+	stmt = "UPDATE blocks SET content = ?, fcontent = ?, length = ? WHERE id = ?"
+	if err = execStmtTx(tx, stmt, block.Content, block.FContent, block.Length, id); err != nil {
 		tx.Rollback()
 		return
 	}
+	removeBlockCache(id)
+	putBlockCache(block)
 	return
 }
 
 func NodeStaticContent(node *ast.Node, excludeTypes []string, includeTextMarkATitleURL, includeAssetPath, fullAttrView bool) string {
-	return nodeStaticContent(node, excludeTypes, includeTextMarkATitleURL, includeAssetPath, fullAttrView, false)
+	return nodeStaticContent(node, excludeTypes, includeTextMarkATitleURL, includeAssetPath, fullAttrView, false, true)
 }
 
-func nodeStaticContent(node *ast.Node, excludeTypes []string, includeTextMarkATitleURL, includeAssetPath, fullAttrView, unescapeBlockRef bool) string {
+// NodeStaticContentWithoutOCRAssets 与 NodeStaticContent 相同，但不读取资源的 OCR 文本。
+func NodeStaticContentWithoutOCRAssets(node *ast.Node, excludeTypes []string, includeTextMarkATitleURL, includeAssetPath, fullAttrView bool) string {
+	return nodeStaticContent(node, excludeTypes, includeTextMarkATitleURL, includeAssetPath, fullAttrView, false, false)
+}
+
+func nodeStaticContent(node *ast.Node, excludeTypes []string, includeTextMarkATitleURL, includeAssetPath, fullAttrView, unescapeBlockRef, includeOCRAssets bool) string {
 	if nil == node {
 		return ""
 	}
 
 	if ast.NodeDocument == node.Type {
-		return html.EscapeHTMLStr(node.IALAttr("title"))
+		return html.EscapeHTMLStr(treenode.ReadDocumentTitle(node).Text)
 	}
 
 	if ast.NodeAttributeView == node.Type {
@@ -236,10 +232,19 @@ func nodeStaticContent(node *ast.Node, excludeTypes []string, includeTextMarkATi
 				buf.WriteByte(' ')
 				lastSpace = true
 			}
+			if ast.NodeTabItem == n.Type {
+				if title := treenode.TabTitleParagraph(n); nil != title {
+					buf.WriteString(nodeStaticContent(title, excludeTypes, includeTextMarkATitleURL,
+						includeAssetPath, fullAttrView, unescapeBlockRef, includeOCRAssets))
+					buf.WriteByte(' ')
+				}
+			}
 			if ast.NodeCallout == n.Type {
-				buf.WriteString(n.CalloutType + " ")
+				buf.WriteString(n.CalloutType)
+				buf.WriteString(" ")
 				if "" != n.CalloutIcon && 0 == n.CalloutIconType {
-					buf.WriteString(n.CalloutIcon + " ")
+					buf.WriteString(n.CalloutIcon)
+					buf.WriteString(" ")
 				}
 				if "" != n.CalloutTitle {
 					if titleTree := parse.Inline("", []byte(n.CalloutTitle), luteEngine.ParseOptions); nil != titleTree && nil != titleTree.Root.FirstChild.FirstChild {
@@ -255,6 +260,14 @@ func nodeStaticContent(node *ast.Node, excludeTypes []string, includeTextMarkATi
 				}
 			}
 			return ast.WalkContinue
+		}
+
+		if ast.NodeCustomBlock == n.Type {
+			if !gulu.Str.Contains(n.Type.String(), excludeTypes) {
+				buf.Write(n.Tokens)
+			}
+			lastSpace = false
+			return ast.WalkSkipChildren
 		}
 
 		if gulu.Str.Contains(n.Type.String(), excludeTypes) {
@@ -283,7 +296,9 @@ func nodeStaticContent(node *ast.Node, excludeTypes []string, includeTextMarkATi
 			var linkDestStr, ocrText string
 			if nil != linkDest {
 				linkDestStr = linkDest.TokensStr()
-				ocrText = util.GetAssetText(linkDestStr)
+				if includeOCRAssets {
+					ocrText = util.GetAssetText(linkDestStr)
+				}
 			}
 
 			linkText := n.ChildByType(ast.NodeLinkText)
@@ -343,12 +358,14 @@ func nodeStaticContent(node *ast.Node, excludeTypes []string, includeTextMarkATi
 			if n.IsTextMarkType("a") && includeTextMarkATitleURL {
 				// 搜索不到超链接元素的 URL 和标题 https://github.com/siyuan-note/siyuan/issues/7352
 				if "" != n.TextMarkATitle {
-					buf.WriteString(" " + util.UnescapeHTML(n.TextMarkATitle))
+					buf.WriteString(" ")
+					buf.WriteString(util.UnescapeHTML(n.TextMarkATitle))
 				}
 
 				if !strings.HasPrefix(n.TextMarkAHref, "assets/") || includeAssetPath {
 					href := util.UnescapeHTML(n.TextMarkAHref)
-					buf.WriteString(" " + util.UnescapeHTML(href))
+					buf.WriteString(" ")
+					buf.WriteString(util.UnescapeHTML(href))
 				}
 			}
 		case ast.NodeBackslashContent:

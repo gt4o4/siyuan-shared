@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package mcp
 
@@ -35,29 +23,120 @@ import (
 const protocolVersion20260728 = "2026-07-28"
 
 var (
-	httpHandlerOnce sync.Once
-	httpHandler     http.Handler
+	httpHandlerOnce          sync.Once
+	httpHandler              http.Handler
+	externalToolProjectionMu sync.RWMutex
+	externalToolProjection   *toolProjection
 )
+
+type toolProjection struct {
+	mu      sync.RWMutex
+	server  *mcpsdk.Server
+	allows  func(*tools.Tool) bool
+	exposed map[string]*tools.Tool
+}
 
 func Serve(ginServer *gin.Engine) {
 	handler := getHTTPHandler()
 
 	// MCP 工具暴露任意工作区文件读写删、SQL、插件分发等管理级原语，必须要求管理员角色，
 	// 否则 Publish 匿名模式注入的 RoleReader JWT 可经此链路越权调用全部工具。
-	ginServer.POST("/mcp", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, serveHTTP(handler))
-	ginServer.GET("/mcp", model.CheckAuth, model.CheckAdminRole, serveHTTP(handler))
-	ginServer.DELETE("/mcp", model.CheckAuth, model.CheckAdminRole, model.CheckReadonly, serveHTTP(handler))
+	ginServer.POST("/mcp", model.CheckMCPAuth, model.CheckAdminRole, model.CheckReadonly, serveHTTP(handler))
+	ginServer.GET("/mcp", model.CheckMCPAuth, model.CheckAdminRole, serveHTTP(handler))
+	ginServer.DELETE("/mcp", model.CheckMCPAuth, model.CheckAdminRole, model.CheckReadonly, serveHTTP(handler))
 }
 
 func getHTTPHandler() http.Handler {
 	httpHandlerOnce.Do(func() {
 		server := newServer()
+		projection := newToolProjection(server, externalMCPToolAllowed)
+		externalToolProjectionMu.Lock()
+		externalToolProjection = projection
+		externalToolProjectionMu.Unlock()
 		tools.ObserveRegistry(func(name string, tool *tools.Tool) {
-			syncTool(server, name, tool)
+			projection.sync(name, tool)
 		})
 		httpHandler = newHTTPHandler(server)
 	})
 	return httpHandler
+}
+
+func newToolProjection(server *mcpsdk.Server, allows func(*tools.Tool) bool) *toolProjection {
+	return &toolProjection{server: server, allows: allows, exposed: map[string]*tools.Tool{}}
+}
+
+func (projection *toolProjection) sync(name string, tool *tools.Tool) {
+	projection.mu.Lock()
+	defer projection.mu.Unlock()
+
+	current := projection.exposed[name]
+	if tool == nil || !projection.allows(tool) {
+		if current != nil {
+			delete(projection.exposed, name)
+			projection.server.RemoveTools(name)
+		}
+		return
+	}
+	if current == tool {
+		return
+	}
+	if syncGuardedTool(projection.server, name, tool, func() bool {
+		return projection.allowsCall(name, tool)
+	}) {
+		projection.exposed[name] = tool
+	} else {
+		delete(projection.exposed, name)
+	}
+}
+
+func (projection *toolProjection) allowsCall(name string, tool *tools.Tool) bool {
+	projection.mu.RLock()
+	current := projection.exposed[name]
+	projection.mu.RUnlock()
+	return current == tool && projection.allows(tool)
+}
+
+func (projection *toolProjection) refresh() {
+	allTools := tools.GetAllTools()
+	registered := make(map[string]bool, len(allTools))
+	for _, tool := range allTools {
+		registered[tool.Name] = true
+		projection.sync(tool.Name, tool)
+	}
+
+	projection.mu.RLock()
+	exposedNames := make([]string, 0, len(projection.exposed))
+	for name := range projection.exposed {
+		if !registered[name] {
+			exposedNames = append(exposedNames, name)
+		}
+	}
+	projection.mu.RUnlock()
+	for _, name := range exposedNames {
+		projection.sync(name, nil)
+	}
+}
+
+// RefreshToolExposure 根据当前配置刷新 SiYuan MCP 服务对外提供的能力。
+func RefreshToolExposure() {
+	externalToolProjectionMu.RLock()
+	projection := externalToolProjection
+	externalToolProjectionMu.RUnlock()
+	if projection != nil {
+		projection.refresh()
+	}
+}
+
+func externalMCPToolAllowed(tool *tools.Tool) bool {
+	confAIReadSnapshot := model.Conf.LoadAI()
+
+	if tool == nil || tool.AgentOnly || tool.Source == "mcp" || tool.Runtime == "mcp" {
+		return false
+	}
+	if model.Conf == nil || confAIReadSnapshot == nil || confAIReadSnapshot.MCP == nil {
+		return true
+	}
+	return confAIReadSnapshot.MCP.ExposurePolicy.Allows(tools.CapabilityIDForTool(tool))
 }
 
 func newServer() *mcpsdk.Server {
@@ -75,19 +154,35 @@ func privateCacheMiddleware() mcpsdk.Middleware {
 	return func(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
 		return func(ctx context.Context, method string, request mcpsdk.Request) (mcpsdk.Result, error) {
 			result, err := next(ctx, method, request)
+			if err != nil {
+				return result, err
+			}
+			// SDK results may hold typed nil pointers, which still match the type switch.
 			switch cacheable := result.(type) {
 			case *mcpsdk.DiscoverResult:
-				cacheable.CacheScope = "private"
+				if cacheable != nil {
+					cacheable.CacheScope = "private"
+				}
 			case *mcpsdk.ListToolsResult:
-				cacheable.CacheScope = "private"
+				if cacheable != nil {
+					cacheable.CacheScope = "private"
+				}
 			case *mcpsdk.ListPromptsResult:
-				cacheable.CacheScope = "private"
+				if cacheable != nil {
+					cacheable.CacheScope = "private"
+				}
 			case *mcpsdk.ListResourcesResult:
-				cacheable.CacheScope = "private"
+				if cacheable != nil {
+					cacheable.CacheScope = "private"
+				}
 			case *mcpsdk.ListResourceTemplatesResult:
-				cacheable.CacheScope = "private"
+				if cacheable != nil {
+					cacheable.CacheScope = "private"
+				}
 			case *mcpsdk.ReadResourceResult:
-				cacheable.CacheScope = "private"
+				if cacheable != nil {
+					cacheable.CacheScope = "private"
+				}
 			}
 			return result, err
 		}
@@ -101,21 +196,22 @@ func newHTTPHandler(server *mcpsdk.Server) http.Handler {
 	modern := mcpsdk.NewStreamableHTTPHandler(getServer, &mcpsdk.StreamableHTTPOptions{
 		Stateless:                    true,
 		JSONResponse:                 true,
-		CrossOriginProtection:        http.NewCrossOriginProtection(),
+		DisableLocalhostProtection:   true,
 		PropagateRequestCancellation: true,
 	})
 	legacy := mcpsdk.NewStreamableHTTPHandler(getServer, &mcpsdk.StreamableHTTPOptions{
-		JSONResponse:          true,
-		CrossOriginProtection: http.NewCrossOriginProtection(),
+		JSONResponse:               true,
+		DisableLocalhostProtection: true,
 	})
 
-	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if isModernRequest(request) {
 			modern.ServeHTTP(writer, request)
 			return
 		}
 		legacy.ServeHTTP(writer, request)
 	})
+	return http.NewCrossOriginProtection().Handler(handler)
 }
 
 func isModernRequest(request *http.Request) bool {
@@ -131,20 +227,25 @@ func serveHTTP(handler http.Handler) gin.HandlerFunc {
 }
 
 func syncTool(server *mcpsdk.Server, name string, tool *tools.Tool) {
+	syncGuardedTool(server, name, tool, nil)
+}
+
+func syncGuardedTool(server *mcpsdk.Server, name string, tool *tools.Tool, allowed func() bool) (synced bool) {
 	if tool == nil {
 		server.RemoveTools(name)
-		return
+		return true
 	}
 	validator, err := tools.CompileToolValidator(tool)
 	if err != nil {
 		server.RemoveTools(name)
 		logging.LogWarnf("mcp: skip invalid server tool [%s]: %v", name, err)
-		return
+		return false
 	}
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			server.RemoveTools(name)
 			logging.LogWarnf("mcp: skip invalid server tool [%s]: %v", name, recovered)
+			synced = false
 		}
 	}()
 
@@ -162,6 +263,19 @@ func syncTool(server *mcpsdk.Server, name string, tool *tools.Tool) {
 	}
 
 	server.AddTool(sdkTool, func(ctx context.Context, request *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+		if allowed != nil && !allowed() {
+			return toolErrorResult("MCP capability is disabled or no longer available"), nil
+		}
+		releaseWrite, admissionErr := model.AcquireMCPToolWrite()
+		if admissionErr != nil {
+			return toolErrorResult(admissionErr.Error()), nil
+		}
+		// 内置同步工具在落盘阶段自行取得写租约；工具名相同的扩展仍按普通工具保护。
+		if tool == tools.SyncTool {
+			releaseWrite()
+		} else {
+			defer releaseWrite()
+		}
 		arguments := map[string]any{}
 		if len(request.Params.Arguments) > 0 {
 			if err := json.Unmarshal(request.Params.Arguments, &arguments); err != nil {
@@ -232,6 +346,7 @@ func syncTool(server *mcpsdk.Server, name string, tool *tools.Tool) {
 			IsError:           result.IsError,
 		}, nil
 	})
+	return true
 }
 
 func convertContentItem(item tools.ContentItem) (mcpsdk.Content, error) {

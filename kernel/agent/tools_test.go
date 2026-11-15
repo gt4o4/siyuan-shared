@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package agent
 
@@ -21,10 +9,24 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
+	"unicode/utf8"
 
 	"github.com/sashabaranov/go-openai"
+	"github.com/siyuan-note/siyuan/kernel/conf"
 	"github.com/siyuan-note/siyuan/kernel/mcp/tools"
 )
+
+func TestDoomSignaturePreservesUTF8(t *testing.T) {
+	for _, query := range []string{strings.Repeat("中", 30), strings.Repeat("😀", 30), strings.Repeat("a", 63) + "中"} {
+		sig := buildDoomSignature("search", "fulltext", map[string]any{"query": query})
+		const prefix = "search::action=fulltext::query="
+		if !utf8.ValidString(sig) || !strings.HasPrefix(sig, prefix) || !strings.HasSuffix(sig, "...") ||
+			len(sig)-len(prefix) > 67 {
+			t.Fatalf("invalid signature: %q", sig)
+		}
+	}
+}
 
 func TestConvertSchemaZodOptionalFields(t *testing.T) {
 	schema := tools.ToolSchema{
@@ -104,6 +106,93 @@ func TestConvertSchemaPreservesRawJSONSchema(t *testing.T) {
 	}
 }
 
+func TestParseToolArgsPreservesNestedValues(t *testing.T) {
+	args, err := parseToolArgs(
+		`{"todos":[{"content":"Task","status":"in_progress"}],"enabled":true,"count":2}`,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	todos, ok := args["todos"].([]any)
+	if !ok || len(todos) != 1 {
+		t.Fatalf("unexpected todos: %#v", args["todos"])
+	}
+	todo, ok := todos[0].(map[string]any)
+	if !ok || todo["content"] != "Task" || todo["status"] != "in_progress" {
+		t.Fatalf("unexpected todo: %#v", todos[0])
+	}
+	if args["enabled"] != true || args["count"] != float64(2) {
+		t.Fatalf("unexpected primitive values: %#v", args)
+	}
+}
+
+func TestParseToolArgsDoesNotRewriteValidStrings(t *testing.T) {
+	args, err := parseToolArgs(`{"arguments":"{\"value\":1}","enabled":"true"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if args["arguments"] != `{"value":1}` || args["enabled"] != "true" {
+		t.Fatalf("string values were rewritten: %#v", args)
+	}
+
+	empty, err := parseToolArgs(" ")
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("empty arguments were not accepted: %#v, %v", empty, err)
+	}
+}
+
+func TestParseToolArgsRejectsInvalidJSON(t *testing.T) {
+	if _, err := parseToolArgs(`{"questions":[`); err == nil {
+		t.Fatal("invalid JSON was accepted")
+	}
+	if _, err := parseToolArgs(`null`); err == nil {
+		t.Fatal("null arguments were accepted")
+	}
+	if _, err := parseToolArgs(`[]`); err == nil {
+		t.Fatal("array arguments were accepted")
+	}
+}
+
+func TestDoomLoopTracksFailedQuestionCalls(t *testing.T) {
+	var tracker doomLoopTracker
+	for range doomLoopStopThreshold {
+		tracker.record("question", "", map[string]any{}, true)
+	}
+	if tracker.count != doomLoopStopThreshold || tracker.prevName != "question" {
+		t.Fatalf("failed question calls were not tracked: %#v", tracker)
+	}
+
+	tracker.record("question", "", map[string]any{}, false)
+	if tracker.count != 0 || tracker.prevSig != "" || tracker.prevName != "" {
+		t.Fatalf("successful question call did not reset tracker: %#v", tracker)
+	}
+}
+
+func TestDoomLoopTracksDocumentParents(t *testing.T) {
+	var tracker doomLoopTracker
+	args := map[string]any{"notebook": "box", "parentID": "parent-a", "path": ""}
+	for range doomLoopWarnThreshold {
+		tracker.record("document", "create", args, true)
+	}
+	if tracker.count != doomLoopWarnThreshold {
+		t.Fatalf("repeated document failure was not tracked: %#v", tracker)
+	}
+	args["parentID"] = "parent-b"
+	tracker.record("document", "create", args, true)
+	if tracker.count != 1 {
+		t.Fatalf("different parent was treated as a repeated failure: %#v", tracker)
+	}
+	args["parentID"] = ""
+	tracker.record("document", "create", args, true)
+	if tracker.count != 1 {
+		t.Fatalf("notebook root was treated as the previous parent: %#v", tracker)
+	}
+	tracker.record("document", "create", args, false)
+	if tracker.count != 0 {
+		t.Fatalf("successful document call did not reset tracker: %#v", tracker)
+	}
+}
+
 func TestResultToStringUsesStructuredContent(t *testing.T) {
 	result := resultToString(tools.CallToolResult{
 		StructuredContent: map[string]any{"status": "ok"},
@@ -157,22 +246,35 @@ func TestExecuteToolPreservesModelAttachments(t *testing.T) {
 	})
 	t.Cleanup(func() { tools.RemoveTool(toolName) })
 
-	result := executeTool(context.Background(), openai.ToolCall{
+	result := executeCapability(context.Background(), openai.ToolCall{
 		Function: openai.FunctionCall{Name: toolName, Arguments: `{}`},
-	}, "")
+	}, "", toolCapabilityForTest(t, toolName))
 	if result.Text != "attached" || result.IsError || len(result.ModelAttachments) != 1 ||
 		string(result.ModelAttachments[0].Data) != "image" {
 		t.Fatalf("model attachment was not preserved: %#v", result)
 	}
 }
 
-func TestValidateToolCallInputRejectsMissingActionBeforeConfirmation(t *testing.T) {
+func toolCapabilityForTest(t *testing.T, name string) *capabilityRegistration {
+	t.Helper()
+	tool, validator := tools.LookupToolWithValidator(name)
+	if tool == nil || validator == nil {
+		t.Fatalf("missing test capability: %s", name)
+	}
+	return &capabilityRegistration{
+		ID: tools.CapabilityIDForTool(tool), ModelName: tool.Name,
+		Source: tool.Source, Runtime: tool.Runtime, Tool: tool, Validator: validator,
+	}
+}
+
+func TestValidateCapabilityCallRejectsMissingActionBeforeConfirmation(t *testing.T) {
 	args := map[string]any{"id": "20260707184942-prjqwqo"}
-	if _, _, err := validateToolCallInput(t.Context(), "outline", args); err == nil {
+	registration := toolCapabilityForTest(t, "outline")
+	if err := validateCapabilityCall(t.Context(), registration, args); err == nil {
 		t.Fatal("outline without its required action must fail validation before confirmation")
 	}
 	args["action"] = "get"
-	if _, _, err := validateToolCallInput(t.Context(), "outline", args); err != nil {
+	if err := validateCapabilityCall(t.Context(), registration, args); err != nil {
 		t.Fatalf("valid outline arguments were rejected: %s", err)
 	}
 }
@@ -226,18 +328,19 @@ func TestNeedsConfirmScopesReadOnlyActionsByToolSource(t *testing.T) {
 	if !needsConfirm("unzip", "", nil) || !needsLocalSnapshot("unzip", "") {
 		t.Fatal("actionless write tool must require confirmation and create a local snapshot")
 	}
-	if needsConfirm("web_fetch", "", nil) || needsLocalSnapshot("web_fetch", "") {
-		t.Fatal("actionless read-only tool must not require confirmation or create a snapshot")
+	if !needsConfirm("web_fetch", "", nil) || !needsLocalSnapshot("web_fetch", "") {
+		t.Fatal("direct web fetch must confirm external requests and snapshot possible downloads")
 	}
 	if needsConfirm("todo_write", "", nil) || needsLocalSnapshot("todo_write", "") {
 		t.Fatal("agent session todo updates must not require confirmation or create a repository snapshot")
 	}
-	if needsConfirm("http_request", "", nil) || needsLocalSnapshot("http_request", "") {
-		t.Fatal("http_request without an action defaults to a read-only GET")
+	if !needsConfirm("http_request", "", nil) || !needsLocalSnapshot("http_request", "") {
+		t.Fatal("default HTTP GET must confirm egress and snapshot possible downloads")
 	}
 }
 
 func TestImageToolActionEffects(t *testing.T) {
+	setupLocalToolEffectsTest(t)
 	if needsConfirm("image", "list", nil) || needsLocalSnapshot("image", "list") {
 		t.Fatal("listing document images must be a confirmation-free local read")
 	}
@@ -265,6 +368,31 @@ func TestSkillToolActionEffects(t *testing.T) {
 	}
 }
 
+func TestBazaarToolActionEffects(t *testing.T) {
+	for _, action := range []string{"list", "installed", "updates", "readme"} {
+		if needsConfirm("bazaar", action, nil) != (action != "installed") || needsLocalSnapshot("bazaar", action) {
+			t.Errorf("Bazaar query %q must confirm network requests only, without a local snapshot", action)
+		}
+	}
+	for _, action := range []string{"install", "uninstall", "update", "update_all", "install_local", "enable", "disable"} {
+		if !needsConfirm("bazaar", action, nil) || !needsLocalSnapshot("bazaar", action) {
+			t.Errorf("Bazaar write %q must confirm and snapshot", action)
+		}
+	}
+	if buildDoomSignature("bazaar", "readme", map[string]any{"packageName": "one"}) ==
+		buildDoomSignature("bazaar", "readme", map[string]any{"packageName": "two"}) {
+		t.Fatal("different package requests must not be treated as a repeated call")
+	}
+	if buildDoomSignature("bazaar", "installed", map[string]any{"offset": 0, "enabled": true}) ==
+		buildDoomSignature("bazaar", "installed", map[string]any{"offset": 20, "enabled": true}) {
+		t.Fatal("different pages must not be treated as a repeated call")
+	}
+	if buildDoomSignature("bazaar", "installed", map[string]any{"enabled": true}) ==
+		buildDoomSignature("bazaar", "installed", map[string]any{"enabled": false}) {
+		t.Fatal("different enable filters must not be treated as a repeated call")
+	}
+}
+
 func TestQueryToolActionEffects(t *testing.T) {
 	tests := []struct {
 		toolName     string
@@ -272,6 +400,7 @@ func TestQueryToolActionEffects(t *testing.T) {
 		needsConfirm bool
 	}{
 		{toolName: "sql", action: "query"},
+		{toolName: "sql", action: "schema"},
 		{toolName: "sql", action: ""},
 		{toolName: "sql", action: "select"},
 		{toolName: "search", action: "fulltext"},
@@ -291,14 +420,42 @@ func TestQueryToolActionEffects(t *testing.T) {
 	}
 }
 
-func TestNativeReadOnlyToolActions(t *testing.T) {
-	for _, action := range []string{"open_setting", "focus_block", "open_document", "open_search"} {
-		if needsConfirm("frontend", action, nil) || needsLocalSnapshot("frontend", action) {
-			t.Errorf("built-in frontend action %q must not require confirmation or create a snapshot", action)
-		}
+func TestBrowserCapabilityEffects(t *testing.T) {
+	setupLocalToolEffectsTest(t)
+	renderedFetch := &capabilityRegistration{ID: "native/frontend/web_page_fetch", ModelName: "frontend__web_page_fetch",
+		Source: "native", Runtime: "browser", Effects: tools.ToolEffects{DataEgress: true}, EffectsDeclared: true}
+	if required, _ := capabilityConfirmRequirement(renderedFetch, "", nil, false, nil); !required || needsCapabilitySnapshot(renderedFetch, "") {
+		t.Fatal("rendered page fetch must require confirmation without creating a local snapshot")
 	}
-	if !needsConfirm("frontend", "plugin__example__write", nil) {
-		t.Fatal("plugin frontend actions with unknown effects must require confirmation")
+	if required, _ := capabilityConfirmRequirement(renderedFetch, "", nil, true, nil); required {
+		t.Fatal("rendered page fetch must honor session approval")
+	}
+	native := &capabilityRegistration{ID: "native/frontend/open_search", ModelName: "frontend__open_search", Source: "native", Runtime: "browser"}
+	if required, _ := capabilityConfirmRequirement(native, "", nil, false, nil); required || needsCapabilitySnapshot(native, "") {
+		t.Fatal("built-in browser capability must not require confirmation or create a snapshot")
+	}
+	pluginUnknown := &capabilityRegistration{ID: "plugin/frontend/example/run", ModelName: "frontend__plugin_run", Source: "plugin", Runtime: "browser"}
+	if required, _ := capabilityConfirmRequirement(pluginUnknown, "", nil, false, nil); !required {
+		t.Fatal("plugin browser capability with unknown effects must require confirmation")
+	}
+	pluginRead := &capabilityRegistration{ID: "plugin/frontend/example/read", ModelName: "frontend__plugin_read", Source: "plugin", Runtime: "browser", Effects: tools.ToolEffects{LocalRead: true}, EffectsDeclared: true}
+	if required, _ := capabilityConfirmRequirement(pluginRead, "", nil, false, nil); required {
+		t.Fatal("plugin browser capability declared local-read-only must not require confirmation")
+	}
+	pluginActions := &capabilityRegistration{
+		ID: "plugin/frontend/example/actions", ModelName: "frontend__plugin_actions", Source: "plugin", Runtime: "browser",
+		ActionEffects: map[string]tools.ToolEffects{
+			"read":  {LocalRead: true},
+			"write": {LocalWrite: true},
+		},
+	}
+	if required, _ := capabilityConfirmRequirement(pluginActions, "read", nil, false, nil); required {
+		t.Fatal("plugin browser action with explicit read effects must not require confirmation")
+	}
+	for _, action := range []string{"write", "unknown"} {
+		if required, _ := capabilityConfirmRequirement(pluginActions, action, nil, false, nil); !required {
+			t.Fatal("plugin browser write or undeclared action must require confirmation")
+		}
 	}
 	for _, action := range []string{"html", "preview"} {
 		if needsConfirm("export", action, nil) || needsLocalSnapshot("export", action) {
@@ -335,7 +492,74 @@ func TestConfirmSessionAcceptsResponseOnce(t *testing.T) {
 	}
 }
 
-func TestQuestionAndFrontendResultsAreAcceptedOnce(t *testing.T) {
+func TestAgentConfirmationDeadlineZeroHasNoLimit(t *testing.T) {
+	if deadline := optionalAgentDeadline(0); deadline != nil {
+		t.Fatal("zero confirmation timeout created a deadline")
+	}
+	if deadline := optionalAgentDeadline(time.Second); deadline == nil {
+		t.Fatal("positive confirmation timeout did not create a deadline")
+	}
+	if timeout := resolveBrowserCapabilityTimeout(0); timeout != time.Duration(conf.DefaultAgentConfirmTimeout)*time.Second {
+		t.Fatalf("zero confirmation timeout disabled the browser capability timeout: %v", timeout)
+	}
+}
+
+func TestQuestionTimeoutReusesConfirmTimeout(t *testing.T) {
+	if timeout := resolveQuestionTimeout(0); timeout != 0 {
+		t.Fatalf("zero confirmation timeout created a question timeout: %v", timeout)
+	}
+	if timeout := resolveQuestionTimeout(-time.Second); timeout != fallbackQuestionTimeout {
+		t.Fatalf("negative confirmation timeout did not use the fallback question timeout: %v", timeout)
+	}
+	if timeout := resolveQuestionTimeout(90 * time.Second); timeout != 90*time.Second {
+		t.Fatalf("positive confirmation timeout was not reused by question: %v", timeout)
+	}
+}
+
+func TestQuestionWithoutDeadlineWaitsForAnswer(t *testing.T) {
+	events := make(chan AgentEvent, 1)
+	resultCh := make(chan string, 1)
+	go func() {
+		resultCh <- handleQuestion(context.Background(), map[string]any{"questions": []any{}}, "test-round", events, resolveQuestionTimeout(0))
+	}()
+
+	event := <-events
+	if event.Type != "question" || event.QuestionID == "" {
+		t.Fatalf("unexpected question event: %#v", event)
+	}
+	if !AnswerQuestion(event.QuestionID, []string{"no deadline answer"}) {
+		t.Fatal("question answer was rejected")
+	}
+	select {
+	case result := <-resultCh:
+		if result != "no deadline answer" {
+			t.Fatalf("unexpected question result: %q", result)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("question without a deadline did not wait for the answer")
+	}
+}
+
+func TestQuestionTimeoutReportsTimeout(t *testing.T) {
+	events := make(chan AgentEvent, 1)
+	resultCh := make(chan string, 1)
+	go func() {
+		resultCh <- handleQuestion(context.Background(), map[string]any{"questions": []any{}}, "test-round", events, 50*time.Millisecond)
+	}()
+
+	event := <-events
+	if event.Type != "question" || event.QuestionID == "" {
+		t.Fatalf("unexpected question event: %#v", event)
+	}
+	if result := <-resultCh; result != "No answer received (timed out)." {
+		t.Fatalf("unexpected question result: %q", result)
+	}
+	if AnswerQuestion(event.QuestionID, []string{"late answer"}) {
+		t.Fatal("answer was accepted after the question timed out")
+	}
+}
+
+func TestQuestionAndBrowserCapabilityResultsAreAcceptedOnce(t *testing.T) {
 	const questionID = "test-question"
 	questionCh := make(chan QuestionAnswer, 1)
 	questionChannelsMu.Lock()
@@ -348,16 +572,37 @@ func TestQuestionAndFrontendResultsAreAcceptedOnce(t *testing.T) {
 		t.Fatalf("unexpected question answer: %#v", answer)
 	}
 
-	const callID = "test-frontend-call"
-	frontendCh := make(chan frontendCallResult, 1)
-	frontendCallChannelsMu.Lock()
-	frontendCallChannels[callID] = frontendCh
-	frontendCallChannelsMu.Unlock()
-	if !FrontendToolResult(callID, "result", false) || FrontendToolResult(callID, "duplicate", false) {
-		t.Fatal("frontend result was not accepted exactly once")
+	const callID = "test-browser-capability-call"
+	capabilityCh := make(chan browserCapabilityResult, 1)
+	browserCapabilityChannelsMu.Lock()
+	browserCapabilityChannels[callID] = capabilityCh
+	browserCapabilityChannelsMu.Unlock()
+	if !BrowserCapabilityResult(callID, "result", nil, false, false) ||
+		BrowserCapabilityResult(callID, "duplicate", nil, false, false) {
+		t.Fatal("browser capability result was not accepted exactly once")
 	}
-	if result := <-frontendCh; result.result != "result" || result.isError {
-		t.Fatalf("unexpected frontend result: %#v", result)
+	if result := <-capabilityCh; result.result != "result" || result.isError {
+		t.Fatalf("unexpected browser capability result: %#v", result)
+	}
+}
+
+func TestQuestionEventIncludesRoundID(t *testing.T) {
+	const roundID = "test-round"
+	events := make(chan AgentEvent, 1)
+	resultCh := make(chan string, 1)
+	go func() {
+		resultCh <- handleQuestion(context.Background(), map[string]any{"questions": []any{}}, roundID, events, time.Second)
+	}()
+
+	event := <-events
+	if event.Type != "question" || event.RoundID != roundID || event.QuestionID == "" {
+		t.Fatalf("unexpected question event: %#v", event)
+	}
+	if !AnswerQuestion(event.QuestionID, []string{"answer"}) {
+		t.Fatal("question answer was rejected")
+	}
+	if result := <-resultCh; result != "answer" {
+		t.Fatalf("unexpected question result: %q", result)
 	}
 }
 
@@ -375,17 +620,60 @@ func TestWaitCompletionKeepsConcurrentlyAcceptedResults(t *testing.T) {
 		t.Fatalf("accepted question answer was lost: %#v, accepted=%v", answer, accepted)
 	}
 
-	const callID = "test-frontend-timeout-race"
-	frontendCh := make(chan frontendCallResult, 1)
-	frontendCallChannelsMu.Lock()
-	frontendCallChannels[callID] = frontendCh
-	frontendCallChannelsMu.Unlock()
-	if !FrontendToolResult(callID, "accepted", false) {
-		t.Fatal("frontend result was rejected")
+	const callID = "test-browser-capability-timeout-race"
+	capabilityCh := make(chan browserCapabilityResult, 1)
+	browserCapabilityChannelsMu.Lock()
+	browserCapabilityChannels[callID] = capabilityCh
+	browserCapabilityChannelsMu.Unlock()
+	if !BrowserCapabilityResult(callID, "accepted", nil, false, false) {
+		t.Fatal("browser capability result was rejected")
 	}
-	result, accepted := finishFrontendWait(callID, frontendCh)
+	result, accepted := finishBrowserCapabilityWait(callID, capabilityCh)
 	if !accepted || result.result != "accepted" || result.isError {
-		t.Fatalf("accepted frontend result was lost: %#v, accepted=%v", result, accepted)
+		t.Fatalf("accepted browser capability result was lost: %#v, accepted=%v", result, accepted)
+	}
+}
+
+func TestBrowserCapabilityValidatesStructuredOutput(t *testing.T) {
+	validationTool := &tools.Tool{
+		Name:        "test_browser_capability_output",
+		Description: "Test browser capability output",
+		InputSchema: tools.ToolSchema{Type: "object"},
+		OutputSchema: &tools.ToolSchema{
+			Type: "object",
+			Properties: map[string]tools.Property{
+				"value": {Type: "string"},
+			},
+			Required: []string{"value"},
+		},
+	}
+	validator, err := tools.CompileToolValidator(validationTool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registration := &capabilityRegistration{
+		ID:        "native/frontend/test_output",
+		ModelName: validationTool.Name,
+		Runtime:   "browser",
+		Validator: validator,
+	}
+	events := make(chan AgentEvent, 1)
+	resultCh := make(chan executedToolResult, 1)
+	go func() {
+		resultCh <- handleBrowserCapability(context.Background(), openai.ToolCall{
+			Function: openai.FunctionCall{Name: validationTool.Name, Arguments: `{}`},
+		}, registration, map[string]any{}, events, time.Second)
+	}()
+	event := <-events
+	if event.Type != "browser_capability_call" {
+		t.Fatalf("unexpected event: %#v", event)
+	}
+	if !BrowserCapabilityResult(event.CallID, "", map[string]any{"value": 1}, true, false) {
+		t.Fatal("browser capability result was rejected")
+	}
+	result := <-resultCh
+	if !result.IsError || !result.ExecutionUnknown {
+		t.Fatalf("invalid structured output was accepted: %#v", result)
 	}
 }
 
@@ -405,9 +693,9 @@ func TestExecuteToolPropagatesUnknownExecution(t *testing.T) {
 	})
 	t.Cleanup(func() { tools.RemoveTool(toolName) })
 
-	result := executeTool(context.Background(), openai.ToolCall{
+	result := executeCapability(context.Background(), openai.ToolCall{
 		Function: openai.FunctionCall{Name: toolName, Arguments: `{}`},
-	}, "")
+	}, "", toolCapabilityForTest(t, toolName))
 	if result.Text != "result unknown" || !result.IsError || !result.ExecutionUnknown {
 		t.Fatalf("unexpected tool result: %#v", result)
 	}
@@ -431,9 +719,9 @@ func TestExecuteToolRejectsInvalidStructuredOutput(t *testing.T) {
 	}
 	t.Cleanup(func() { tools.RemoveTool(toolName) })
 
-	result := executeTool(context.Background(), openai.ToolCall{
+	result := executeCapability(context.Background(), openai.ToolCall{
 		Function: openai.FunctionCall{Name: toolName, Arguments: `{}`},
-	}, "")
+	}, "", toolCapabilityForTest(t, toolName))
 	if !result.IsError || !result.ExecutionUnknown || !strings.Contains(result.Text, "must not be retried automatically") {
 		t.Fatalf("unexpected tool result: %#v", result)
 	}
@@ -460,9 +748,9 @@ func TestExecuteToolCancellationMarksExecutionUnknown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	resultCh := make(chan executedToolResult, 1)
 	go func() {
-		resultCh <- executeTool(ctx, openai.ToolCall{
+		resultCh <- executeCapability(ctx, openai.ToolCall{
 			Function: openai.FunctionCall{Name: toolName, Arguments: `{}`},
-		}, "")
+		}, "", toolCapabilityForTest(t, toolName))
 	}()
 	<-started
 	cancel()
@@ -487,9 +775,9 @@ func TestExecuteToolDoesNotStartAfterCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	result := executeTool(ctx, openai.ToolCall{
+	result := executeCapability(ctx, openai.ToolCall{
 		Function: openai.FunctionCall{Name: toolName, Arguments: `{}`},
-	}, "")
+	}, "", toolCapabilityForTest(t, toolName))
 	if invoked || result.Text == "" || !result.IsError || result.ExecutionUnknown {
 		t.Fatalf("pre-cancelled tool was handled incorrectly: invoked=%v, result=%#v", invoked, result)
 	}

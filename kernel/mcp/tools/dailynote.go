@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package tools
 
@@ -25,13 +13,19 @@ import (
 
 var DailynoteTool = &Tool{
 	Name:        "dailynote",
-	Description: "Daily note operations. Actions: create(notebook) — create/open today's note, append(notebook, data, dataType?) / prepend(...) add a block.",
+	Description: "Daily note operations. Actions: create(notebook) — create/open today's note, append(notebook, data, dataType?) / prepend(...) add a block to today's note. append/prepend create today's note automatically if it does not exist; no preliminary create call is needed.",
+	EffectScope: EffectScopeLocal,
+	ActionEffects: map[string]ToolEffects{
+		"create":  {LocalWrite: true},
+		"append":  {LocalWrite: true},
+		"prepend": {LocalWrite: true},
+	},
 	InputSchema: ToolSchema{
 		Type: "object",
 		Properties: map[string]Property{
 			"action":   {Type: "string", Description: "Operation", Enum: []string{"create", "append", "prepend"}},
 			"notebook": {Type: "string", Description: "Notebook ID"},
-			"data":     {Type: "string", Description: "Content in markdown or dom (for append/prepend)"},
+			"data":     {Type: "string", Description: "Content in markdown or dom (for append/prepend).\n\n" + markdownContentSyntax},
 			"dataType": {Type: "string", Description: "Content type: markdown or dom", Enum: []string{"markdown", "dom"}},
 		},
 		Required: []string{"action", "notebook"},
@@ -115,7 +109,7 @@ func dailynoteAppend(args map[string]any) (CallToolResult, error) {
 	}}
 
 	model.PerformTransactions(&transactions)
-	model.FlushTxQueue()
+	model.WaitForTransactions(transactions)
 	util.PushReloadProtyle(parentID)
 	return CallToolResult{Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("block appended to daily note: %s", parentID)}}}, nil
 }
@@ -153,7 +147,7 @@ func dailynotePrepend(args map[string]any) (CallToolResult, error) {
 	}}
 
 	model.PerformTransactions(&transactions)
-	model.FlushTxQueue()
+	model.WaitForTransactions(transactions)
 	util.PushReloadProtyle(parentID)
 	return CallToolResult{Content: []ContentItem{{Type: "text", Text: fmt.Sprintf("block prepended to daily note: %s", parentID)}}}, nil
 }

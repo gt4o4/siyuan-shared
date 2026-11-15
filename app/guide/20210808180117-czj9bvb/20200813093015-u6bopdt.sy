@@ -7,16 +7,123 @@
 		"id": "20200813093015-u6bopdt",
 		"title": "常见问题",
 		"type": "doc",
-		"updated": "20260807094000"
+		"updated": "20261109130054"
 	},
 	"Children": [
+		{
+			"ID": "20261002224424-luj4eko",
+			"Type": "NodeHeading",
+			"HeadingLevel": 2,
+			"Properties": {
+				"id": "20261002224424-luj4eko",
+				"updated": "20261002224424"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "如何重置设置？"
+				}
+			]
+		},
+		{
+			"ID": "20261002224424-je9rmm7",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261002224424-je9rmm7",
+				"updated": "20261002224424"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "在 "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "设置"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " - "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "应用"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " - "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "维护"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " - "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "重置设置"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 中可恢复当前工作空间的普通偏好设置、内置快捷键、菜单和移动端工具栏设置，以及当前窗口布局。"
+				}
+			]
+		},
+		{
+			"ID": "20261002224424-65x3gs3",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261002224424-65x3gs3",
+				"updated": "20261002224424"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "笔记、资源、历史、快照、闪卡学习进度及当前历史保留天数都会保留。账号、认证、同步和加密密钥、AI/MCP 连接、密钥、变量、语言及网络配置也会保留。"
+				}
+			]
+		},
+		{
+			"ID": "20261002224424-4h4rx7c",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261002224424-4h4rx7c",
+				"updated": "20261002224424"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "已安装的主题和图标不会删除，但会切换为默认外观。插件、代码片段及其启用状态、插件快捷键和已保存布局都会保留。更新通道、无障碍、Linux 输入法和开机自启等应用全局设置保持不变。"
+				}
+			]
+		},
+		{
+			"ID": "20261002224424-dosrx3o",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261002224424-dosrx3o",
+				"updated": "20261002224424"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "重置前，连接此工作空间的所有客户端必须完成保存；保存失败时会取消重置。随后客户端会重新加载。通过本地桌面应用发起时，桌面应用会在重载后退出，请重新启动；移动端和浏览器端仅重新加载。"
+				}
+			]
+		},
 		{
 			"ID": "20210428213311-2hv9zwx",
 			"Type": "NodeHeading",
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20210428213311-2hv9zwx",
-				"updated": "20210428213320"
+				"updated": "20261016191102"
 			},
 			"Children": [
 				{
@@ -60,7 +167,7 @@
 			"ListData": {},
 			"Properties": {
 				"id": "20210428213927-rbcfx2y",
-				"updated": "20230622164014"
+				"updated": "20261016191102"
 			},
 			"Children": [
 				{
@@ -407,7 +514,7 @@
 					},
 					"Properties": {
 						"id": "20210428214049-1kebc1m",
-						"updated": "20210512152317"
+						"updated": "20261016191102"
 					},
 					"Children": [
 						{
@@ -415,7 +522,7 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20210428214054-0vorr4s",
-								"updated": "20210512152317"
+								"updated": "20261016191102"
 							},
 							"Children": [
 								{
@@ -429,7 +536,14 @@
 								},
 								{
 									"Type": "NodeText",
-									"Data": "​​​​ 后缀的文件用于保存文档数据，数据格式为 JSON"
+									"Data": "​​​​ 后缀的文件用于保存文档数据。普通笔记本的文档数据以 JSON 保存；加密笔记本的文档文件以密文保存，不能直接作为 JSON 读取或编辑，详见"
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "block-ref",
+									"TextMarkBlockRefID": "20260907120000-crycn01",
+									"TextMarkBlockRefSubtype": "d",
+									"TextMarkTextContent": "加密笔记本"
 								}
 							]
 						}
@@ -443,7 +557,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20210918114843-6xo7hmr",
-				"updated": "20260803171606"
+				"updated": "20261016191102"
 			},
 			"Children": [
 				{
@@ -505,7 +619,7 @@
 			"ListData": {},
 			"Properties": {
 				"id": "20220619171630-l6d80j9",
-				"updated": "20260803171606"
+				"updated": "20261016191102"
 			},
 			"Children": [
 				{
@@ -517,7 +631,7 @@
 					},
 					"Properties": {
 						"id": "20220619171640-j9yl9en",
-						"updated": "20260803171606"
+						"updated": "20261016191102"
 					},
 					"Children": [
 						{
@@ -525,7 +639,7 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20220619171640-gqfe61q",
-								"updated": "20260803171606"
+								"updated": "20261016191102"
 							},
 							"Children": [
 								{
@@ -539,7 +653,7 @@
 								},
 								{
 									"Type": "NodeText",
-									"Data": "​ - "
+									"Data": " - "
 								},
 								{
 									"Type": "NodeTextMark",
@@ -548,7 +662,16 @@
 								},
 								{
 									"Type": "NodeText",
-									"Data": "​ - "
+									"Data": " - "
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "数据"
+								},
+								{
+									"Type": "NodeText",
+									"Data": " - "
 								},
 								{
 									"Type": "NodeTextMark",
@@ -557,16 +680,39 @@
 								},
 								{
 									"Type": "NodeText",
-									"Data": "​/ "
+									"Data": " / "
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "设置"
+								},
+								{
+									"Type": "NodeText",
+									"Data": " - "
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "应用"
+								},
+								{
+									"Type": "NodeText",
+									"Data": " - "
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "数据"
+								},
+								{
+									"Type": "NodeText",
+									"Data": " - "
 								},
 								{
 									"Type": "NodeTextMark",
 									"TextMarkType": "kbd",
 									"TextMarkTextContent": "导入 Data"
-								},
-								{
-									"Type": "NodeText",
-									"Data": "​"
 								}
 							]
 						}
@@ -581,7 +727,7 @@
 					},
 					"Properties": {
 						"id": "20220619171850-ldv3f31",
-						"updated": "20260803171606"
+						"updated": "20261016191102"
 					},
 					"Children": [
 						{
@@ -589,7 +735,7 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20220619171850-jx3xl19",
-								"updated": "20260803171606"
+								"updated": "20261016191102"
 							},
 							"Children": [
 								{
@@ -599,11 +745,11 @@
 								{
 									"Type": "NodeTextMark",
 									"TextMarkType": "kbd",
-									"TextMarkTextContent": "右侧栏"
+									"TextMarkTextContent": "设置"
 								},
 								{
 									"Type": "NodeText",
-									"Data": "​ - "
+									"Data": " - "
 								},
 								{
 									"Type": "NodeTextMark",
@@ -612,7 +758,16 @@
 								},
 								{
 									"Type": "NodeText",
-									"Data": "​ - "
+									"Data": " - "
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "数据"
+								},
+								{
+									"Type": "NodeText",
+									"Data": " - "
 								},
 								{
 									"Type": "NodeTextMark",
@@ -621,16 +776,39 @@
 								},
 								{
 									"Type": "NodeText",
-									"Data": "​/ "
+									"Data": " / "
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "设置"
+								},
+								{
+									"Type": "NodeText",
+									"Data": " - "
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "应用"
+								},
+								{
+									"Type": "NodeText",
+									"Data": " - "
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "数据"
+								},
+								{
+									"Type": "NodeText",
+									"Data": " - "
 								},
 								{
 									"Type": "NodeTextMark",
 									"TextMarkType": "kbd",
 									"TextMarkTextContent": "导入 Data"
-								},
-								{
-									"Type": "NodeText",
-									"Data": "​"
 								}
 							]
 						}
@@ -687,7 +865,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20220909095627-1vhq1bl",
-				"updated": "20260803163243"
+				"updated": "20261024163013"
 			},
 			"Children": [
 				{
@@ -821,7 +999,7 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20220909100742-liorixq",
-				"updated": "20260803163243"
+				"updated": "20261024163013"
 			},
 			"Children": [
 				{
@@ -835,7 +1013,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​ - "
+					"Data": " - "
 				},
 				{
 					"Type": "NodeTextMark",
@@ -844,7 +1022,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": "​ - "
+					"Data": " - "
 				},
 				{
 					"Type": "NodeTextMark",
@@ -853,7 +1031,7 @@
 				},
 				{
 					"Type": "NodeText",
-					"Data": " ​ 中 "
+					"Data": " 中 "
 				},
 				{
 					"Type": "NodeTextMark",
@@ -877,12 +1055,26 @@
 			]
 		},
 		{
+			"ID": "20261109130054-ip43hy3",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261109130054-ip43hy3",
+				"updated": "20261109130054"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "由更高版本写入的文档，如果属性仍可读取，会在文档树中以淡色占位显示标题和图标。请升级思源后再打开或编辑，仍可通过展开箭头浏览下级文档。"
+				}
+			]
+		},
+		{
 			"ID": "20220501230739-whydmx1",
 			"Type": "NodeHeading",
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20220501230739-whydmx1",
-				"updated": "20220501231230"
+				"updated": "20261018005815"
 			},
 			"Children": [
 				{
@@ -892,25 +1084,120 @@
 			]
 		},
 		{
-			"ID": "20220501230748-wvrcnzu",
+			"ID": "20261017212429-ssbwd82",
 			"Type": "NodeParagraph",
 			"Properties": {
-				"id": "20220501230748-wvrcnzu",
-				"updated": "20220501231314"
+				"id": "20261017212429-ssbwd82",
+				"updated": "20261018005815"
 			},
 			"Children": [
 				{
 					"Type": "NodeText",
-					"Data": "在列表项下的第一个子块是省略块标的。可以将光标移到这个块中，然后通过 "
+					"Data": "默认使用精简块标。只有一个列表项时，也会保留列表块和列表项块标。若要补全当前块及其连续首个子块中被精简隐藏的块标，可启用 "
 				},
 				{
 					"Type": "NodeTextMark",
 					"TextMarkType": "kbd",
-					"TextMarkTextContent": "Ctrl+/"
+					"TextMarkTextContent": "设置"
 				},
 				{
 					"Type": "NodeText",
-					"Data": " 触发它的块标菜单。"
+					"Data": " - "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "编辑器"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " - "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "行为"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " - "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "显示完整块标"
+				},
+				{
+					"Type": "NodeText",
+					"Data": "，通过各个块标直接打开对应块的菜单或拖拽该块。"
+				}
+			]
+		},
+		{
+			"ID": "20220501230748-wvrcnzu",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20220501230748-wvrcnzu",
+				"updated": "20260809232000"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "当内容块的块标未显示时，可将光标置于该内容块中，多次按 "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "Shift"
+				},
+				{
+					"Type": "NodeText",
+					"Data": "+"
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "↑"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 选中该内容块，再按 "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "Ctrl"
+				},
+				{
+					"Type": "NodeText",
+					"Data": "+"
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "/"
+				},
+				{
+					"Type": "NodeText",
+					"Data": " 打开块标菜单；macOS 使用 "
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "⌘"
+				},
+				{
+					"Type": "NodeText",
+					"Data": "+"
+				},
+				{
+					"Type": "NodeTextMark",
+					"TextMarkType": "kbd",
+					"TextMarkTextContent": "/"
+				},
+				{
+					"Type": "NodeText",
+					"Data": "。"
 				}
 			]
 		},
@@ -1015,7 +1302,7 @@
 			"HeadingLevel": 2,
 			"Properties": {
 				"id": "20211222010224-qmstv96",
-				"updated": "20250115163009"
+				"updated": "20261021111316"
 			},
 			"Children": [
 				{
@@ -1025,12 +1312,40 @@
 			]
 		},
 		{
+			"ID": "20261021111316-1f48qy9",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261021111316-1f48qy9",
+				"updated": "20261021111316"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "数据仓库密钥用于快照和同步，与加密笔记本的主密码及密钥备份不同。重置数据仓库不能恢复遗失的加密笔记本主密码，也不能替代匹配的加密密钥备份。"
+				}
+			]
+		},
+		{
+			"ID": "20261021111316-2xzo53c",
+			"Type": "NodeParagraph",
+			"Properties": {
+				"id": "20261021111316-2xzo53c",
+				"updated": "20261021111316"
+			},
+			"Children": [
+				{
+					"Type": "NodeText",
+					"Data": "重置前，请先正常退出思源并备份完整工作空间；如有加密笔记本，还应单独保存匹配的加密密钥备份，并确认主密码可用。完成新同步并确认数据完整、恢复材料已妥善保存后，再按需删除旧同步目录和云端快照。"
+				}
+			]
+		},
+		{
 			"ID": "20220708110122-ygojquy",
 			"Type": "NodeList",
 			"ListData": {},
 			"Properties": {
 				"id": "20220708110122-ygojquy",
-				"updated": "20250115163009"
+				"updated": "20261021111316"
 			},
 			"Children": [
 				{
@@ -1042,7 +1357,7 @@
 					},
 					"Properties": {
 						"id": "20220708110317-qinyreu",
-						"updated": "20220708110317"
+						"updated": "20261021111316"
 					},
 					"Children": [
 						{
@@ -1050,7 +1365,7 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20220708110317-bm72kaa",
-								"updated": "20220708110319"
+								"updated": "20261021111316"
 							},
 							"Children": [
 								{
@@ -1070,6 +1385,15 @@
 									"Type": "NodeTextMark",
 									"TextMarkType": "kbd",
 									"TextMarkTextContent": "账号与同步"
+								},
+								{
+									"Type": "NodeText",
+									"Data": " - "
+								},
+								{
+									"Type": "NodeTextMark",
+									"TextMarkType": "kbd",
+									"TextMarkTextContent": "数据仓库"
 								},
 								{
 									"Type": "NodeText",
@@ -1106,7 +1430,7 @@
 					},
 					"Properties": {
 						"id": "20220708110319-8i1b89v",
-						"updated": "20250115163009"
+						"updated": "20261021111316"
 					},
 					"Children": [
 						{
@@ -1114,7 +1438,7 @@
 							"Type": "NodeParagraph",
 							"Properties": {
 								"id": "20220708110319-t01rvor",
-								"updated": "20220708110411"
+								"updated": "20261021111316"
 							},
 							"Children": [
 								{
@@ -1131,7 +1455,7 @@
 							},
 							"Properties": {
 								"id": "20211222010251-cxpfurj",
-								"updated": "20250115163009"
+								"updated": "20261021111316"
 							},
 							"Children": [
 								{
@@ -1145,7 +1469,7 @@
 									},
 									"Properties": {
 										"id": "20220708105959-z16oh3d",
-										"updated": "20250115163009"
+										"updated": "20261021111316"
 									},
 									"Children": [
 										{
@@ -1153,30 +1477,12 @@
 											"Type": "NodeParagraph",
 											"Properties": {
 												"id": "20220708105959-rehb5y0",
-												"updated": "20250115163009"
+												"updated": "20261021111316"
 											},
 											"Children": [
 												{
 													"Type": "NodeText",
-													"Data": "手动备份好数据，可通过 "
-												},
-												{
-													"Type": "NodeTextMark",
-													"TextMarkType": "kbd",
-													"TextMarkTextContent": "导出 Data"
-												},
-												{
-													"Type": "NodeText",
-													"Data": "​ 或者直接在文件系统上复制 "
-												},
-												{
-													"Type": "NodeTextMark",
-													"TextMarkType": "code",
-													"TextMarkTextContent": "工作空间/data/"
-												},
-												{
-													"Type": "NodeText",
-													"Data": "​ 文件夹"
+													"Data": "正常退出思源后，备份完整工作空间；如有加密笔记本，同时保留匹配的加密密钥备份和主密码"
 												}
 											]
 										}
@@ -1192,7 +1498,8 @@
 										"Num": 2
 									},
 									"Properties": {
-										"id": "20220708105945-eha9x8j"
+										"id": "20220708105945-eha9x8j",
+										"updated": "20261021111316"
 									},
 									"Children": [
 										{
@@ -1200,7 +1507,7 @@
 											"Type": "NodeParagraph",
 											"Properties": {
 												"id": "20220708105945-vphvmxv",
-												"updated": "20220708105947"
+												"updated": "20261021111316"
 											},
 											"Children": [
 												{
@@ -1216,6 +1523,15 @@
 													"Type": "NodeTextMark",
 													"TextMarkType": "kbd",
 													"TextMarkTextContent": "账号与同步"
+												},
+												{
+													"Type": "NodeText",
+													"Data": " - "
+												},
+												{
+													"Type": "NodeTextMark",
+													"TextMarkType": "kbd",
+													"TextMarkTextContent": "数据仓库"
 												},
 												{
 													"Type": "NodeText",
@@ -1249,7 +1565,8 @@
 										"Num": 3
 									},
 									"Properties": {
-										"id": "20211222010407-ze0dmor"
+										"id": "20211222010407-ze0dmor",
+										"updated": "20261021111316"
 									},
 									"Children": [
 										{
@@ -1257,7 +1574,7 @@
 											"Type": "NodeParagraph",
 											"Properties": {
 												"id": "20211222010407-cc9eipr",
-												"updated": "20220708110523"
+												"updated": "20261021111316"
 											},
 											"Children": [
 												{
@@ -1279,7 +1596,7 @@
 									},
 									"Properties": {
 										"id": "20211222010438-yululiy",
-										"updated": "20220708111112"
+										"updated": "20261021111316"
 									},
 									"Children": [
 										{
@@ -1287,12 +1604,12 @@
 											"Type": "NodeParagraph",
 											"Properties": {
 												"id": "20211222010438-jpbst6x",
-												"updated": "20220708111112"
+												"updated": "20261021111316"
 											},
 											"Children": [
 												{
 													"Type": "NodeText",
-													"Data": "云端使用新的同步目录，旧的同步目录已经无法使用，可以删除"
+													"Data": "云端改用新的同步目录；完成新同步并确认数据完整、恢复材料已妥善保存后，再按需删除旧同步目录"
 												}
 											]
 										}
@@ -1309,7 +1626,7 @@
 									},
 									"Properties": {
 										"id": "20220708111036-jlcjqa1",
-										"updated": "20220708111119"
+										"updated": "20261021111316"
 									},
 									"Children": [
 										{
@@ -1317,12 +1634,12 @@
 											"Type": "NodeParagraph",
 											"Properties": {
 												"id": "20220708111036-9ly6dz0",
-												"updated": "20220708111119"
+												"updated": "20261021111316"
 											},
 											"Children": [
 												{
 													"Type": "NodeText",
-													"Data": "已有的云端快照已经无法使用，可以删除"
+													"Data": "完成新同步并确认数据完整、恢复材料已妥善保存后，再按需删除旧云端快照"
 												}
 											]
 										}
@@ -1339,7 +1656,8 @@
 			"Type": "NodeHeading",
 			"HeadingLevel": 2,
 			"Properties": {
-				"id": "20201224120447-kp1qdga"
+				"id": "20201224120447-kp1qdga",
+				"updated": "20261016202635"
 			},
 			"Children": [
 				{
@@ -1402,7 +1720,7 @@
 			"Type": "NodeParagraph",
 			"Properties": {
 				"id": "20230406111610-s0vr122",
-				"updated": "20230806002852"
+				"updated": "20261016202635"
 			},
 			"Children": [
 				{
@@ -1414,6 +1732,10 @@
 					"TextMarkType": "a",
 					"TextMarkAHref": "https://ld246.com/sponsor",
 					"TextMarkTextContent": "靠爱发电 - 链滴"
+				},
+				{
+					"Type": "NodeText",
+					"Data": "。"
 				}
 			]
 		},

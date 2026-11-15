@@ -1,28 +1,47 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/88250/lute/ast"
 	"github.com/siyuan-note/siyuan/kernel/treenode"
 	"github.com/siyuan-note/siyuan/kernel/util"
 )
+
+func TestHeadingMoveChildrenByBlockIDs(t *testing.T) {
+	document := &ast.Node{Type: ast.NodeDocument, ID: "document"}
+	heading := &ast.Node{Type: ast.NodeHeading, ID: "heading", HeadingLevel: 2}
+	headingIAL := &ast.Node{Type: ast.NodeKramdownBlockIAL}
+	first := treenode.NewParagraph("20260819000300-first00")
+	firstIAL := &ast.Node{Type: ast.NodeKramdownBlockIAL}
+	second := treenode.NewParagraph("20260819000301-second0")
+	secondIAL := &ast.Node{Type: ast.NodeKramdownBlockIAL}
+	acquired := treenode.NewParagraph("20260819000302-acquire")
+	for _, node := range []*ast.Node{heading, headingIAL, first, firstIAL, second, secondIAL, acquired} {
+		document.AppendChild(node)
+	}
+
+	children, ok := headingMoveChildrenByBlockIDs(heading, []string{first.ID, second.ID})
+	if !ok {
+		t.Fatal("expected the stored heading move group to resolve")
+	}
+	if want := []*ast.Node{first, firstIAL, second, secondIAL}; !slices.Equal(children, want) {
+		t.Fatalf("unexpected heading move children: got %v, want %v", children, want)
+	}
+
+	children, ok = headingMoveChildrenByBlockIDs(heading, []string{})
+	if !ok || 0 != len(children) || nil == children {
+		t.Fatal("an explicit empty move group should move only the heading")
+	}
+	if _, ok = headingMoveChildrenByBlockIDs(heading, []string{second.ID}); ok {
+		t.Fatal("a stored move group must be a prefix of the current heading children")
+	}
+}
 
 func TestMovingFoldHeadingIntoDescendantContainer(t *testing.T) {
 	headingChild := &ast.Node{Type: ast.NodeSuperBlock, ID: "heading-child"}

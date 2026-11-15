@@ -1,19 +1,23 @@
+import {mobileInputDialog} from "../../dialog/mobileInputDialog";
+import {mobileConfirmDialog} from "../../dialog/mobileConfirmDialog";
+import {MobileDialog} from "../../dialog/mobileDialog";
+import {switchWorkspace, importConfiguration} from "../util/resourceConfig";
+import {config as configApi} from "../util/configApi";
 /// #if !BROWSER
 import {ipcRenderer} from "electron";
 import * as path from "path";
 /// #endif
 import type {SettingTabBuilder} from "../setting/builder";
+import {confirmResetSettings} from "../setting/reset";
 import {Constants} from "../../constants";
-import {fetchPost} from "../../util/fetch";
+import {fetchPost, fetchSyncPost} from "../../util/fetch";
 /// #if !MOBILE
-import {exportLayout} from "../../layout/util";
+import {reloadUI} from "../../layout/util";
 /// #endif
-import {exitSiYuan} from "../../dialog/processSystem";
 import {showMessage} from "../../dialog/message";
 import {isMac, saveExportFile} from "../../protyle/util/compatibility";
+import {escapeHtmlTextAndAttr} from "../../util/escape";
 /// #if MOBILE
-import {confirmDialog} from "../../dialog/confirmDialog";
-import {Dialog} from "../../dialog";
 import {isInMobileApp} from "../../protyle/util/compatibility";
 import {pathPosix} from "../../util/pathName";
 import {escapeAttr, escapeHtml} from "../../util/escape";
@@ -23,10 +27,13 @@ import {afterExport} from "../../protyle/export/util";
 /// #endif
 import {genConfigItemMainHtml, genConfigItemName} from "../render/fragments";
 import {sendAppSetting} from "./appRuntime";
+import {getHostCapabilities} from "../../util/hostCapabilities";
+import {genWorkspaceStorageHtml, mountWorkspaceStorage} from "./workspaceStorage";
+import {importDataFile} from "../../menus/importData";
 
 /// #if MOBILE
 const registerAppWorkspaceGroup = (tab: SettingTabBuilder) => {
-    if (!isInMobileApp() || window.siyuan.config.readonly) {
+    if (!isInMobileApp() || window.siyuan.config.readonly || !getHostCapabilities().workspaces) {
         return;
     }
     const group = tab.group("workspace", window.siyuan.languages.workspaceList);
@@ -53,7 +60,7 @@ const renderWorkspaceList = (workspaceDirElement: Element) => {
     fetchPost("/api/system/getWorkspaces", {}, (response) => {
         let html = "";
         response.data.forEach((item: IWorkspace) => {
-            html += `<li data-path="${escapeAttr(item.path)}" class="b3-list-item b3-list-item--narrow${window.siyuan.config.system.workspaceDir === item.path ? " b3-list-item--focus" : ""}">
+            html += `<li data-path="${escapeAttr(escapeHtml(item.path))}" class="b3-list-item b3-list-item--narrow${window.siyuan.config.system.workspaceDir === item.path ? " b3-list-item--focus" : ""}">
     <span class="b3-list-item__text">${escapeHtml(pathPosix().basename(item.path))}</span>
     <span data-type="remove" class="b3-list-item__action">
         <svg><use xlink:href="#iconMin"></use></svg>
@@ -65,6 +72,9 @@ const renderWorkspaceList = (workspaceDirElement: Element) => {
 };
 
 const mountAppWorkspaceSlot = (root: HTMLElement) => {
+    if (!getHostCapabilities().workspaces) {
+        return;
+    }
     const workspaceDirElement = root.querySelector("#workspaceDir");
     if (!workspaceDirElement) {
         return;
@@ -77,9 +87,9 @@ const mountAppWorkspaceSlot = (root: HTMLElement) => {
                 fetchPost("/api/system/getMobileWorkspaces", {}, (response) => {
                     let selectHTML = "";
                     response.data.forEach((item: string, index: number) => {
-                        selectHTML += `<option value="${escapeAttr(item)}"${index === 0 ? " selected" : ""}>${escapeHtml(pathPosix().basename(item))}</option>`;
+                        selectHTML += `<option value="${escapeAttr(escapeHtml(item))}"${index === 0 ? " selected" : ""}>${escapeHtml(pathPosix().basename(item))}</option>`;
                     });
-                    const openWorkspaceDialog = new Dialog({
+                    const openWorkspaceDialog = new MobileDialog({
                         title: window.siyuan.languages.openBy,
                         content: `<div class="b3-dialog__content">
     <select class="b3-text-field fn__block">${selectHTML}</select>
@@ -101,10 +111,8 @@ const mountAppWorkspaceSlot = (root: HTMLElement) => {
                             openWorkspaceDialog.destroy();
                             return;
                         }
-                        confirmDialog(window.siyuan.languages.confirm, `${pathPosix().basename(window.siyuan.config.system.workspaceDir)} -> ${pathPosix().basename(openPath)}?`, () => {
-                            fetchPost("/api/system/setWorkspaceDir", {path: openPath}, () => {
-                                void exitSiYuan(false);
-                            });
+                        mobileConfirmDialog(window.siyuan.languages.confirm, `${escapeHtml(pathPosix().basename(window.siyuan.config.system.workspaceDir))} -> ${escapeHtml(pathPosix().basename(openPath))}?`, () => {
+                            switchWorkspace(openPath);
                         });
                     });
                 });
@@ -112,32 +120,20 @@ const mountAppWorkspaceSlot = (root: HTMLElement) => {
                 event.stopPropagation();
                 break;
             } else if (target.id === "creatWorkspace") {
-                const createWorkspaceDialog = new Dialog({
+                const createWorkspaceDialog = mobileInputDialog({
+                    awaitConfirm: true,
                     title: window.siyuan.languages.new,
-                    content: `<div class="b3-dialog__content">
-    <input class="b3-text-field fn__block">
-</div>
-<div class="b3-dialog__action">
-    <button class="b3-button b3-button--cancel">${window.siyuan.languages.cancel}</button><div class="fn__space"></div>
-    <button class="b3-button b3-button--text">${window.siyuan.languages.confirm}</button>
-</div>`,
-                    width: "92vw",
+                    value: "",
+                    onConfirm: async (value) => {
+                        const response = await fetchSyncPost("/api/system/createWorkspaceDir", {
+                            path: pathPosix().join(pathPosix().dirname(window.siyuan.config.system.workspaceDir), value),
+                        });
+                        if (response.code !== 0) return false;
+                        renderWorkspaceList(workspaceDirElement);
+                        return true;
+                    },
                 });
                 createWorkspaceDialog.element.setAttribute("data-key", Constants.DIALOG_CREATEWORKSPACE);
-                const inputElement = createWorkspaceDialog.element.querySelector("input") as HTMLInputElement;
-                inputElement.focus();
-                const btnsElement = createWorkspaceDialog.element.querySelectorAll(".b3-button");
-                btnsElement[0].addEventListener("click", () => {
-                    createWorkspaceDialog.destroy();
-                });
-                btnsElement[1].addEventListener("click", () => {
-                    fetchPost("/api/system/createWorkspaceDir", {
-                        path: pathPosix().join(pathPosix().dirname(window.siyuan.config.system.workspaceDir), inputElement.value),
-                    }, () => {
-                        renderWorkspaceList(workspaceDirElement);
-                        createWorkspaceDialog.destroy();
-                    });
-                });
                 event.preventDefault();
                 event.stopPropagation();
                 break;
@@ -146,24 +142,30 @@ const mountAppWorkspaceSlot = (root: HTMLElement) => {
                 if (!removePath) {
                     break;
                 }
-                fetchPost("/api/system/removeWorkspaceDir", {path: removePath}, () => {
-                    renderWorkspaceList(workspaceDirElement);
-                    confirmDialog(window.siyuan.languages.deleteOpConfirm, window.siyuan.languages.removeWorkspacePhysically.replace("${x}", removePath), () => {
-                        fetchPost("/api/system/removeWorkspaceDirPhysically", {path: removePath});
-                    }, undefined, true);
-                });
                 event.preventDefault();
                 event.stopPropagation();
+                if (removePath === window.siyuan.config.system.workspaceDir) {
+                    fetchPost("/api/system/removeWorkspaceDir", {path: removePath});
+                    break;
+                }
+                mobileConfirmDialog(window.siyuan.languages.deleteOpConfirm, window.siyuan.languages.removeWorkspacePhysically.replace("${x}", () => escapeHtml(removePath)), async () => {
+                    const response = await fetchSyncPost("/api/system/removeWorkspaceDirPhysically", {path: removePath});
+                    if (response.code !== 0) return false;
+                    renderWorkspaceList(workspaceDirElement);
+                    return true;
+                }, () => {
+                    fetchPost("/api/system/removeWorkspaceDir", {path: removePath}, () => {
+                        renderWorkspaceList(workspaceDirElement);
+                    });
+                }, true, undefined, undefined, {awaitConfirm: true});
                 break;
             } else if (target.classList.contains("b3-list-item") && !target.classList.contains("b3-list-item--focus")) {
                 const workspacePath = target.getAttribute("data-path");
                 if (!workspacePath) {
                     break;
                 }
-                confirmDialog(window.siyuan.languages.confirm, `${pathPosix().basename(window.siyuan.config.system.workspaceDir)} -> ${pathPosix().basename(workspacePath)}?`, () => {
-                    fetchPost("/api/system/setWorkspaceDir", {path: workspacePath}, () => {
-                        void exitSiYuan(false);
-                    });
+                mobileConfirmDialog(window.siyuan.languages.confirm, `${escapeHtml(pathPosix().basename(window.siyuan.config.system.workspaceDir))} -> ${escapeHtml(pathPosix().basename(workspacePath))}?`, () => {
+                    switchWorkspace(workspacePath);
                 });
                 event.preventDefault();
                 event.stopPropagation();
@@ -178,13 +180,20 @@ const mountAppWorkspaceSlot = (root: HTMLElement) => {
 const genImportUploadButtonHtml = (inputId: string, label: string): string =>
     `<button class="b3-button b3-button--outline fn__flex-center fn__size200" style="position: relative">
     <input id="${inputId}" class="b3-form__upload" type="file">
-    <svg><use xlink:href="#iconDownload"></use></svg>
+    <svg><use xlink:href="#iconUpload"></use></svg>
     ${label}
 </button>`;
 
 const registerAppGeneralGroup = (tab: SettingTabBuilder) => {
     const group = tab.group("general", window.siyuan.languages.configGroupGeneral);
 
+    /// #if !BROWSER && !MOBILE
+    group.switch("system.settingsWindow", {
+        title: window.siyuan.languages.settingsWindowMode,
+        desc: window.siyuan.languages.settingsWindowModeTip,
+        save: (value) => sendAppSetting("system.settingsWindow", value),
+    });
+    /// #endif
     /// #if !BROWSER
     if (!window.siyuan.config.system.isMicrosoftStore && window.siyuan.config.system.container === "std" && window.siyuan.config.system.os !== "linux") {
         group.select("system.autoLaunch2", {
@@ -205,6 +214,7 @@ const registerAppGeneralGroup = (tab: SettingTabBuilder) => {
             window.siyuan.languages.networkProxy,
             window.siyuan.languages.about17,
             window.siyuan.languages.directConnection,
+            window.siyuan.languages.useSystemProxy,
             "SOCKS5",
             "HTTPS",
             "HTTP",
@@ -215,26 +225,151 @@ const registerAppGeneralGroup = (tab: SettingTabBuilder) => {
         html: genNetworkProxyHtml,
         afterMount: mountNetworkProxy,
     });
+    /// #if !BROWSER
+    group.slot({
+        key: "accessibilitySupport",
+        keywords: [window.siyuan.languages.accessibilitySupport, window.siyuan.languages.accessibilitySupportTip],
+        html: () => `<label class="fn__flex b3-label config-item">
+    <div class="fn__flex-1 config-item__main">
+        ${genConfigItemName(window.siyuan.languages.accessibilitySupport)}
+        <div class="b3-label__text">${window.siyuan.languages.accessibilitySupportTip}</div>
+        <div id="accessibilitySupportStatus" class="b3-label__text fn__none" role="status"></div>
+    </div>
+    <span class="fn__space"></span>
+    <input id="accessibilitySupport" class="b3-switch fn__flex-center" type="checkbox" disabled>
+</label>`,
+        afterMount: mountAccessibilitySetting,
+    });
+    if (process.platform === "linux") {
+        group.slot({
+            key: "linuxInputMethod",
+            keywords: [window.siyuan.languages.linuxInputMethod, window.siyuan.languages.linuxInputMethodTip],
+            html: () => `<label class="fn__flex b3-label config-item">
+        <div class="fn__flex-1 config-item__main">
+            ${genConfigItemName(window.siyuan.languages.linuxInputMethod)}
+            <div class="b3-label__text">${window.siyuan.languages.linuxInputMethodTip}</div>
+            <div id="linuxInputMethodStatus" class="b3-label__text fn__none" role="status"></div>
+        </div>
+        <span class="fn__space"></span>
+        <input id="linuxInputMethod" class="b3-switch fn__flex-center" type="checkbox" disabled>
+    </label>`,
+            afterMount: mountLinuxInputMethodSetting,
+        });
+    }
+    /// #endif
 };
+
+/// #if !BROWSER
+const mountAccessibilitySetting = async (root: HTMLElement) => {
+    const input = root.querySelector<HTMLInputElement>("#accessibilitySupport");
+    const status = root.querySelector<HTMLElement>("#accessibilitySupportStatus");
+    let enabled = false;
+    const showStatus = (text: string) => {
+        status.textContent = text;
+        status.classList.toggle("fn__none", !text);
+    };
+    try {
+        const setting: {enabled: boolean; override: boolean | null} = await ipcRenderer.invoke(Constants.SIYUAN_GET, {
+            cmd: "getAccessibilitySetting",
+        });
+        enabled = setting.enabled;
+        input.checked = setting.override ?? enabled;
+        if (setting.override !== null) {
+            showStatus(window.siyuan.languages.accessibilitySupportOverrideTip);
+            return;
+        }
+        input.disabled = false;
+    } catch (error) {
+        console.warn("read accessibility setting failed", error);
+        showStatus(window.siyuan.languages.accessibilitySupportError);
+        return;
+    }
+    input.addEventListener("change", async () => {
+        input.disabled = true;
+        showStatus("");
+        try {
+            const setting: {enabled: boolean} = await ipcRenderer.invoke(Constants.SIYUAN_GET, {
+                cmd: "setAccessibilitySetting", enabled: input.checked,
+            });
+            enabled = setting.enabled;
+        } catch (error) {
+            console.warn("save accessibility setting failed", error);
+            showStatus(window.siyuan.languages.accessibilitySupportError);
+        } finally {
+            input.checked = enabled;
+            input.disabled = false;
+        }
+    });
+};
+
+const mountLinuxInputMethodSetting = async (root: HTMLElement) => {
+    const input = root.querySelector<HTMLInputElement>("#linuxInputMethod");
+    const status = root.querySelector<HTMLElement>("#linuxInputMethodStatus");
+    let enabled = false;
+    const showStatus = (text: string) => {
+        status.textContent = text;
+        status.classList.toggle("fn__none", !text);
+    };
+    try {
+        const setting: {enabled: boolean; override: boolean | null} = await ipcRenderer.invoke(Constants.SIYUAN_GET, {
+            cmd: "getLinuxInputMethodSetting",
+        });
+        enabled = setting.enabled;
+        input.checked = setting.override ?? enabled;
+        if (setting.override !== null) {
+            showStatus(window.siyuan.languages.linuxInputMethodOverrideTip);
+            return;
+        }
+        input.disabled = false;
+    } catch (error) {
+        console.warn("read Linux input method setting failed", error);
+        showStatus(window.siyuan.languages.linuxInputMethodError);
+        return;
+    }
+    input.addEventListener("change", async () => {
+        input.disabled = true;
+        showStatus("");
+        try {
+            const setting: {enabled: boolean} = await ipcRenderer.invoke(Constants.SIYUAN_GET, {
+                cmd: "setLinuxInputMethodSetting", enabled: input.checked,
+            });
+            enabled = setting.enabled;
+        } catch (error) {
+            console.warn("save Linux input method setting failed", error);
+            showStatus(window.siyuan.languages.linuxInputMethodError);
+        } finally {
+            input.checked = enabled;
+            input.disabled = false;
+        }
+    });
+};
+/// #endif
+
+// 直接连接和使用系统代理时不使用主机与端口，由界面自行取值
+const isManualProxyScheme = (scheme: string) => "" !== scheme && "system" !== scheme;
 
 const genNetworkProxyHtml = (): string => {
     const proxy = window.siyuan.config.system.networkProxy;
+    const inputClass = `b3-text-field fn__flex-1${isManualProxyScheme(proxy.scheme || "") ? "" : " fn__none"}`;
     return `<div class="b3-label config-item">
     ${genConfigItemName(window.siyuan.languages.networkProxy)}
     <div class="b3-label__text">
         ${window.siyuan.languages.about17}
     </div>
-    <div class="b3-label__text fn__flex config-wrap" style="overflow: visible !important;">
+    <div class="b3-label__text fn__flex" style="overflow: visible !important;">
         <select id="networkProxyScheme" class="b3-select">
             <option value="" ${proxy.scheme === "" ? "selected" : ""}>${window.siyuan.languages.directConnection}</option>
+            <option value="system" ${proxy.scheme === "system" ? "selected" : ""}>${window.siyuan.languages.useSystemProxy}</option>
             <option value="socks5" ${proxy.scheme === "socks5" ? "selected" : ""}>SOCKS5</option>
             <option value="https" ${proxy.scheme === "https" ? "selected" : ""}>HTTPS</option>
             <option value="http" ${proxy.scheme === "http" ? "selected" : ""}>HTTP</option>
         </select>
         <span class="fn__space"></span>
-        <input id="networkProxyHost" placeholder="user:pass@IP" class="b3-text-field fn__block" value="${Lute.EscapeHTMLStr(proxy.host)}"/>
-        <span class="fn__space"></span>
-        <input id="networkProxyPort" placeholder="Port" class="b3-text-field fn__block" value="${Lute.EscapeHTMLStr(proxy.port)}" type="number"/>
+        <div id="networkProxyManual" class="fn__flex fn__flex-1">
+            <input spellcheck="false" id="networkProxyHost" placeholder="user:pass@IP" class="${inputClass}" value="${escapeHtmlTextAndAttr(proxy.host)}"/>
+            <span class="fn__space"></span>
+            <input id="networkProxyPort" placeholder="Port" class="${inputClass}" value="${escapeHtmlTextAndAttr(proxy.port)}" type="number"/>
+        </div>
         <span class="fn__space"></span>
         <button id="networkProxyConfirm" class="b3-button fn__size200 b3-button--outline">${window.siyuan.languages.confirm}</button>
     </div>
@@ -242,23 +377,30 @@ const genNetworkProxyHtml = (): string => {
 };
 
 const mountNetworkProxy = (root: HTMLElement) => {
+    const schemeElement = root.querySelector("#networkProxyScheme") as HTMLSelectElement;
+    const hostElement = root.querySelector("#networkProxyHost") as HTMLInputElement;
+    const portElement = root.querySelector("#networkProxyPort") as HTMLInputElement;
+    // 容器始终占据剩余空间，隐藏输入框后确定按钮仍保持右对齐
+    const updateManualVisibility = () => {
+        const hidden = !isManualProxyScheme(schemeElement.value);
+        hostElement.classList.toggle("fn__none", hidden);
+        portElement.classList.toggle("fn__none", hidden);
+    };
+    schemeElement.addEventListener("change", updateManualVisibility);
+    updateManualVisibility();
     root.querySelector("#networkProxyConfirm")?.addEventListener("click", () => {
-        const scheme = (root.querySelector("#networkProxyScheme") as HTMLSelectElement)?.value as Config.TSystemNetworkProxyScheme;
-        const host = (root.querySelector("#networkProxyHost") as HTMLInputElement)?.value;
-        const port = (root.querySelector("#networkProxyPort") as HTMLInputElement)?.value;
-        fetchPost("/api/system/setNetworkProxy", {scheme, host, port}, async () => {
+        const scheme = schemeElement.value as Config.TSystemNetworkProxyScheme;
+        const host = hostElement.value;
+        const port = portElement.value;
+        configApi.set("system.networkProxy", {scheme, host, port}, async () => {
             Object.assign(window.siyuan.config.system.networkProxy, {scheme, host, port});
             /// #if !BROWSER
             ipcRenderer.invoke(Constants.SIYUAN_GET, {
                 cmd: "setProxy",
-                proxyURL: `${window.siyuan.config.system.networkProxy.scheme}://${window.siyuan.config.system.networkProxy.host}:${window.siyuan.config.system.networkProxy.port}`,
+                proxyMode: scheme === "system" ? "system" : scheme === "" ? "direct" : "fixed_servers",
+                proxyURL: scheme === "system" ? "://" : `${scheme}://${host}:${port}`,
             }).then(() => {
-                exportLayout({
-                    errorExit: false,
-                    cb() {
-                        window.location.reload();
-                    },
-                });
+                void reloadUI();
             });
             /// #endif
         });
@@ -266,6 +408,9 @@ const mountNetworkProxy = (root: HTMLElement) => {
 };
 
 const registerAppDataGroup = (tab: SettingTabBuilder) => {
+    if (!getHostCapabilities().importExport) {
+        return;
+    }
     const group = tab.group("data", window.siyuan.languages.configGroupData);
 
     group.button({
@@ -273,13 +418,13 @@ const registerAppDataGroup = (tab: SettingTabBuilder) => {
         title: `${window.siyuan.languages.export} Data`,
         desc: window.siyuan.languages.exportDataTip,
         label: window.siyuan.languages.export,
-        icon: "iconUpload",
+        icon: "iconDownload",
         afterMount: mountExportData,
     });
     group.slot({
         key: "importData",
         keywords: [window.siyuan.languages.import, window.siyuan.languages.importDataTip],
-        html: () => `<div class="fn__flex b3-label config-item config-wrap">
+        html: () => `<div class="fn__flex b3-label config-item">
     ${genConfigItemMainHtml(`${window.siyuan.languages.import} Data`, window.siyuan.languages.importDataTip)}
     <span class="fn__space"></span>
     ${genImportUploadButtonHtml("importData", window.siyuan.languages.import)}
@@ -287,9 +432,11 @@ const registerAppDataGroup = (tab: SettingTabBuilder) => {
         afterMount: (root) => {
             root.querySelector("#importData")?.addEventListener("change", (event: Event) => {
                 const target = event.target as HTMLInputElement;
-                const formData = new FormData();
-                formData.append("file", target.files[0]);
-                fetchPost("/api/import/importData", formData);
+                const file = target.files?.[0];
+                target.value = "";
+                if (file) {
+                    void importDataFile(file);
+                }
             });
         },
     });
@@ -298,7 +445,7 @@ const registerAppDataGroup = (tab: SettingTabBuilder) => {
         title: window.siyuan.languages.exportConf,
         desc: window.siyuan.languages.exportConfTip,
         label: window.siyuan.languages.export,
-        icon: "iconUpload",
+        icon: "iconDownload",
         afterMount: (root) => {
             root.querySelector("#exportConf")?.addEventListener("click", () => {
                 fetchPost("/api/system/exportConf", {}, (response) => {
@@ -310,7 +457,7 @@ const registerAppDataGroup = (tab: SettingTabBuilder) => {
     group.slot({
         key: "importConf",
         keywords: [window.siyuan.languages.importConf, window.siyuan.languages.importConfTip],
-        html: () => `<div class="fn__flex b3-label config-item config-wrap">
+        html: () => `<div class="fn__flex b3-label config-item">
     ${genConfigItemMainHtml(window.siyuan.languages.importConf, window.siyuan.languages.importConfTip)}
     <span class="fn__space"></span>
     ${genImportUploadButtonHtml("importConf", window.siyuan.languages.import)}
@@ -318,33 +465,22 @@ const registerAppDataGroup = (tab: SettingTabBuilder) => {
         afterMount: (root) => {
             root.querySelector("#importConf")?.addEventListener("change", (event: Event) => {
                 const target = event.target as HTMLInputElement;
-                const formData = new FormData();
-                formData.append("file", target.files[0]);
-                fetchPost("/api/system/importConf", formData, (response) => {
-                    if (response.code !== 0) {
-                        showMessage(response.msg);
-                        return;
-                    }
-                    showMessage(window.siyuan.languages.imported);
-                    /// #if MOBILE
-                    void exitSiYuan();
-                    /// #else
-                    void exportLayout({
-                        errorExit: true,
-                        cb: exitSiYuan,
-                    });
-                    /// #endif
-                });
+                void importConfiguration(target.files[0], true);
             });
         },
     });
 };
 
 const mountExportData = (root: HTMLElement) => {
+    if (!getHostCapabilities().importExport) {
+        return;
+    }
     root.querySelector("#exportData")?.addEventListener("click", async () => {
         /// #if BROWSER
         fetchPost("/api/export/exportData", {}, (response) => {
-            saveExportFile(response.data.zip);
+            if (response.code === 0) {
+                saveExportFile(response.data.zip);
+            }
         });
         /// #else
         const result = await ipcRenderer.invoke(Constants.SIYUAN_GET, {
@@ -368,6 +504,13 @@ const mountExportData = (root: HTMLElement) => {
 const registerAppMaintenanceGroup = (tab: SettingTabBuilder) => {
     const group = tab.group("maintenance", window.siyuan.languages.configGroupMaintenance);
 
+    group.slot({
+        key: "workspaceStorage",
+        keywords: [window.siyuan.languages.workspaceStorage, window.siyuan.languages.workspaceStorageTip,
+            window.siyuan.languages.assets, "data", "repo", "history", "temp", "conf"],
+        html: genWorkspaceStorageHtml,
+        afterMount: mountWorkspaceStorage,
+    });
     group.button({
         id: "reloadUI",
         title: window.siyuan.languages.reloadUI,
@@ -417,19 +560,35 @@ const registerAppMaintenanceGroup = (tab: SettingTabBuilder) => {
         },
     });
     group.button({
-        id: "exportLog",
-        title: window.siyuan.languages.systemLog,
-        desc: window.siyuan.languages.systemLogTip,
-        label: window.siyuan.languages.export,
-        icon: "iconUpload",
-        afterMount: (root) => {
-            root.querySelector("#exportLog")?.addEventListener("click", () => {
-                fetchPost("/api/system/exportLog", {}, (response) => {
-                    void saveExportFile(response.data.zip);
-                });
-            });
+        id: "resetSettings",
+        title: window.siyuan.languages.resetSettings,
+        desc: window.siyuan.languages.resetSettingsTip,
+        label: window.siyuan.languages.reset,
+        icon: "iconUndo",
+        afterMount: root => {
+            const button = root.querySelector<HTMLButtonElement>("#resetSettings");
+            if (button) {
+                button.disabled = window.siyuan.config.readonly || window.siyuan.isPublish;
+                button.addEventListener("click", confirmResetSettings);
+            }
         },
     });
+    if (getHostCapabilities().importExport) {
+        group.button({
+            id: "exportLog",
+            title: window.siyuan.languages.systemLog,
+            desc: window.siyuan.languages.systemLogTip,
+            label: window.siyuan.languages.export,
+            icon: "iconDownload",
+            afterMount: (root) => {
+                root.querySelector("#exportLog")?.addEventListener("click", () => {
+                    fetchPost("/api/system/exportLog", {}, (response) => {
+                        void saveExportFile(response.data.zip);
+                    });
+                });
+            },
+        });
+    }
 };
 
 export const registerAppTab = (tab: SettingTabBuilder) => {
@@ -437,6 +596,8 @@ export const registerAppTab = (tab: SettingTabBuilder) => {
     registerAppWorkspaceGroup(tab);
     /// #endif
     registerAppGeneralGroup(tab);
-    registerAppDataGroup(tab);
+    if (getHostCapabilities().importExport) {
+        registerAppDataGroup(tab);
+    }
     registerAppMaintenanceGroup(tab);
 };

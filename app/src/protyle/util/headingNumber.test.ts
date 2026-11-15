@@ -1,14 +1,18 @@
 import {describe, it} from "node:test";
 import * as assert from "node:assert/strict";
-import {
+Object.assign(globalThis, {SIYUAN_VERSION: "test", NODE_ENV: "test"});
+
+const {
     buildHeadingNumberStyles,
+    headingNumberNeedsLeadingTrim,
+    headingNumberNeedsSpacing,
     invalidateHeadingNumberMeasurements,
     operationsMayChangeHeadingNumbers,
     operationsMayChangeOutline,
     renderHeadingNumberElements,
     resolveHeadingNumberEnabled,
     transactionsMayChangeRootHeadingNumberSetting
-} from "./headingNumberCore";
+} = require("./headingNumberCore") as typeof import("./headingNumberCore");
 
 class TestElement {
     private attributes = new Map<string, string>();
@@ -95,6 +99,27 @@ describe("resolveHeadingNumberEnabled", () => {
     });
 });
 
+describe("headingNumberNeedsSpacing", () => {
+    it("全角标点结尾不添加额外间距", () => {
+        assert.equal(headingNumberNeedsSpacing("一、"), false);
+        assert.equal(headingNumberNeedsSpacing("（一）"), false);
+        assert.equal(headingNumberNeedsSpacing("1）"), false);
+        assert.equal(headingNumberNeedsSpacing("1.2.3"), true);
+        assert.equal(headingNumberNeedsSpacing("1."), true);
+        assert.equal(headingNumberNeedsSpacing("①"), true);
+    });
+});
+
+describe("headingNumberNeedsLeadingTrim", () => {
+    it("裁剪全角左括号自带的行首空白", () => {
+        assert.equal(headingNumberNeedsLeadingTrim("（一）"), true);
+        assert.equal(headingNumberNeedsLeadingTrim("（1）"), true);
+        assert.equal(headingNumberNeedsLeadingTrim("(一)"), false);
+        assert.equal(headingNumberNeedsLeadingTrim("一、"), false);
+        assert.equal(headingNumberNeedsLeadingTrim("1."), false);
+    });
+});
+
 describe("renderHeadingNumbers", () => {
     it("生成不依赖标题 DOM 状态的编号样式", () => {
         const root = new TestElement();
@@ -140,17 +165,34 @@ describe("renderHeadingNumbers", () => {
     });
 
     it("使用内边距对齐标题正文和续行", () => {
-        const css = buildHeadingNumberStyles("scope", [{id: "heading", number: "1.1", offset: "12px"}]);
+        const css = buildHeadingNumberStyles("scope", [
+            {id: "heading", number: "1.1", offset: "12px"},
+            {id: "chinese-heading", number: "一、", offset: "24px"},
+        ]);
 
         assert.match(css, /data-heading-number-scope="scope"/);
         assert.match(css, /data-node-id="heading"/);
         assert.match(css, /--b3-protyle-heading-number:"1\.1"/);
+        assert.match(css, /data-node-id="heading"[^}]*calc\(12px \+ \.5em\)/);
+        assert.match(css, /data-node-id="chinese-heading"[^}]*heading-number-offset:24px/);
+        assert.match(css, /heading-number-trim-start:0px/);
+        assert.doesNotMatch(css, /calc\([^)]*\+ 0px\)/);
         assert.match(css, /padding-inline-start:var\(--b3-protyle-heading-number-offset\)/);
         assert.match(css, />:first-child\[contenteditable]::before/);
         assert.doesNotMatch(css, />\[contenteditable]/);
         assert.doesNotMatch(css, /NodeHeading"]::after/);
         assert.doesNotMatch(css, /text-indent/);
         assert.equal(buildHeadingNumberStyles("scope", []), "");
+    });
+
+    it("裁剪全角左括号并同步减少标题缩进", () => {
+        const css = buildHeadingNumberStyles("scope", [
+            {id: "parenthesized-heading", number: "（一）", offset: "36px"},
+        ]);
+
+        assert.match(css, /inset-inline-start:calc\(0px - var\(--b3-protyle-heading-number-trim-start\)\)/);
+        assert.match(css, /data-node-id="parenthesized-heading"[^}]*heading-number-offset:calc\(36px - \.5em\)/);
+        assert.match(css, /data-node-id="parenthesized-heading"[^}]*heading-number-trim-start:\.5em/);
     });
 
     it("批量插入、测量并移除编号测量节点", () => {

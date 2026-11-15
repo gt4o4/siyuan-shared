@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package util
 
@@ -37,17 +25,20 @@ const (
 )
 
 type CustomFont struct {
-	ID          string `json:"id"`
-	Family      string `json:"family"`
-	Weight      int    `json:"weight"`
-	DisplayName string `json:"displayName"`
-	URL         string `json:"url"`
+	ID          string   `json:"id"`
+	Family      string   `json:"family"`
+	Weight      int      `json:"weight"`
+	DisplayName string   `json:"displayName"`
+	Aliases     []string `json:"aliases,omitempty"`
+	Spacing     string   `json:"spacing,omitempty"`
+	URL         string   `json:"url"`
 	path        string
 }
 
 var (
 	customFonts       []*CustomFont
 	customFontsLoaded bool
+	customFontsLang   string
 	customFontsLock   sync.Mutex
 	customFontTemps   = map[string]struct{}{}
 )
@@ -208,7 +199,7 @@ func GetCustomFontFile(id string) (string, *CustomFont, bool) {
 }
 
 func loadCustomFontsLocked() {
-	if customFontsLoaded {
+	if customFontsLoaded && customFontsLang == Lang {
 		return
 	}
 	cleanupCustomFontTempsLocked()
@@ -217,6 +208,7 @@ func loadCustomFontsLocked() {
 	entries, err := os.ReadDir(CustomFontDir())
 	if err != nil {
 		customFontsLoaded = true
+		customFontsLang = Lang
 		return
 	}
 
@@ -274,6 +266,7 @@ func loadCustomFontsLocked() {
 		return customFonts[i].DisplayName < customFonts[j].DisplayName
 	})
 	customFontsLoaded = true
+	customFontsLang = Lang
 }
 
 func cleanupCustomFontTempsLocked() {
@@ -353,6 +346,8 @@ func newCustomFont(id, fontPath string, font *Font) *CustomFont {
 		Family:      CustomFontFamilyPrefix + id,
 		Weight:      weight,
 		DisplayName: font.DisplayName,
+		Aliases:     mergeFontAliases(nil, append(append([]string(nil), font.Aliases...), font.Family), font.DisplayName),
+		Spacing:     font.Spacing,
 		URL:         "/custom-fonts/" + id,
 		path:        fontPath,
 	}
@@ -368,5 +363,6 @@ func cloneCustomFonts(fonts []*CustomFont) (ret []*CustomFont) {
 
 func cloneCustomFont(font *CustomFont) *CustomFont {
 	ret := *font
+	ret.Aliases = append([]string(nil), font.Aliases...)
 	return &ret
 }

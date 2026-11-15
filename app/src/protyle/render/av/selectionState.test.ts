@@ -4,11 +4,29 @@ import {
     collapseAVCellSelectionToAnchor,
     findAVItemPointIndex,
     getAVCellSelection,
+    getAVItemSelection,
+    getAVSelectionRoot,
     reconcileAVSelectedItemIDs,
+    resolveAVSelectedCell,
     setAVCellSelection,
+    setAVItemAnchorState,
+    setAVItemSelectionState,
 } from "./selectionState";
 
 describe("database range selection helpers", () => {
+    it("resolves the selection root from an item instead of requiring a block ancestor", () => {
+        const root = {} as HTMLElement;
+        const item = {
+            closest: (selector: string) => {
+                assert.equal(selector, "[data-av-id][data-av-type]");
+                return root;
+            },
+        } as unknown as HTMLElement;
+
+        assert.equal(getAVSelectionRoot(item), root);
+        assert.equal(getAVSelectionRoot(), undefined);
+    });
+
     it("locates duplicate items by both group and item ID", () => {
         const items = [
             {groupID: "group-a", itemID: "item-1"},
@@ -64,5 +82,82 @@ describe("database range selection helpers", () => {
             focus: anchor,
             cells: [anchorCell],
         });
+    });
+
+    it("clears the cell selection when an item selection starts", () => {
+        const blockElement = {} as HTMLElement;
+        const point = {groupID: "group-a", rowID: "row-1", colID: "col-1"};
+        setAVCellSelection(blockElement, {
+            anchor: point,
+            focus: point,
+            cells: [],
+        });
+
+        setAVItemAnchorState(blockElement, "row-2", "group-a");
+
+        assert.equal(getAVCellSelection(blockElement), undefined);
+        assert.deepEqual(getAVItemSelection(blockElement), {
+            anchorID: "row-2",
+            anchorGroupID: "group-a",
+            focusID: "row-2",
+            focusGroupID: "group-a",
+        });
+    });
+
+    it("clears the item selection when a cell selection starts", () => {
+        const blockElement = {} as HTMLElement;
+        setAVItemSelectionState(blockElement, {
+            anchorID: "row-1",
+            anchorGroupID: "group-a",
+            focusID: "row-2",
+            focusGroupID: "group-a",
+        });
+        const point = {groupID: "group-a", rowID: "row-1", colID: "col-1"};
+
+        setAVCellSelection(blockElement, {
+            anchor: point,
+            focus: point,
+            cells: [],
+        });
+
+        assert.equal(getAVItemSelection(blockElement), undefined);
+        assert.deepEqual(getAVCellSelection(blockElement), {
+            anchor: point,
+            focus: point,
+            cells: [],
+        });
+    });
+
+    it("resolves a captured cell identity against the current database data", () => {
+        const previousCell = {id: "old-cell"} as IAVCell;
+        const currentCell = {id: "current-cell"} as IAVCell;
+        const column = {id: "asset-column", type: "mAsset", hidden: false} as IAVColumn;
+        const capturedCell = {
+            groupID: "",
+            rowID: "row-1",
+            colID: "asset-column",
+            rowIndex: 0,
+            colIndex: 0,
+            cell: previousCell,
+            column,
+        };
+        const data = {
+            view: {
+                id: "view",
+                groups: [],
+                columns: [column],
+                rows: [{id: "row-1", cells: [currentCell]}],
+            },
+        } as unknown as IAV;
+
+        const resolved = resolveAVSelectedCell(data, capturedCell);
+
+        assert.equal(resolved?.cell, currentCell);
+        assert.notEqual(resolved?.cell, previousCell);
+        assert.equal(resolveAVSelectedCell(data, {
+            groupID: "",
+            rowID: "missing-row",
+            colID: "asset-column",
+        }), undefined);
     });
 });

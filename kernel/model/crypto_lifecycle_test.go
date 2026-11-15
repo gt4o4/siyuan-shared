@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 package model
 
@@ -38,6 +26,23 @@ func TestAcquireEncryptedBoxOperationsAllowsEmptyClosedScope(t *testing.T) {
 		t.Fatalf("empty encrypted notebook operation set was rejected: %v", err)
 	}
 	release()
+}
+
+func TestEncryptedBoxOperationAdmissionCanWaitForInitialization(t *testing.T) {
+	boxID := "20260812223000-abcdefg"
+	cleanup := prepareEncryptedBoxLifecycleTest(t, boxID)
+	defer cleanup()
+
+	setEncryptedBoxStateWithAdmission(boxID, EncryptedBoxStateUnlocked, false)
+	if err := AcquireEncryptedBoxOperation(boxID); err == nil {
+		ReleaseEncryptedBoxOperation(boxID)
+		t.Fatal("encrypted notebook admitted an operation before initialization completed")
+	}
+	setEncryptedBoxState(boxID, EncryptedBoxStateUnlocked)
+	if err := AcquireEncryptedBoxOperation(boxID); err != nil {
+		t.Fatalf("initialized encrypted notebook rejected an operation: %v", err)
+	}
+	ReleaseEncryptedBoxOperation(boxID)
 }
 
 func TestAcquireEncryptedBoxOperationsReportsClosedScope(t *testing.T) {
@@ -103,6 +108,71 @@ func TestEncryptedBoxLifecycleWaitsForActiveOperations(t *testing.T) {
 	}
 	if state := GetEncryptedBoxState(boxID); state != EncryptedBoxStateLocked {
 		t.Fatalf("expected Locked state, got %s", state)
+	}
+}
+
+func TestActiveOperationAllowsNestedAssetReadWhileLockWaits(t *testing.T) {
+	boxID := "20260816193000-abcdefg"
+	cleanup := prepareEncryptedBoxLifecycleTest(t, boxID)
+	defer cleanup()
+	originalWorkspaceDir := util.WorkspaceDir
+	util.WorkspaceDir = filepath.Dir(util.DataDir)
+	defer func() {
+		util.WorkspaceDir = originalWorkspaceDir
+	}()
+	setEncryptedBoxState(boxID, EncryptedBoxStateUnlocked)
+
+	dek, err := GetDEKIfUnlocked(boxID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	diskName := "asset-20260816193001-abcdefg.bin"
+	plaintext := []byte("nested encrypted asset")
+	ciphertext, err := EncryptAsset(boxID, diskName, diskName, dek, plaintext)
+	clear(dek)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assetDir := filepath.Join(util.DataDir, boxID, "assets")
+	if err = os.MkdirAll(assetDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(assetDir, diskName), ciphertext, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err = AcquireEncryptedBoxOperation(boxID); err != nil {
+		t.Fatal(err)
+	}
+	HoldBoxReadLock(boxID)
+	lockDone := make(chan struct{})
+	go func() {
+		beginEncryptedBoxLock(boxID)
+		setEncryptedBoxState(boxID, EncryptedBoxStateLocked)
+		close(lockDone)
+	}()
+	deadline := time.Now().Add(time.Second)
+	for GetEncryptedBoxState(boxID) != EncryptedBoxStateLocking && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if state := GetEncryptedBoxState(boxID); state != EncryptedBoxStateLocking {
+		ReleaseBoxReadLock(boxID)
+		ReleaseEncryptedBoxOperation(boxID)
+		t.Fatalf("expected Locking state, got %s", state)
+	}
+
+	read, readErr := ReadAssetBytesInBox(boxID, "assets/"+diskName)
+	if readErr != nil || !bytes.Equal(read, plaintext) {
+		ReleaseBoxReadLock(boxID)
+		ReleaseEncryptedBoxOperation(boxID)
+		t.Fatalf("nested asset read failed: data=%q err=%v", read, readErr)
+	}
+	ReleaseBoxReadLock(boxID)
+	ReleaseEncryptedBoxOperation(boxID)
+	select {
+	case <-lockDone:
+	case <-time.After(time.Second):
+		t.Fatal("lock transition did not finish after the outer operation ended")
 	}
 }
 
@@ -249,7 +319,7 @@ func TestMissingEncryptedIdentityNeverFallsBackToNormalNotebook(t *testing.T) {
 	oldConf := Conf
 	util.DataDir = t.TempDir()
 	Conf = NewAppConf()
-	Conf.FileTree = conf.NewFileTree()
+	Conf.FileTree.Store(conf.NewFileTree())
 	boxID := "20260731160100-abcdefg"
 	defer func() {
 		forgetRuntimeEncryptedBox(boxID)
@@ -298,7 +368,7 @@ func TestMissingEncryptedIdentityNeverFallsBackToNormalNotebook(t *testing.T) {
 func TestNotebookBackupPreventsNormalIdentityDowngrade(t *testing.T) {
 	oldConf := Conf
 	Conf = NewAppConf()
-	Conf.FileTree = conf.NewFileTree()
+	Conf.FileTree.Store(conf.NewFileTree())
 	defer func() {
 		Conf = oldConf
 	}()
@@ -431,7 +501,7 @@ func TestEncryptedBoxMetadataIsNotStoredInPlaintext(t *testing.T) {
 func TestListNotebooksDoesNotInheritEncryptedOpenState(t *testing.T) {
 	oldConf := Conf
 	Conf = NewAppConf()
-	Conf.FileTree = conf.NewFileTree()
+	Conf.FileTree.Store(conf.NewFileTree())
 	defer func() {
 		Conf = oldConf
 	}()

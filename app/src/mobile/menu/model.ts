@@ -1,29 +1,39 @@
 let modelDestroyCallback: (() => void) | undefined;
-let modelBackCallback: (() => void) | undefined;
+type TModelBackCallback = () => false | void;
+
+let modelBackCallback: TModelBackCallback | undefined;
+let modelVersion = 0;
 
 export const backModel = () => {
     if (!modelBackCallback) {
         return false;
     }
     const callback = modelBackCallback;
+    const version = modelVersion;
     modelBackCallback = undefined;
-    callback();
+    const keepCallback = callback() === false;
+    if (keepCallback && modelVersion === version && !modelBackCallback) {
+        modelBackCallback = callback;
+    }
     return true;
 };
 
 export const destroyModel = () => {
-    modelDestroyCallback?.();
+    const callback = modelDestroyCallback;
     modelDestroyCallback = undefined;
     modelBackCallback = undefined;
+    modelVersion++;
+    callback?.();
 };
 
 export const openModel = (obj: {
     html: string,
     icon?: string,
+    hideCloseIcon?: boolean,
     title: string,
     bindEvent: (element: HTMLElement) => void,
     destroyCallback?: () => void,
-    backCallback?: () => void,
+    backCallback?: TModelBackCallback,
     transition?: "forward" | "back",
 }) => {
     destroyModel();
@@ -39,7 +49,10 @@ export const openModel = (obj: {
         iconElement.classList.add("fn__none");
     }
     iconElement.onclick = obj.backCallback ? backModel : null;
-    modelElement.querySelector(".toolbar__text").innerHTML = obj.title;
+    modelElement.querySelector("#modelClose").classList.toggle("fn__none", !!obj.hideCloseIcon);
+    const titleElement = modelElement.querySelector(".toolbar__text");
+    titleElement.innerHTML = obj.title;
+    titleElement.classList.toggle("toolbar__text--search", !!titleElement.querySelector(".toolbar__search"));
     const modelMainElement = modelElement.querySelector("#modelMain") as HTMLElement;
     modelMainElement.innerHTML = obj.html;
     obj.bindEvent(modelMainElement);

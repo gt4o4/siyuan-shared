@@ -1,18 +1,6 @@
-// SiYuan - Refactor your thinking
+// SiYuan - https://github.com/siyuan-note/siyuan
 // Copyright (c) 2020-present, b3log.org
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 //go:build fts5
 
@@ -23,6 +11,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -67,9 +56,9 @@ func TestRemoveDocFlushesDatabaseIndex(t *testing.T) {
 	}
 
 	Conf = NewAppConf()
-	Conf.FileTree = conf.NewFileTree()
+	Conf.FileTree.Store(conf.NewFileTree())
 	Conf.NotebookCrypto = conf.NewNotebookCrypto()
-	Conf.Sync = conf.NewSync()
+	Conf.Sync.Store(conf.NewSync())
 
 	box := &Box{ID: "20260726000000-abcdefg"}
 	boxConf := conf.NewBoxConf()
@@ -191,11 +180,11 @@ func TestDocumentTemplatesWaitForDatabaseIndex(t *testing.T) {
 	}
 
 	Conf = NewAppConf()
-	Conf.FileTree = conf.NewFileTree()
-	Conf.Editor = conf.NewEditor()
-	Conf.Export = conf.NewExport()
+	Conf.FileTree.Store(conf.NewFileTree())
+	Conf.Editor.Store(conf.NewEditor())
+	Conf.Export.Store(conf.NewExport())
 	Conf.NotebookCrypto = conf.NewNotebookCrypto()
-	Conf.Sync = conf.NewSync()
+	Conf.Sync.Store(conf.NewSync())
 	Conf.Lang = "en"
 	util.WorkingDir = filepath.Clean(filepath.Join("..", "..", "app"))
 	initLang()
@@ -233,23 +222,105 @@ func TestDocumentTemplatesWaitForDatabaseIndex(t *testing.T) {
 	dailyID := util.GetTreeID(dailyPath)
 	assertTemplateOutputIndexed(t, dailyID)
 
+	boxConf.DailyNoteSavePath = "/Daily note/{{now | date \"2006-01-02\"}}"
+	boxConf.DailyNoteTemplatePath = "/dated.md"
+	if err := box.SaveConf(boxConf); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(templateDir, "dated.md"), []byte(`.action{now | date "2006-01-02"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	target := time.Date(2024, 2, 29, 0, 0, 0, 0, time.Local)
+	info, err := GetDailyNoteInfo(box.ID, target)
+	if err != nil || info.Existed || info.ID != "" || info.HPath != "/Daily note/2024-02-29" || info.Title != "2024-02-29" {
+		t.Fatalf("unexpected missing daily note preview: %#v %v", info, err)
+	}
+	if treenode.GetBlockTreeRootByHPath(box.ID, info.HPath) != nil {
+		t.Fatal("preview created a document")
+	}
+	datedPath, existed, err := CreateDailyNoteAt(box.ID, target)
+	if err != nil || existed {
+		t.Fatalf("create dated note: %s %v %v", datedPath, existed, err)
+	}
+	datedID := util.GetTreeID(datedPath)
+	datedTree, err := LoadTreeByBlockID(datedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if datedTree.HPath != "/Daily note/2024-02-29" || datedTree.Root.IALAttr(DailyNoteAttrPrefix+"20240229") != "20240229" {
+		t.Fatalf("date did not reach path and attribute: %#v", datedTree)
+	}
+	if content := string(datedTree.Root.Text()); !strings.Contains(content, "2024-02-29") {
+		t.Fatalf("content template used another date: %s", content)
+	}
+	if strings.HasPrefix(datedID, "20240229") || strings.HasPrefix(datedTree.Root.IALAttr("updated"), "20240229") {
+		t.Fatal("target date replaced real document timestamps")
+	}
+	reusedPath, existed, err := CreateDailyNoteAt(box.ID, target)
+	if err != nil || !existed || reusedPath != datedPath {
+		t.Fatalf("dated note was duplicated: %s %v %v", reusedPath, existed, err)
+	}
+	if err := RenameDoc(box.ID, datedPath, "Renamed daily note"); err != nil {
+		t.Fatal(err)
+	}
+	reusedPath, existed, err = CreateDailyNoteAt(box.ID, target)
+	if err != nil || !existed || reusedPath != datedPath {
+		t.Fatalf("renaming duplicated an existing date: %s %v %v", reusedPath, existed, err)
+	}
+	if err := MoveDocs([]string{box.ID + datedPath}, box.ID, "/", nil); err != nil {
+		t.Fatal(err)
+	}
+	datedPath = "/" + datedID + ".sy"
+	reusedPath, existed, err = CreateDailyNoteAt(box.ID, target)
+	if err != nil || !existed || reusedPath != datedPath {
+		t.Fatalf("moving duplicated an existing date: %s %v %v", reusedPath, existed, err)
+	}
+	boxConf.DailyNoteSavePath = "/Changed daily note/{{now | date \"2006-01-02\"}}"
+	if err := box.SaveConf(boxConf); err != nil {
+		t.Fatal(err)
+	}
+	reusedPath, existed, err = CreateDailyNoteAt(box.ID, target)
+	if err != nil || !existed || reusedPath != datedPath {
+		t.Fatalf("template change duplicated an existing date: %s %v %v", reusedPath, existed, err)
+	}
+	info, err = GetDailyNoteInfo(box.ID, target)
+	if err != nil || !info.Existed || info.ID != datedID || info.HPath != "/Renamed daily note" || info.Title != "Renamed daily note" {
+		t.Fatalf("preview did not reuse actual renamed and moved document: %#v %v", info, err)
+	}
+	beforeTree, err := LoadTreeByBlockID(datedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeUpdated := beforeTree.Root.IALAttr("updated")
+	if _, err := GetDailyNoteInfo(box.ID, target); err != nil {
+		t.Fatal(err)
+	}
+	afterTree, err := LoadTreeByBlockID(datedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if beforeUpdated != afterTree.Root.IALAttr("updated") {
+		t.Fatal("preview changed document timestamps")
+	}
+
 	docID := "20260728000001-abcdefg"
-	arg := map[string]any{"docCreateTemplatePath": "/indexed.md"}
-	createdID, err := CreateWithMarkdown("", box.ID, "/Default template", "", "", docID, false, "", arg)
+	created, err := CreateDocByParent(DocumentCreateRequest{Notebook: box.ID, ID: docID,
+		TitleFormat: "plain", Title: "Default template", DocCreateTemplatePath: "/indexed.md"})
 	if nil != err {
 		t.Fatalf("create document with default template failed: %v", err)
 	}
-	if docID != createdID {
-		t.Fatalf("unexpected created document ID: got %s, want %s", createdID, docID)
+	if docID != created.ID {
+		t.Fatalf("unexpected created document ID: got %s, want %s", created.ID, docID)
 	}
 	assertTemplateOutputIndexed(t, docID)
 
 	attributeViewDocID := "20260728000002-abcdefg"
-	createdID, err = CreateWithMarkdown("", box.ID, "/Attribute view template", "", "", attributeViewDocID, false, "", nil)
+	created, err = CreateDocByParent(DocumentCreateRequest{Notebook: box.ID, ID: attributeViewDocID,
+		TitleFormat: "plain", Title: "Attribute view template"})
 	if nil != err {
 		t.Fatalf("create attribute view item document failed: %v", err)
 	}
-	if err = applyNewItemContentTemplate("/indexed.md", createdID); nil != err {
+	if err = applyNewItemContentTemplate("/indexed.md", created.ID); nil != err {
 		t.Fatalf("apply attribute view item content template failed: %v", err)
 	}
 	assertTemplateOutputIndexed(t, attributeViewDocID)

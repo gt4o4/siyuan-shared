@@ -9,6 +9,7 @@ import {hasClosestByAttribute, hasClosestByClassName, isInEmbedBlock} from "../.
 import {hideTooltip} from "../../dialog/tooltip";
 import {hideAllElements} from "../../protyle/ui/hideElements";
 import {dragOverScroll, stopScrollAnimation} from "./dragover";
+import {clearTabHoverSwitch} from "../../layout/tabDrag";
 import {setWebViewFocusable} from "../../mobile/util/mobileAppUtil";
 import {cancelManualTouch, initTouchDragBridge, isLastPointerMouse} from "../../util/touchDragBridge";
 import {isWindow} from "../../util/functions";
@@ -16,10 +17,17 @@ import {getDockByType} from "../../layout/tabUtil";
 import {fetchPost} from "../../util/fetch";
 import {initHarmonyTextSelectionMenu} from "../../util/harmonyTextSelectionMenu";
 import {clearDragTipGhost, hideDragTip} from "../../protyle/util/dragTip";
+import {formatPainter} from "../../protyle/toolbar/FormatPainter";
+import {SELECTION_TOOLBAR_SUB_ELEMENT_SOURCE} from "../../protyle/toolbar/subElementLifecycle";
+import {initHoverInput} from "../../util/hoverInput";
+import {bindGutterPointerLeave} from "./gutterPointerLeave";
+import {isInIOS} from "../../protyle/util/compatibility";
+import {scrollDraggedAVColumn} from "./avColumnDragScroll";
 
 const KANBAN_GROUP_DRAG_TYPE = `${Constants.SIYUAN_DROP_GUTTER}NodeAttributeView${Constants.ZWSP}Group${Constants.ZWSP}`.toLowerCase();
 
 export const initWindowEvent = (app: App) => {
+    initHoverInput();
     initHarmonyTextSelectionMenu();
     let lastEncryptedNotebookTouch = 0;
     const touchEncryptedNotebooks = () => {
@@ -37,7 +45,7 @@ export const initWindowEvent = (app: App) => {
     window.addEventListener("keydown", touchEncryptedNotebooks);
     document.addEventListener("touchstart", touchEncryptedNotebooks, {passive: true});
 
-    document.body.addEventListener("mouseleave", () => {
+    bindGutterPointerLeave(document.body, () => {
         if (window.siyuan.layout.leftDock) {
             window.siyuan.layout.leftDock.hideDockByHover();
             window.siyuan.layout.rightDock.hideDockByHover();
@@ -48,7 +56,7 @@ export const initWindowEvent = (app: App) => {
             item.innerHTML = "";
         });
         hideTooltip();
-    });
+    }, !!isInIOS());
 
     window.addEventListener("mousemove", (event: MouseEvent & { target: HTMLElement }) => {
         windowMouseMove(event);
@@ -91,10 +99,19 @@ export const initWindowEvent = (app: App) => {
     }, true);
 
     let scrollTarget: HTMLElement | false;
-    window.addEventListener("dragstart", clearDragTipGhost, true);
+    window.addEventListener("dragstart", () => {
+        clearDragTipGhost();
+        hideTooltip();
+    }, true);
     window.addEventListener("dragover", (event: DragEvent & { target: HTMLElement }) => {
+        if (scrollDraggedAVColumn(event)) {
+            return;
+        }
         const isDocumentTab = event.dataTransfer.types.includes(Constants.SIYUAN_DROP_DOCUMENT_TAB);
         const tabBarElement = hasClosestByClassName(event.target, "layout-tab-bar");
+        if (!tabBarElement && event.dataTransfer.types.includes(Constants.SIYUAN_DROP_BLOCK)) {
+            clearTabHoverSwitch();
+        }
         if (event.dataTransfer.types.includes(Constants.SIYUAN_DROP_TAB) && (!isDocumentTab || tabBarElement)) {
             if (!tabBarElement) {
                 stopScrollAnimation();
@@ -116,10 +133,11 @@ export const initWindowEvent = (app: App) => {
         // 拖拽文档页签或标题/列表项块标时，按浮窗模型控制文档树所在浮动 dock 的显隐：
         // 鼠标在边缘触发区或面板内则展开，离开则收起 https://github.com/siyuan-note/siyuan/issues/18043
         if (!isWindow() &&
-            (!window.siyuan.layout.leftDock.pin || !window.siyuan.layout.rightDock.pin || !window.siyuan.layout.bottomDock.pin)) {
+            (window.siyuan.layout.leftDock.isFloating() || window.siyuan.layout.rightDock.isFloating() ||
+                window.siyuan.layout.bottomDock.isFloating())) {
             const fileDock = getDockByType("file");
             // 文档树所在 dock 为浮动且文档树图标激活时才处理
-            if (fileDock && !fileDock.pin &&
+            if (fileDock && fileDock.isFloating() &&
                 document.querySelector('.dock__items > .dock__item--active[data-type="file"]')) {
                 let gutterBlockType = "";
                 for (const itemType of event.dataTransfer.types) {
@@ -182,7 +200,8 @@ export const initWindowEvent = (app: App) => {
         }
         let scrollElement;
         if (scrollTarget && scrollTarget.classList.contains("sy__file")) {
-            scrollElement = scrollTarget.firstElementChild.nextElementSibling;
+            scrollElement = (event.target as Element).closest(".file-tree__pins-list") ||
+                scrollTarget.querySelector(".file-tree__items");
         } else if (scrollTarget && scrollTarget.classList.contains("protyle")) {
             scrollElement = scrollTarget.querySelector(".protyle-content");
         }
@@ -199,14 +218,24 @@ export const initWindowEvent = (app: App) => {
         }
     });
     window.addEventListener("dragend", () => {
+        clearTabHoverSwitch();
         stopScrollAnimation();
         hideDragTip();
         clearDragTipGhost();
         window.siyuan.dragTitle = "";
     });
+    window.addEventListener("drop", stopScrollAnimation, true);
     window.addEventListener("dragleave", () => {
         stopScrollAnimation();
     });
+
+    // 侧键按下时保留光标和选区，避免进入编辑器的选择或拖拽处理；松开时执行历史导航。
+    window.addEventListener("mousedown", (event) => {
+        if (event.button === 3 || event.button === 4) {
+            event.preventDefault();
+            event.stopPropagation();
+        }
+    }, true);
 
     window.addEventListener("mouseup", (event) => {
         if (event.button === 3) {
@@ -219,6 +248,7 @@ export const initWindowEvent = (app: App) => {
     });
 
     window.addEventListener("mousedown", (event: MouseEvent & { target: HTMLElement }) => {
+        formatPainter.deactivateByPointer(event.target);
         const tabBarElement = hasClosestByClassName(event.target, "layout-tab-bar", true);
         const isWindowTabBar = tabBarElement && Array.from(tabBarElement.parentElement.children).some((item) =>
             item.classList.contains("layout-tab-bar--readonly"));
@@ -231,7 +261,8 @@ export const initWindowEvent = (app: App) => {
             event.preventDefault();
         }
         // protyle.toolbar 点击空白处时进行隐藏
-        if (!hasClosestByClassName(event.target as Element, "protyle-toolbar")) {
+        if (!hasClosestByClassName(event.target as Element, "protyle-toolbar") &&
+            !hasClosestByAttribute(event.target, "data-sub-element-source", SELECTION_TOOLBAR_SUB_ELEMENT_SOURCE)) {
             hideAllElements(["toolbar"]);
         }
     });

@@ -1,3 +1,5 @@
+import {getHostCapabilities} from "./hostCapabilities";
+
 const CONTAINER_BACKEND_SET = new Set(["docker", "ios", "android", "harmony"]);
 
 export const isKernelInContainer = (): boolean => {
@@ -26,6 +28,12 @@ export const getFrontend = () => {
         return "browser-mobile";
     }
     /// #else
+    /// #if !BROWSER
+    // 设置窗口首屏的浏览器标识可能尚未更新，使用桌面主窗口的集市包兼容性。
+    if (document.body.classList.contains("body--settings")) {
+        return "desktop";
+    }
+    /// #endif
     if (window.navigator.userAgent.startsWith("SiYuan/")) {
         if (isWindow()) {
             return "desktop-window";
@@ -76,16 +84,15 @@ export const isDynamicRef = (text: string) => {
     return /^\(\(\d{14}-\w{7} '.*'\)\)$/.test(text);
 };
 
-export const isFileAnnotation = (text: string) => {
-    return /^<<assets\/.+\/\d{14}-\w{7} ".+">>$/.test(text);
-};
-
 export const isValidCustomAttrName = (name: string) => {
     return /^[a-z][\-0-9a-z]*$/.test(name);
 };
 
 // REF https://developer.mozilla.org/zh-CN/docs/Web/JavaScript/Reference/Global_Objects/eval
 export const looseJsonParse = (text: string) => {
+    if (getHostCapabilities().remoteKernel) {
+        return JSON.parse(text);
+    }
     return Function(`"use strict";return (${text})`)();
 };
 
@@ -117,8 +124,8 @@ export const duplicateNameAddOne = (name: string) => {
 /// #if !BROWSER
 // 红绿灯为原生控件不随缩放变化，缩小时按 zoom 补偿 --b3-toolbar-left-mac 避免与工具栏内容重叠
 export const setToolbarLeftMac = (zoom: number) => {
-    // 非桌面端、非 macOS 不补偿（让 body--win32 的 class 规则生效）
-    if (!window.siyuan.config || getBackend() !== "darwin") {
+    // 窗口控件属于本机客户端，连接远程内核时仍按本机平台计算占位。
+    if (!window.siyuan.config || !navigator.platform.toUpperCase().includes("MAC")) {
         return;
     }
     // 全屏下红绿灯隐藏，清除内联补偿让 body--fullscreen 的 5px 生效
