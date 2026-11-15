@@ -1,5 +1,5 @@
 /*
- * SiYuan - 源于思考，饮水思源
+ * SiYuan - From thought to insight, with agents
  * Copyright (c) 2020-present, b3log.org
  *
  * This program is free software: you can redistribute it and/or modify
@@ -18,10 +18,13 @@
 
 import Iosk
 import Network
+import OnnxRuntimeBindings
 import UIKit
 
 @main
 class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+
+  private var ocrRuntime: ORTEnv?
 
   func application(
     _ application: UIApplication,
@@ -39,6 +42,14 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
     _ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession,
     options: UIScene.ConnectionOptions
   ) -> UISceneConfiguration {
+    if connectingSceneSession.configuration.name == "Markdown Configuration" || options.shortcutItem?.type == MarkdownLauncher.shortcut || options.urlContexts.contains(where: { MarkdownCore.isLaunch($0.url) }) {
+      let configuration = UISceneConfiguration(name: "Markdown Configuration", sessionRole: connectingSceneSession.role)
+      configuration.delegateClass = MarkdownSceneDelegate.self
+      configuration.storyboard = nil
+      return configuration
+    }
+    // 只在工作空间入口准备内核运行时，独立 Markdown 场景不触发内核或 OCR 初始化。
+    if ocrRuntime == nil { ocrRuntime = try? ORTEnv(loggingLevel: .warning) }
     // Called when a new scene session is being created.
     // Use this method to select a configuration to create the new scene with.
     return UISceneConfiguration(

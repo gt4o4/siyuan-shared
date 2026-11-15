@@ -2,6 +2,39 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Markdown</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array><string>net.daringfireball.markdown</string></array>
+		</dict>
+	</array>
+	<key>UTImportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>net.daringfireball.markdown</string>
+			<key>UTTypeDescription</key>
+			<string>Markdown</string>
+			<key>UTTypeConformsTo</key>
+			<array><string>public.plain-text</string></array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array><string>md</string><string>markdown</string></array>
+				<key>public.mime-type</key>
+				<string>text/markdown</string>
+			</dict>
+		</dict>
+	</array>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -22,11 +55,13 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Discover trusted SiYuan devices on your local network to accelerate encrypted data synchronization</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_siyuan-sync._tcp</string>
+	</array>
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>com.b3log.siyuan.shorthand</string>
 	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
@@ -44,22 +79,24 @@
 					<key>UISceneStoryboardFile</key>
 					<string>Main</string>
 				</dict>
+				<dict>
+					<key>UISceneConfigurationName</key>
+					<string>Markdown Configuration</string>
+					<key>UISceneDelegateClassName</key>
+					<string>$(PRODUCT_MODULE_NAME).MarkdownSceneDelegate</string>
+				</dict>
 			</array>
 		</dict>
 	</dict>
-	<key>NSUserActivityTypes</key>
-	<array>
-		<string>com.b3log.siyuan.shorthand</string>
-	</array>
 	<key>UIApplicationShortcutItems</key>
 	<array>
 		<dict>
-			<key>UIApplicationShortcutItemType</key>
-			<string>com.b3log.siyuan.shorthand</string>
-			<key>UIApplicationShortcutItemTitle</key>
-			<string>shorthand_shortcut_title</string>
 			<key>UIApplicationShortcutItemIconType</key>
 			<string>UIApplicationShortcutIconTypeCompose</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>shorthand_shortcut_title</string>
+			<key>UIApplicationShortcutItemType</key>
+			<string>com.b3log.siyuan.shorthand</string>
 		</dict>
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
