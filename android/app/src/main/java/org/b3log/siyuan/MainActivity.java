@@ -138,6 +138,7 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
     private PermissionRequest pendingAudioPermissionRequest;
     private AlertDialog microphonePermissionDialog;
     private JSAndroid jsAndroid;
+    private final ClipboardImageBridge clipboardImageBridge = new ClipboardImageBridge(this);
     private final AtomicBoolean bootNavigationCompleted = new AtomicBoolean(false);
     private final AtomicBoolean mainFrameRecoveryScheduled = new AtomicBoolean(false);
     private final AtomicBoolean webViewRecoveryInProgress = new AtomicBoolean(false);
@@ -158,6 +159,12 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
                     uris.isEmpty() ? null : uris.toArray(new Uri[0])));
     private final ActivityResultLauncher<String> recordAudioPermissionLauncher = registerForActivityResult(
             new RequestPermission(), this::onRecordAudioPermissionResult);
+    private final ActivityResultLauncher<String> galleryPermissionLauncher = registerForActivityResult(
+            new RequestPermission(), granted -> {
+                if (null != jsAndroid) {
+                    jsAndroid.onGalleryPermissionResult(granted);
+                }
+            });
     private final ActivityResultLauncher<Intent> saveExportFileLauncher = registerForActivityResult(
             new StartActivityForResult(), result -> {
                 if (null != jsAndroid) {
@@ -421,6 +428,7 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
                 if (view != webView) {
                     return;
                 }
+                clipboardImageBridge.navigating(view);
                 if (keyboardWorkaround != null) keyboardWorkaround.resetNavigationOverlay();
                 if (isMainPageNavigation(url)) {
                     mainPageReady = false;
@@ -613,6 +621,7 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
 
         jsAndroid = new JSAndroid(this);
         webView.addJavascriptInterface(jsAndroid, "JSAndroid");
+        clipboardImageBridge.register(webView);
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
         final WebSettings ws = webView.getSettings();
         ws.setJavaScriptEnabled(true);
@@ -943,6 +952,10 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
 
     void launchSaveExportFile(final Intent intent) {
         saveExportFileLauncher.launch(intent);
+    }
+
+    void launchGalleryPermissionRequest() {
+        galleryPermissionLauncher.launch(android.Manifest.permission.WRITE_EXTERNAL_STORAGE);
     }
 
     private void handleAudioPermissionRequest(final PermissionRequest request) {
@@ -1404,6 +1417,7 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
 
     @Override
     protected void onDestroy() {
+        clipboardImageBridge.close();
         Utils.logInfo("boot", "Destroy main activity, process [" + android.os.Process.myPid()
                 + "], instance [" + System.identityHashCode(this) + "], task [" + getTaskId()
                 + "], finishing [" + isFinishing() + "], task root [" + isTaskRoot()
