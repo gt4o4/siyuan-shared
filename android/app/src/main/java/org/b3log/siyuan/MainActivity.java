@@ -337,9 +337,7 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
                 jsAndroid.saveExportFile(assetPath);
                 return;
             }
-            final Uri uri = Uri.parse(url);
-            final Intent intent = new Intent(Intent.ACTION_VIEW, uri);
-            startActivity(intent);
+            Utils.openExternalUri(Uri.parse(url), this);
         });
 
         webView.setOnDragListener((v, event) -> {
@@ -415,9 +413,7 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
                 }
 
                 if (uri.getScheme().toLowerCase().startsWith("http")) {
-                    final Intent i = new Intent(Intent.ACTION_VIEW, uri);
-                    startActivity(i);
-                    return true;
+                    Utils.openExternalUri(uri, MainActivity.this);
                 }
                 return true;
             }
@@ -1092,7 +1088,7 @@ public class MainActivity extends AppCompatActivity implements com.blankj.utilco
             new Thread(() -> {
                 final String channel = Utils.getChannel(this.getPackageManager());
                 if ("cn".equals(channel) || "huawei".equals(channel)) {
-                    Mobile.disableFeature("ai");
+                    Mobile.setAIModelPolicy("deepseek");
                 }
 
                 final String appDir = getFilesDir().getAbsolutePath() + "/app";
