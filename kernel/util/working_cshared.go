@@ -22,7 +22,7 @@ import (
 // BootDesktopLib 初始化桌面端进程内内核（c-shared N-API），返回退出码而不调用 os.Exit。
 func BootDesktopLib(workspace, port, lang, wd string) int {
 	initEnvVars()
-	IncBootProgress(3, "Booting kernel...")
+	IncBootProgress(3, BootStageStarting)
 	rand.Seed(time.Now().UTC().UnixNano())
 	initMime()
 	initHttpClient()
